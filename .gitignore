@@ -1,0 +1,6 @@
+__pycache__/
+.dmypy.json
+.ipynb_checkpoints/
+newarticles.db
+apcs.py
+
