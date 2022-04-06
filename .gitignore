@@ -3,6 +3,5 @@ __pycache__/
 .ipynb_checkpoints/
 newarticles.db
 apcs.py
-.DS_Store
 
 
