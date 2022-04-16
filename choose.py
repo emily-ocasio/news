@@ -24,7 +24,9 @@ review_prompts = (
 dataset_prompts = (
     "Review [T]raining dataset",
     "Review [V]alidation dataset",
+    "Review V[A]lidation2 dataset",
     "Review Te[S]t dataset",
+    "Review T[E]st2 dataset",
     "[C]ontinue without reviewing"
 )
 

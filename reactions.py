@@ -43,5 +43,5 @@ def retrieve_single_article(state: State) -> RxResp:
     if state.outputs == "":
         return choose.initial(state)
     sql = single_article_sql()
-    state = state._replace(next_event = 'articles_retrieved', article_kind = 'review', next_article = 0)
+    state = state._replace(next_event = 'matches_retrieved', article_kind = 'review', next_article = 0)
     return action2('query_db', sql, id = state.outputs), state

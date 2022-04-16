@@ -66,8 +66,12 @@ def dataset(state: State, choice) -> RxResp:
         dataset = 'TRAIN'
     elif choice == "V":
         dataset = 'VAL'
+    elif choice == "A":
+        dataset = 'VAL2'
     elif choice == 'S':
         dataset = 'TEST'
+    elif choice == "E":
+        dataset = 'TEST2'
     else:
         raise Exception('Unsupported dataset choice')
     state = state._replace(review_dataset = dataset)

@@ -106,8 +106,16 @@ def unverified_articles_sql():
     #     WHERE PubDate = ? AND v.Status IS NULL
     # """
     sql = """
-        FROM articles
-        WHERE PubDate = ? AND Status IS NULL
+        FROM (
+            SELECT a.*, SUM(IIF(t.TypeId IN (7,8,9,10,13,19,21), 0, 1)) as GoodType
+            FROM articles a 
+            JOIN articletypes t 
+            ON a.RecordID = t.RecordId
+            WHERE a.Pubdate = ?
+            AND a.Status IS NULL
+            GROUP BY a.RecordId
+            HAVING GoodType > 0
+        )
     """
     return "SELECT COUNT(*) " + sql, "SELECT * " + sql
 
