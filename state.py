@@ -8,6 +8,10 @@ class State(NamedTuple):
     articles: Tuple = tuple()
     matches: Tuple = tuple()
     nomatches: Tuple = tuple()
+    FP: Tuple = tuple()
+    FN: Tuple = tuple()
+    TP: Tuple = tuple()
+    TN: Tuple = tuple()
     article_kind: Optional[str] = None
     review_dataset: Optional[str] = None
     review_label: Optional[str] = None

@@ -51,3 +51,7 @@ def type_count(state: State) -> RxResp:
 def classify_progress(state: State) -> RxResp:
     msg = f"Number of articles: {len(state.articles)}"
     return action2('print_message', message = msg), state
+
+def statistics(state: State) -> RxResp:
+    msg = calc.statistic_summary(len(state.TP), len(state.TN), len(state.FP), len(state.FN))
+    return action2('print_message', message= msg), state

@@ -9,6 +9,10 @@ def verified(state: State) -> RxResp:
     sql = calc.verified_articles_sql()
     return action2('query_db', sql, label=state.review_label, dataset = state.review_dataset), state
 
+def all(state: State) -> RxResp:
+    sql = calc.all_articles_sql()
+    return action2('query_db', sql, dataset = state.review_dataset), state
+
 def article_types(state: State) -> RxResp:
     sql = calc.retrieve_types_sql()
     row = state.articles[state.next_article]

@@ -17,6 +17,8 @@ def what_next(state: State):
         'review_dataset_selected': choice_response.dataset,
         'review_label_selected': choice_response.review_label,
         'matches_retrieved': query_response.matches,
+        'all_retrieved': query_response.all,
+        'statistics_displayed': choose.initial,
         'matches_processed': choice_response.match,
         'single_article_selected': choice_response.single_article,
         'single_article_retrieved': query_response.single_article,

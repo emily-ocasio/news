@@ -36,6 +36,9 @@ death_roots = (
     'death'
 )
 
+def add_spaces(word: str) -> str:
+    return fr"\s?".join(word)
+
 def any_root_regex_string(roots: Tuple[str,...]) -> str:
     """
     Generates regex string that represents match to 
@@ -48,7 +51,7 @@ def any_root_regex_string(roots: Tuple[str,...]) -> str:
         (?: ...  )  limits the effect of the "OR" operator | without creating a group
         \w*  matches remaining letters of the word
     """
-    rootstring = '|'.join(roots)
+    rootstring = '|'.join(add_spaces(root) for root in roots)
     return fr"\b(?:{rootstring})\w*"
 
 def distance_match_regex_string(string1: str, string2: str, sep: int = 300) -> str:
@@ -166,6 +169,12 @@ def verified_articles_sql():
         GROUP BY a.RecordId
     """
 
+def all_articles_sql():
+    return article_type_join_sql() + """
+        WHERE Dataset = ?
+        GROUP BY a.RecordId
+    """
+
 def single_article_sql():
     return article_type_join_sql() + """
         WHERE a.RecordId = ?
@@ -252,16 +261,16 @@ def partition_old(rows: Tuple[Row,...]) -> Tuple[Tuple[Row,...], Tuple[Row,...]]
     match, nomatch = tee(rows)
     return tuple(filter(filter_row, match)), tuple(filterfalse(filter_row, nomatch))
 
-def partition(rows: Tuple[Row,...]) -> Tuple[Tuple[Row,...], Tuple[Row,...]]:
+def partition(rows: Tuple[Row,...], filt = filter_row) -> Tuple[Tuple[Row,...], Tuple[Row,...]]:
     """
-    Returns two tuples, one of the rows that match filter_row criteria, 
+    Returns two tuples, one of the rows that match filt criteria (default = filter_row), 
     and the other of rows that don't
     Uses reduce as a fold/accumulator
     The last argument of reduce function is tuple of two empty lists
     Each pass through reduce appends the items two either of the two lists depending on the value of filter_row
     Since append() returns none, then we use the x.append() or x idiom to return the mutated object
     """
-    part: tuple = reduce(lambda x,y: x[not filter_row(y)].append(y) or x, rows, ([],[]))
+    part: tuple = reduce(lambda x,y: x[not filt(y)].append(y) or x, rows, ([],[]))
     return tuple(part[0]), tuple(part[1])
 
 def mass_divide(rows: Tuple[Row,...]) -> Tuple[int, int]:
@@ -297,3 +306,36 @@ def classify(row: Row) -> str:
         return 'O'
     return 'M'
     
+def full_pred(row: Row) -> bool:
+    """
+    Determine wheter row is predicted to be a matchj using all three criteria:
+    - must be of a 'good type' (e.g. no advertisements)
+    - must by in Massachusetts
+    - must pass the regex filters in filter_row
+    Must pass all criteria to return True
+    """
+    return row['GoodTypes'] > 0 and is_in_mass(row['FullText']) and filter_row(row)
+
+def manual_match(row: Row) -> bool:
+    """
+    Determine whether row was manually determined to be a match
+    """
+    return row['Status'] == 'M'
+
+def confusion_matrix(rows: Tuple[Row,...]) -> Tuple[Tuple[Row,...],Tuple[Row,...],Tuple[Row,...],Tuple[Row,...]]:
+    matches, no_matches = partition(rows, full_pred)
+    TP, FP = partition(matches, manual_match)
+    FN, TN = partition(no_matches, manual_match)
+    return TP, TN, FP, FN
+
+def statistic_summary(TP, TN, FP, FN) -> str:
+    sens = TP/(TP+FN)
+    spec = TN/(TN+FP)
+    msg = f"Matching statistics:\n" + \
+        f"True Positives: {TP}\n" + \
+        f"True Negatives: {TN}\n" + \
+        f"False Positives: {FP}\n" + \
+        f"False Negatives: {FN}\n" + \
+        f"Sensitivity: {100*sens:.2f}%\n" + \
+        f"Specificity: {100*spec:.2f}%"
+    return msg

@@ -12,7 +12,8 @@ label_prompts = (
     "[M]assachussetts homicides",
     "[O]ther location homicides",
     "[N]ot homicides",
-    "[P]ass and label later"
+    "[P]ass and label later",
+    "[A]ll labels (calculate statistics)"
 )
 
 review_prompts = (

@@ -61,12 +61,16 @@ def select_review_label(state: State) -> RxResp:
     return choose.review_label(state)
 
 def retrieve_verified(state: State) -> RxResp:
-    state = state._replace(next_event = "matches_retrieved")
     msg = "Examining documents..."
+    state = state._replace(next_event = "all_retrieved" if state.review_label == 'A' else "matches_retrieved")
     return combine_actions(
         action2('print_message', message = msg),
-        retrieve.verified(state)[0]
+        retrieve.all(state)[0] if state.review_label == 'A' else retrieve.verified(state)[0]
     ), state
+
+def show_statistics(state: State) -> RxResp:
+    state = state._replace(next_event = "statistics_displayed")
+    return display.statistics(state)
 
 def select_match_group(state: State) -> RxResp:
     state = state._replace(next_event = 'matches_processed')

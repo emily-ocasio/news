@@ -22,6 +22,12 @@ def matches(state: State) -> RxResp:
     state = state._replace(articles = articles, next_article = 0, matches = matches, nomatches = nomatches)
     return controller.select_match_group(state)
 
+def all(state: State) -> RxResp:
+    articles = state.outputs
+    TP, TN, FP, FN = calc.confusion_matrix(articles)
+    state = state._replace(articles = articles, next_article = 0, TP = TP, TN = TN, FP = FP, FN = FN)
+    return controller.show_statistics(state)
+
 def unclassified_articles(state: State) -> RxResp:
     articles = state.outputs
     state = state._replace(articles = articles, next_article = 0)
