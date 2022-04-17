@@ -13,7 +13,6 @@ absolute_roots = (
     'slaying',
     'murder',
     'homicide',
-    'homi cide',
     'manslaughter',
 )
 

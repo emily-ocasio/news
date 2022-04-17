@@ -13,7 +13,10 @@ label_prompts = (
     "[O]ther location homicides",
     "[N]ot homicides",
     "[P]ass and label later",
-    "[A]ll labels (calculate statistics)"
+)
+
+label_review_prompts = label_prompts + (
+    "[A]ll labels (calculate statistics)",
 )
 
 review_prompts = (
@@ -73,7 +76,7 @@ def dataset(state: State) -> RxResp:
     return choose_with_prompt(state, dataset_prompts, "Which dataset would you like to review?")
 
 def review_label(state: State) -> RxResp:
-    return choose_with_prompt(state, label_prompts, "Which label would you like to review?")
+    return choose_with_prompt(state, label_review_prompts, "Which label would you like to review?")
 
 def match_group(state: State) -> RxResp:
     return choose_with_prompt(state, review_prompts, "Which group of articles would you like to review?")
