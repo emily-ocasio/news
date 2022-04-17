@@ -1,5 +1,4 @@
 from actionutil import combine_actions, action2, RxResp, State
-from reactions import select_single_article
 from typing import Callable
 import controller
 import choose
@@ -34,7 +33,7 @@ def initial(state: State, choice) -> RxResp:
     if choice == "R":
         return controller.review_datasets(state)
     if choice == "F":
-        return select_single_article(state)
+        return controller.edit_single_article(state)
     if choice == 'A':
         return controller.auto_classify(state)
     raise Exception("Choice not supported")
@@ -111,6 +110,13 @@ def type(state: State, choice) -> RxResp:
         state = state._replace(articles = calc.filter_by_type(state.articles, False))
         return controller.first_article(state)
     raise Exception("Choice not supported")
+
+@check_defaults
+def single_article(state: State, choice) -> RxResp:
+    if choice == "":
+        return choose.initial(state)
+    state = state._replace(article_id = choice)
+    return controller.retrieve_single_article(state)
 
 def dates_to_classify(state: State) -> RxResp:
     if state.outputs == 0:

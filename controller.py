@@ -44,6 +44,14 @@ def save_label(state: State) -> RxResp:
     state = state._replace(next_event = 'label_updated')
     return save.label(state)
 
+def edit_single_article(state: State) -> RxResp:
+    state = state._replace(next_event = 'single_article_selected')
+    return choose.single_article(state)
+
+def retrieve_single_article(state: State) -> RxResp:
+    state = state._replace(next_event = 'single_article_retrieved')
+    return retrieve.single_article(state)
+
 def review_datasets(state: State) -> RxResp:
     state = state._replace(next_event = 'review_dataset_selected')
     return choose.dataset(state)

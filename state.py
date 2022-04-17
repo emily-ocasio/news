@@ -4,6 +4,7 @@ from sqlite3 import Connection
 class State(NamedTuple):
     next_event: str
     article_date: Optional[str] = None
+    article_id: Optional[int] = None
     articles: Tuple = tuple()
     matches: Tuple = tuple()
     nomatches: Tuple = tuple()

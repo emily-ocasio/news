@@ -64,6 +64,10 @@ def choose_with_prompt(state: State, prompts, question) -> RxResp:
         action2('get_user_input', prompt = prompt, choices = choices)
     ), state
 
+def single_article(state: State) -> RxResp:
+    msg = "Enter Record Id to fix, <Return> to go back, [Q] to quit > "
+    return action2('get_text_input', prompt = msg), state
+
 def dataset(state: State) -> RxResp:
     return choose_with_prompt(state, dataset_prompts, "Which dataset would you like to review?")
 

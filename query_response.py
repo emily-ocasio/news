@@ -26,3 +26,8 @@ def unclassified_articles(state: State) -> RxResp:
     articles = state.outputs
     state = state._replace(articles = articles, next_article = 0)
     return controller.classify_articles(state)
+
+def single_article(state: State) -> RxResp:
+    articles = state.outputs
+    state = state._replace(articles = articles, next_article = 0, article_kind = 'review')
+    return controller.first_article(state)

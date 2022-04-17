@@ -18,3 +18,8 @@ def to_auto_classify(state: State) -> RxResp:
     sql = calc.articles_to_classify_sql()
     days = state.dates_to_classify
     return action2('query_db', sql=sql, days=days), state
+
+def single_article(state: State) -> RxResp:
+    sql = calc.single_article_sql()
+    id = state.article_id
+    return action2('query_db', sql = sql, id = id), state
