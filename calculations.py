@@ -23,6 +23,8 @@ conditional_roots = (
     'stabb',
     'kidnap',
     'strangl',
+    'beat',
+    'bludgeon',
     'asphyxiat'
 )
 
