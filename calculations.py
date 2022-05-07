@@ -109,16 +109,14 @@ def unverified_articles_sql():
     #     LEFT JOIN verifications v ON a.RecordId = v.RecordId
     #     WHERE PubDate = ? AND v.Status IS NULL
     # """
-    sql = """
+    sql = f"""
         FROM (
-            SELECT a.*, SUM(IIF(t.TypeId IN (7,8,9,10,13,19,21), 0, 1)) as GoodType
-            FROM articles a 
-            JOIN articletypes t 
+            {article_type_join_sql()}
             ON a.RecordID = t.RecordId
             WHERE a.Pubdate = ?
             AND a.Status IS NULL
             GROUP BY a.RecordId
-            HAVING GoodType > 0
+            HAVING GoodTypes > 0
         )
     """
     return "SELECT COUNT(*) " + sql, "SELECT * " + sql
@@ -151,7 +149,10 @@ def verify_article_sql(row: Row) -> str:
 
 def article_type_join_sql():
     return """
-        SELECT a.*, SUM(IIF(t.TypeID IN (7,8,9,10,13,19,21), 0, 1)) AS GoodTypes
+        SELECT 
+            a.*, 
+            SUM(IIF(t.TypeID IN (7,8,9,10,13,19,21), 0, 1)) AS GoodTypes,
+            SUM(1 << t.TypeId) as BinaryTypes
         FROM articles a
         JOIN articletypes t
         ON a.RecordId = t.RecordId
@@ -292,7 +293,7 @@ def located_articles(rows: Tuple[Row,...], mass = True) -> Tuple[Row,...]:
 
 def filter_by_type(rows: Tuple[Row,...], good = True) -> Tuple[Row,...]:
     def type_filter(row: Row) -> bool:
-        is_good = row['GoodTypes'] > 0
+        is_good = is_good_type(row)
         return is_good if good else not is_good
     return tuple(filter(type_filter, rows))
 
@@ -301,21 +302,36 @@ def type_divide(rows: Tuple[Row,...]) -> Tuple[int, int]:
     return good_count, len(rows) - good_count
 
 def classify(row: Row) -> str:
-    if row['GoodTypes'] == 0 or not filter_row(row):
+    if not is_good_type(row) == 0 or not filter_row(row):
         return 'N'
     if not is_in_mass(row['FullText']):
         return 'O'
     return 'M'
-    
+
+def is_good_type(row: Row) -> bool:
+    """
+    Determine whether row is is of a 'good type'
+    Takes into consideration that some articles marked as Advertisement
+        may not in fact be ads
+    Returns true if article has at least one of the accepted ('good') types
+    OR
+    One of the types is 'Advertisement' AND the word 'ad' is not included in the title
+    The column 'BinaryTypes' has all the types assigned to this article 
+        binary encoded, so that each bit represents a possible type
+    Advertisement is type 7, so we do a bitwise-and to 2**7 to determine whether article is
+        categorized as advertisement
+    """
+    return row['GoodTypes'] > 0 or (row['BinaryTypes'] & 2**7 > 0 and 'ad' not in row['Title'].lower())
+
 def full_pred(row: Row) -> bool:
     """
-    Determine wheter row is predicted to be a matchj using all three criteria:
+    Determine wheter row is predicted to be a match using all three criteria:
     - must be of a 'good type' (e.g. no advertisements)
     - must by in Massachusetts
     - must pass the regex filters in filter_row
     Must pass all criteria to return True
     """
-    return row['GoodTypes'] > 0 and is_in_mass(row['FullText']) and filter_row(row)
+    return is_good_type(row) and is_in_mass(row['FullText']) and filter_row(row)
 
 def manual_match(row: Row) -> bool:
     """
