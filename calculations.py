@@ -300,7 +300,7 @@ def type_divide(rows: Tuple[Row,...]) -> Tuple[int, int]:
     return good_count, len(rows) - good_count
 
 def classify(row: Row) -> str:
-    if not is_good_type(row) == 0 or not filter_row(row):
+    if not is_good_type(row) or not filter_row(row):
         return 'N'
     if not is_in_mass(row['FullText']):
         return 'O'

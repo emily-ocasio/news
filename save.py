@@ -12,7 +12,7 @@ def classification(state: State) -> RxResp:
     sql = calc.classify_sql()
     auto_class = calc.classify(row)
     total = len(state.articles)
-    msg = f"Record: {row['RecordId']} (#{state.next_article} of {total}) Date: {row['PubDate']}, classification: {auto_class}"
+    msg = f"Record: {row['RecordId']} (#{state.next_article} of {total}) Date: {row['PubDate']}, classification: {auto_class}, Title: {row['Title']} "
     # if auto_class == 'M':
     #     disp, _ = calc.display_article(total, state.next_article, row, ())
     #     msg += f"\n" + disp

@@ -28,14 +28,15 @@ CREATE TABLE IF NOT EXISTS articletypes (
     FOREIGN KEY(TypeId) REFERENCES articleenum(TypeId)
 );
 
-CREATE TABLE IF NOT EXISTS verifications (
-    Status TEXT NOT NULL,
-    RecordId INTEGER NOT NULL,
-    FOREIGN KEY(RecordId) REFERENCES articles(RecordId)
-);
-
 CREATE TABLE IF NOT EXISTS dates (
     PubDate TEXT NOT NULL,
     Priority INTEGER NOT NULL DEFAULT 0,
     Complete INTEGER NOT NULL DEFAULT 0
-)
+);
+
+CREATE TABLE IF NOT EXISTS topics (
+    ShrId INTEGER NOT NULL,
+    RecordId INTEGER NOT NULL,
+    FOREIGN KEY(RecordId) REFERENCES articles(RecordId),
+    FOREIGN KEY(ShrId) REFERENCES shr(ID)
+);
