@@ -3,5 +3,4 @@ __pycache__/
 .ipynb_checkpoints/
 newarticles.db
 apcs.py
-
-
+shr_mass.pkl
