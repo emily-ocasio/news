@@ -3,14 +3,20 @@ from state import State
 from functools import reduce
 import actions
 
-RxResp = Tuple[Callable[...,State], State]
+# An Action is a function that has State as argument,
+#   performs a side effect, and returns an updated State
+Action = Callable[[State], State]
 
-def action(act: Callable[..., State], **kwargs) -> Callable[[State], State]:
-    def return_action(state: State) -> State:
-        return act(state, **kwargs)
-    return return_action
+# The response of a reaction (RxResp) is a tuple,
+#   which includes the next Action to take, and the updated State
+#RxResp = Tuple[Callable[...,State], State]
+RxResp = Tuple[Action, State]
 
-def combine_actions(*acts: Callable[..., State]) -> Callable[[State], State]:
+# A reaction (no side effects) takes a State
+#   and returns a RxResp (see above)
+Reaction = Callable[[State], RxResp]
+
+def combine_actions(*acts: Action) -> Action:
     """
     Special function that combines multiple actions into one
     Each of the actions must be a function of the form:
@@ -25,13 +31,19 @@ def combine_actions(*acts: Callable[..., State]) -> Callable[[State], State]:
     Reduce, in turn, depends on the inner combine2, which take two functions
         and returns the composite of them
     """
-    def combined_action(state: State):
+    def combined_action(state: State) -> State:
         def combine2(f1, f2):
             return lambda x:f2(f1(x))
         return reduce(combine2, acts)(state)       
     return combined_action
 
-def action2(name, *args, **kwargs):
+def action2(name: str, *args, **kwargs) -> Action:
+    """
+    Helper function used by reactions
+    Takes the name of an action, and positional and named parameters
+    Returns a new Action that first inserts the arguments in the state
+        and then runs the rest of the named action inside of the actions module
+    """
     def return_action(state: State) -> State:
         state = state._replace(inputargs = args, inputkwargs = kwargs)
         return getattr(actions, name)(state)

@@ -1,9 +1,24 @@
-from re import S
-from actionutil import combine_actions, action2, RxResp, State
+from actionutil import combine_actions, action2, RxResp, State, Reaction
+from typing import Callable
 import choose
 import retrieve
 import display
 import save
+import functools
+
+def next_event(event: str) -> Callable[[Reaction], Reaction]:
+    """
+    Decorator for reactions - changes the next event inside of the state
+    Usage: @next_event('<event_name>')
+    Internally replaces the next_event attribute of the state to the desired event 
+    """
+    def decorator_next_event(c: Reaction) -> Reaction:
+        @functools.wraps(c)
+        def wrapper(state: State) -> RxResp:
+            state = state._replace(next_event = event)
+            return c(state)
+        return wrapper
+    return decorator_next_event
 
 def end_program(state: State) -> RxResp:
     return action2('exit_program'), state
@@ -12,13 +27,14 @@ def new_labels(state: State) -> RxResp:
     state = state._replace(article_kind = 'new', next_event = 'date_selected')
     return choose.label_date(state)
 
+@next_event('unverified_retrieved')
 def retrieve_unverified(state: State) -> RxResp:
-    state = state._replace(next_event = 'unverified_retrieved')
     return retrieve.unverified(state)
 
+@next_event('start')
 def no_articles(state: State) -> RxResp:
-    state = state._replace(article_kind = '', next_event = 'start')
-    return action2('print_message', message = 'No articles found.',), state
+    state = state._replace(article_kind = '')
+    return action2('print_message', message = 'No articles found.'), state
 
 def first_article(state: State) -> RxResp:
     if len(state.articles) == 0:
@@ -33,8 +49,8 @@ def next_article(state: State) -> RxResp:
     state = state._replace(next_event = 'types_retrieved')
     return retrieve.article_types(state)
 
+@next_event('label_selected')
 def show_article(state: State) -> RxResp:
-    state = state._replace(next_event = 'label_selected')
     return display.article(state)
 
 def show_remaining_lines(state: State) -> RxResp:
@@ -52,12 +68,12 @@ def retrieve_single_article(state: State) -> RxResp:
     state = state._replace(next_event = 'single_article_retrieved')
     return retrieve.single_article(state)
 
+@next_event('review_dataset_selected')
 def review_datasets(state: State) -> RxResp:
-    state = state._replace(next_event = 'review_dataset_selected')
     return choose.dataset(state)
 
+@next_event('review_label_selected')
 def select_review_label(state: State) -> RxResp:
-    state = state._replace(next_event = "review_label_selected")
     return choose.review_label(state)
 
 def retrieve_verified(state: State) -> RxResp:
@@ -68,8 +84,8 @@ def retrieve_verified(state: State) -> RxResp:
         retrieve.all(state)[0] if state.review_label == 'A' else retrieve.verified(state)[0]
     ), state
 
+@next_event('statistics_displayed')
 def show_statistics(state: State) -> RxResp:
-    state = state._replace(next_event = "statistics_displayed")
     return display.statistics(state)
 
 def select_match_group(state: State) -> RxResp:

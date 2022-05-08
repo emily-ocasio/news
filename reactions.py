@@ -1,6 +1,6 @@
 # from token import RARROW
 from actions import *
-from actionutil import action, combine_actions, action2, RxResp
+from actionutil import combine_actions, action2, RxResp
 from calculations import *
 import choose
 import retrieve

@@ -112,7 +112,6 @@ def unverified_articles_sql():
     sql = f"""
         FROM (
             {article_type_join_sql()}
-            ON a.RecordID = t.RecordId
             WHERE a.Pubdate = ?
             AND a.Status IS NULL
             GROUP BY a.RecordId
@@ -200,7 +199,6 @@ def classify_sql():
     return """
         UPDATE articles
         SET AutoClass = ?,
-        Status = ?,
         Dataset = "CLASS"
         WHERE RecordId = ?
     """
