@@ -4,3 +4,4 @@ __pycache__/
 newarticles.db
 apcs.py
 shr_mass.pkl
+.vscode/

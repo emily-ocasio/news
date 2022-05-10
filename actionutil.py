@@ -1,20 +1,11 @@
-from typing import Callable, Tuple
-from state import State
+"""
+Utility functions used to refer to actions and reactions
+"""
 from functools import reduce, wraps
+from typing import Callable
+from state import State, Action, Reaction, RxResp
 import actions
 
-# An Action is a function that has State as argument,
-#   performs a side effect, and returns an updated State
-Action = Callable[[State], State]
-
-# The response of a reaction (RxResp) is a tuple,
-#   which includes the next Action to take, and the updated State
-#RxResp = Tuple[Callable[...,State], State]
-RxResp = Tuple[Action, State]
-
-# A reaction (no side effects) takes a State
-#   and returns a RxResp (see above)
-Reaction = Callable[[State], RxResp]
 
 def combine_actions(*acts: Action) -> Action:
     """
@@ -32,10 +23,11 @@ def combine_actions(*acts: Action) -> Action:
         and returns the composite of them
     """
     def combined_action(state: State) -> State:
-        def combine2(f1: Action, f2: Action) -> Action:
-            return lambda x:f2(f1(x))
-        return reduce(combine2, acts)(state)       
+        def combine2(act1: Action, act2: Action) -> Action:
+            return lambda x: act2(act1(x))
+        return reduce(combine2, acts)(state)
     return combined_action
+
 
 def action2(name: str, *args, **kwargs) -> Action:
     """
@@ -45,9 +37,10 @@ def action2(name: str, *args, **kwargs) -> Action:
         and then runs the rest of the named action inside of the actions module
     """
     def return_action(state: State) -> State:
-        state = state._replace(inputargs = args, inputkwargs = kwargs)
+        state = state._replace(inputargs=args, inputkwargs=kwargs)
         return getattr(actions, name)(state)
     return return_action
+
 
 def from_reaction(reaction: Reaction) -> Action:
     """
@@ -56,7 +49,7 @@ def from_reaction(reaction: Reaction) -> Action:
     Used to chain actions and reactions together
         in an orchestration
     """
-    def action_from_reaction(state:State) -> State:
+    def action_from_reaction(state: State) -> State:
         """
         This function incorporates the desired reaction
             as a closure
@@ -65,16 +58,18 @@ def from_reaction(reaction: Reaction) -> Action:
         return action(new_state)
     return action_from_reaction
 
+
 def next_event(event: str) -> Callable[[Reaction], Reaction]:
     """
     Decorator for reactions - changes the next event inside of the state
     Usage: @next_event('<event_name>')
-    Internally replaces the next_event attribute of the state to the desired event 
+    Internally replaces the next_event attribute of the state
+        to the desired event
     """
-    def decorator_next_event(c: Reaction) -> Reaction:
-        @wraps(c)
+    def decorator_next_event(reaction: Reaction) -> Reaction:
+        @wraps(reaction)
         def wrapper(state: State) -> RxResp:
-            state = state._replace(next_event = event)
-            return c(state)
+            state = state._replace(next_event=event)
+            return reaction(state)
         return wrapper
     return decorator_next_event

@@ -1,11 +1,17 @@
+"""
+Main starting point for program
+"""
 from state import State
-from reactions import *
-import choose
 import choice_response
 import query_response
 import controller
 
+
 def what_next(state: State):
+    """
+    Event dispatcher
+    Based on the next_event attribute, calls the corresponding reaction function
+    """
     dispatch = {
         'start': controller.start_point,
         'choice_made': choice_response.respond,
@@ -13,6 +19,7 @@ def what_next(state: State):
         'classified': controller.classify_next,
     }
     return dispatch[state.next_event](state)
+
 
 def main():
     """
@@ -35,5 +42,6 @@ def main():
         action, current_state = what_next(current_state)
         current_state = action(current_state)
 
+
 if __name__ == "__main__":
-    main();
+    main()

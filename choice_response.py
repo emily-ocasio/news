@@ -1,10 +1,13 @@
-from actionutil import RxResp, State
+"""
+Reactions to actions that collect user input
+"""
 from typing import Callable
+from state import RxResp, State, Reaction
 import controller
 import choose
 import calculations as calc
 
-def check_defaults(c: Callable[[State, str],RxResp]) -> Callable[[State],RxResp]:
+def check_defaults(choice_reaction: Callable[[State, str],RxResp]) -> Reaction:
     """
     Decorator for checking for default responses
     common to many prompts (such as [Q]uit and [C]ontinue)
@@ -20,7 +23,7 @@ def check_defaults(c: Callable[[State, str],RxResp]) -> Callable[[State],RxResp]
             return controller.end_program(state)
         if choice == 'C':
             return choose.initial(state)
-        return c(state, choice)
+        return choice_reaction(state, choice)
     return wrapper
 
 def respond(state: State) -> RxResp:
@@ -70,28 +73,37 @@ def new_label(state: State, choice) -> RxResp:
 
 @check_defaults
 def dataset(state: State, choice) -> RxResp:
+    """
+    Respond to selection of desired dataset
+    """
     if choice == "T":
-        dataset = 'TRAIN'
+        review_dataset = 'TRAIN'
     elif choice == "V":
-        dataset = 'VAL'
+        review_dataset = 'VAL'
     elif choice == "A":
-        dataset = 'VAL2'
+        review_dataset = 'VAL2'
     elif choice == 'S':
-        dataset = 'TEST'
+        review_dataset = 'TEST'
     elif choice == "E":
-        dataset = 'TEST2'
+        review_dataset = 'TEST2'
     else:
         raise Exception('Unsupported dataset choice')
-    state = state._replace(review_dataset = dataset)
+    state = state._replace(review_dataset = review_dataset)
     return controller.select_review_label(state)
 
 @check_defaults
 def review_label(state: State, choice) -> RxResp:
+    """
+    Respond to selection of desired label
+    """
     state = state._replace(review_label = choice)
     return controller.retrieve_verified(state)
 
 @check_defaults
 def match(state: State, choice) -> RxResp:
+    """
+    Respond to choice whether to review matched or unmatched records
+    """
     if choice == "M":
         matches = state.matches
     elif choice == "N":
@@ -103,32 +115,51 @@ def match(state: State, choice) -> RxResp:
 
 @check_defaults
 def location(state: State, choice) -> RxResp:
+    """
+    Respond to choice whether to review Mass or non-Mass articles
+    """
     if choice not in 'MN':
         raise Exception("Choice not supported")
-    state = state._replace(articles = calc.located_articles(state.articles, choice == 'M'))
+    state = state._replace(
+        articles = calc.located_articles(state.articles, choice == 'M')
+    )
     return controller.select_article_type(state)
 
 @check_defaults
-def type(state: State, choice) -> RxResp:
+def article_type(state: State, choice) -> RxResp:
+    """
+    Respond to choice whether to review articles of good or bad type
+    """
     if choice not in 'GB':
         raise Exception("Choice not supported")
-    state = state._replace(articles = calc.filter_by_type(state.articles, choice=='G'))
+    state = state._replace(
+        articles = calc.filter_by_type(state.articles, choice=='G')
+    )
     return controller.first_article(state)
 
 @check_defaults
 def single_article(state: State, choice) -> RxResp:
+    """
+    Respond to user entry of record id of single article to review
+    """
     if choice == "":
         return choose.initial(state)
     state = state._replace(article_id = choice)
     return controller.retrieve_single_article(state)
 
 def dates_to_classify(state: State) -> RxResp:
+    """
+    Respond to number of days to auto-classify
+    """
     if state.outputs == 0:
         return choose.initial(state)
     state = state._replace(dates_to_classify = state.outputs)
     return controller.classify_by_date(state)
 
 def dates_to_assign(state: State) -> RxResp:
+    """
+    Respond to number of days to assign auto-classified articles
+    """
     if state.outputs == 0:
         return choose.initial(state)
     state = state._replace(dates_to_assign = state.outputs)
