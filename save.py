@@ -1,4 +1,4 @@
-from actionutil import combine_actions, action2, RxResp, State
+from actionutil import combine_actions, action2, RxResp, State, next_event
 import calculations as calc
 
 def label(state: State) -> RxResp:
@@ -7,6 +7,7 @@ def label(state: State) -> RxResp:
     state = state._replace(next_article = state.next_article+1)
     return action2('command_db', sql=sql, status=state.new_label, id=row['RecordId']), state
 
+@next_event('classified')
 def classification(state: State) -> RxResp:
     row = state.articles[state.next_article]
     sql = calc.classify_sql()

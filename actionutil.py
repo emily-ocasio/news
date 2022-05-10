@@ -1,6 +1,6 @@
 from typing import Callable, Tuple
 from state import State
-from functools import reduce
+from functools import reduce, wraps
 import actions
 
 # An Action is a function that has State as argument,
@@ -32,7 +32,7 @@ def combine_actions(*acts: Action) -> Action:
         and returns the composite of them
     """
     def combined_action(state: State) -> State:
-        def combine2(f1, f2):
+        def combine2(f1: Action, f2: Action) -> Action:
             return lambda x:f2(f1(x))
         return reduce(combine2, acts)(state)       
     return combined_action
@@ -48,3 +48,33 @@ def action2(name: str, *args, **kwargs) -> Action:
         state = state._replace(inputargs = args, inputkwargs = kwargs)
         return getattr(actions, name)(state)
     return return_action
+
+def from_reaction(reaction: Reaction) -> Action:
+    """
+    Helper function that takes as parameter a reaction function
+        and returns an equivalent action function.
+    Used to chain actions and reactions together
+        in an orchestration
+    """
+    def action_from_reaction(state:State) -> State:
+        """
+        This function incorporates the desired reaction
+            as a closure
+        """
+        action, new_state = reaction(state)
+        return action(new_state)
+    return action_from_reaction
+
+def next_event(event: str) -> Callable[[Reaction], Reaction]:
+    """
+    Decorator for reactions - changes the next event inside of the state
+    Usage: @next_event('<event_name>')
+    Internally replaces the next_event attribute of the state to the desired event 
+    """
+    def decorator_next_event(c: Reaction) -> Reaction:
+        @wraps(c)
+        def wrapper(state: State) -> RxResp:
+            state = state._replace(next_event = event)
+            return c(state)
+        return wrapper
+    return decorator_next_event

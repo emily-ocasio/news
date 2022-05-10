@@ -7,26 +7,10 @@ import controller
 
 def what_next(state: State):
     dispatch = {
-        'start': choose.initial,
-        'base_choice_made': choice_response.initial,
-        'date_selected': choice_response.label_date,
-        'unverified_retrieved': query_response.articles,
-        'types_retrieved': query_response.article_types,
-        'label_selected': choice_response.new_label,
-        'label_updated': controller.next_article,
-        'review_dataset_selected': choice_response.dataset,
-        'review_label_selected': choice_response.review_label,
-        'matches_retrieved': query_response.matches,
-        'all_retrieved': query_response.all,
-        'statistics_displayed': choose.initial,
-        'matches_processed': choice_response.match,
-        'single_article_selected': choice_response.single_article,
-        'single_article_retrieved': query_response.single_article,
-        'separate_locations_displayed': choice_response.location,
-        'article_type_selected': choice_response.type,
-        'dates_to_classify_selected': choice_response.dates_to_classify,
-        'auto_classify_retrieved': query_response.unclassified_articles,
-        'ready_to_classify_next': controller.classify_next
+        'start': controller.start_point,
+        'choice_made': choice_response.respond,
+        'query_retrieved': query_response.respond,
+        'classified': controller.classify_next,
     }
     return dispatch[state.next_event](state)
 

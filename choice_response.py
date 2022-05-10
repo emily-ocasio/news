@@ -23,6 +23,13 @@ def check_defaults(c: Callable[[State, str],RxResp]) -> Callable[[State],RxResp]
         return c(state, choice)
     return wrapper
 
+def respond(state: State) -> RxResp:
+    """
+    Dispatches another function in this module with the name equal to the
+        value of state.choice_type
+    """
+    return globals()[state.choice_type](state)
+
 @check_defaults
 def initial(state: State, choice) -> RxResp:
     """
@@ -36,12 +43,14 @@ def initial(state: State, choice) -> RxResp:
         return controller.edit_single_article(state)
     if choice == 'A':
         return controller.auto_classify(state)
+    if choice == "H":
+        return controller.assign_homicides(state)
     raise Exception("Choice not supported")
 
 @check_defaults
 def label_date(state: State, choice) -> RxResp:
     """
-    Date to verify new labels has been provided
+    Date to select new labels (ground truth) has been provided
     """
     state = state._replace(article_date = choice)
     return controller.retrieve_unverified(state)
@@ -84,32 +93,27 @@ def review_label(state: State, choice) -> RxResp:
 @check_defaults
 def match(state: State, choice) -> RxResp:
     if choice == "M":
-        state = state._replace(articles = state.matches, article_kind = "review")
-        return controller.select_location(state)
-    if choice == "N":
-        state = state._replace(articles = state.nomatches, article_kind = "review")
-        return controller.select_location(state)
-    raise Exception("Choice not supported")
+        matches = state.matches
+    elif choice == "N":
+        matches = state.nomatches
+    else:
+        raise Exception("Choice not supported")
+    state = state._replace(articles = matches, article_kind = 'review')
+    return controller.select_location(state)
 
 @check_defaults
 def location(state: State, choice) -> RxResp:
-    if choice == 'M':
-        state = state._replace(articles = calc.located_articles(state.articles))
-        return controller.select_article_type(state)
-    if choice == 'N':
-        state = state._replace(articles = calc.located_articles(state.articles, False))
-        return controller.select_article_type(state)
-    raise Exception("Choice not supported")
+    if choice not in 'MN':
+        raise Exception("Choice not supported")
+    state = state._replace(articles = calc.located_articles(state.articles, choice == 'M'))
+    return controller.select_article_type(state)
 
 @check_defaults
 def type(state: State, choice) -> RxResp:
-    if choice == 'G':
-        state = state._replace(articles = calc.filter_by_type(state.articles))
-        return controller.first_article(state)
-    if choice == 'B':
-        state = state._replace(articles = calc.filter_by_type(state.articles, False))
-        return controller.first_article(state)
-    raise Exception("Choice not supported")
+    if choice not in 'GB':
+        raise Exception("Choice not supported")
+    state = state._replace(articles = calc.filter_by_type(state.articles, choice=='G'))
+    return controller.first_article(state)
 
 @check_defaults
 def single_article(state: State, choice) -> RxResp:
@@ -123,3 +127,9 @@ def dates_to_classify(state: State) -> RxResp:
         return choose.initial(state)
     state = state._replace(dates_to_classify = state.outputs)
     return controller.classify_by_date(state)
+
+def dates_to_assign(state: State) -> RxResp:
+    if state.outputs == 0:
+        return choose.initial(state)
+    state = state._replace(dates_to_assign = state.outputs)
+    return controller.assign_by_date(state)

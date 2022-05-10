@@ -21,6 +21,9 @@ class State(NamedTuple):
     new_label: str = ''
     next_article: int = 0
     dates_to_classify: int = 0
+    dates_to_assign: int = 0
+    choice_type: str = ''
+    query_type: str = ''
     outputs: Any = None
     inputargs: Any = tuple()
     inputkwargs: Any = {}

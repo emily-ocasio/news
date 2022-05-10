@@ -2,6 +2,13 @@ from actionutil import combine_actions, action2, RxResp, State
 import controller
 import calculations as calc
 
+def respond(state: State) -> RxResp:
+    """
+    Dispatches another function in this module with the name equal to the
+        value of state.choice_type
+    """
+    return globals()[state.query_type](state)
+
 def articles(state: State) -> RxResp:
     """
     Response to database query for multiple articles
