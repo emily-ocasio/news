@@ -2,7 +2,7 @@
 Utility functions used to refer to actions and reactions
 """
 from functools import reduce, wraps
-from typing import Callable
+from collections.abc import Callable
 from state import State, Action, Reaction, RxResp
 import actions
 

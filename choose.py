@@ -2,7 +2,7 @@
 Reactions to determine prompts for user choices
 """
 from functools import wraps
-from typing import Callable
+from collections.abc import Callable
 from actionutil import combine_actions, action2
 from state import RxResp, Reaction, State
 import calculations as calc

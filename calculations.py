@@ -4,7 +4,8 @@ Pure functions with no side effects
 import re
 import textwrap
 from sqlite3 import Row
-from typing import Iterable, Tuple, Optional
+from collections.abc import Iterable
+from typing import Optional
 from functools import reduce
 from flashtext import KeywordProcessor  # type: ignore
 from colorama import Fore, Style
@@ -52,7 +53,7 @@ def add_spaces(word: str) -> str:
     return r"\s?".join(word)
 
 
-def any_root_regex_string(roots: Tuple[str, ...]) -> str:
+def any_root_regex_string(roots: tuple[str, ...]) -> str:
     r"""
     Generates regex string that represents match to
     any word that starts with one of the given roots
@@ -273,7 +274,7 @@ def classify_sql():
 
 
 def display_article(total: int,
-                    current, row: Row, types) -> Tuple[str, Tuple[str, ...]]:
+                    current, row: Row, types) -> tuple[str, tuple[str, ...]]:
     """
     Full text to display contents and metadata of one article
     """
@@ -293,7 +294,7 @@ def display_remaining_lines(lines) -> str:
     return "\n".join(lines[35:])
 
 
-def wrap_lines(text, width=140) -> Tuple[str, ...]:
+def wrap_lines(text, width=140) -> tuple[str, ...]:
     """
     Word wraps text and return individual wrapped lines
     """
@@ -302,7 +303,7 @@ def wrap_lines(text, width=140) -> Tuple[str, ...]:
     return tuple(textwrap.wrap(text, width))
 
 
-def article_counter(current, total) -> Tuple[str, ...]:
+def article_counter(current, total) -> tuple[str, ...]:
     """
     Returns text showing article counter
     """
@@ -321,7 +322,7 @@ def article_label(row: Row):
             )
 
 
-def article_types(types: Tuple[Row, ...]) -> Tuple[str, ...]:
+def article_types(types: tuple[Row, ...]) -> tuple[str, ...]:
     """
     Return listing of all article types
     """
@@ -381,8 +382,8 @@ def filter_row(row: Row) -> bool:
     return filter_text(row['Title']) or filter_text(row['FullText'])
 
 
-def partition(rows: Tuple[Row, ...], filt=filter_row) -> Tuple[Tuple[Row, ...],
-                                                               Tuple[Row, ...]]:
+def partition(rows: tuple[Row, ...], filt=filter_row) -> tuple[tuple[Row, ...],
+                                                               tuple[Row, ...]]:
     """
     Returns two tuples, one of the rows that match filt criteria
         (default = filter_row),
@@ -399,7 +400,7 @@ def partition(rows: Tuple[Row, ...], filt=filter_row) -> Tuple[Tuple[Row, ...],
     return tuple(part[0]), tuple(part[1])
 
 
-def mass_divide(rows: Tuple[Row, ...]) -> Tuple[int, int]:
+def mass_divide(rows: tuple[Row, ...]) -> tuple[int, int]:
     """
     Returns count of how hany articles have or do not have a match
     """
@@ -418,7 +419,7 @@ def color_mass_locations(document: Optional[str]) -> Optional[str]:
     return kp.replace_keywords(document)
 
 
-def located_articles(rows: Tuple[Row, ...], mass=True) -> Tuple[Row, ...]:
+def located_articles(rows: tuple[Row, ...], mass=True) -> tuple[Row, ...]:
     """
     Returns subset of articles that are (or are not) from Massachusetts
     """
@@ -428,7 +429,7 @@ def located_articles(rows: Tuple[Row, ...], mass=True) -> Tuple[Row, ...]:
     return tuple(filter(loc_filter, rows))
 
 
-def filter_by_type(rows: Tuple[Row, ...], good=True) -> Tuple[Row, ...]:
+def filter_by_type(rows: tuple[Row, ...], good=True) -> tuple[Row, ...]:
     """
     Returns subset of articles that have (or do not have) good types only
     """
@@ -438,7 +439,7 @@ def filter_by_type(rows: Tuple[Row, ...], good=True) -> Tuple[Row, ...]:
     return tuple(filter(type_filter, rows))
 
 
-def type_divide(rows: Tuple[Row, ...]) -> Tuple[int, int]:
+def type_divide(rows: tuple[Row, ...]) -> tuple[int, int]:
     """
     Returns counts of articles that have good and bad types
     """
@@ -494,10 +495,10 @@ def manual_match(row: Row) -> bool:
     return row['Status'] == 'M'
 
 
-def confusion_matrix(rows: Tuple[Row, ...]) -> Tuple[Tuple[Row, ...],
-                                                     Tuple[Row, ...],
-                                                     Tuple[Row, ...],
-                                                     Tuple[Row, ...]]:
+def confusion_matrix(rows: tuple[Row, ...]) -> tuple[tuple[Row, ...],
+                                                     tuple[Row, ...],
+                                                     tuple[Row, ...],
+                                                     tuple[Row, ...]]:
     """
     Computes confusion matrix statistics for a set of articles
     """

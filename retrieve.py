@@ -2,7 +2,7 @@
 Reactions that culminate in databse query actions retrieving information
 """
 import functools
-from typing import Callable
+from collections.abc import Callable
 from actionutil import action2
 from state import RxResp, Reaction, State
 import calculations as calc

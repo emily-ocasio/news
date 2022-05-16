@@ -5,7 +5,7 @@ import sqlite3
 from sqlite3 import Cursor
 import os
 from functools import wraps
-from typing import Callable
+from collections.abc import Callable
 from state import State, Action
 
 

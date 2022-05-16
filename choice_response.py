@@ -1,7 +1,7 @@
 """
 Reactions to actions that collect user input
 """
-from typing import Callable
+from collections.abc import Callable
 from state import RxResp, State, Reaction
 import controller
 import choose
