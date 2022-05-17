@@ -69,3 +69,25 @@ def single_article(state: State) -> RxResp:
     state = state._replace(
         articles=articles, next_article=0, article_kind='review')
     return controller.first_article(state)
+
+
+def unassigned_articles(state: State) -> RxResp:
+    """
+    Response to query for articles to assign as homicides
+    """
+    articles = state.outputs
+    state = state._replace(articles = articles,
+                           next_article = 0,
+                           article_kind = 'assign')
+    return controller.first_article(state)
+
+
+def auto_assigned_articles(state: State) -> RxResp:
+    """
+    Response to query for autoclassified articles to be reclassified
+    """
+    articles = state.outputs
+    state = state._replace(articles = articles,
+                           next_article = 0,
+                           article_kind = 'reclassify')
+    return controller.first_article(state)

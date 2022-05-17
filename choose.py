@@ -53,9 +53,10 @@ review_prompts = (
 dataset_prompts = (
     "Review [T]raining dataset",
     "Review [V]alidation dataset",
-    "Review V[A]lidation2 dataset",
+    "Review Va[L]idation2 dataset",
     "Review Te[S]t dataset",
     "Review T[E]st2 dataset",
+    "Review [A]uto classified articles",
     "[C]ontinue without reviewing"
 )
 
@@ -97,9 +98,12 @@ def label(state: State) -> RxResp:
     """
     Choose label for article
     """
-    prompts = label_prompts + \
-        (('show e[X]tra lines',) if state.remaining_lines else tuple())
-    allow_return = (state.article_kind == "review")
+    prompts = ((label_prompts[:-1] if state.article_kind == 'reclassify'
+                    else label_prompts)
+                    + (('show e[X]tra lines',) if state.remaining_lines
+                            else tuple())
+    )
+    allow_return = (state.article_kind in ('review', 'assign', 'reclassify'))
     prompt, choices = calc.unified_prompt(prompts, allow_return=allow_return)
     return action2('get_user_input',
                     prompt=prompt, choices=choices, allow_return=allow_return
@@ -187,3 +191,23 @@ def dates_to_assign(state: State) -> RxResp:
     """
     prompt = "Enter number of days to assign classification > "
     return action2('get_number_input', prompt=prompt), state
+
+
+@choice('dates_to_reclassify')
+def dates_to_reclassify(state: State) -> RxResp:
+    """
+    Choose how many days to reclasssify auto-classified articles
+    """
+    prompt = "Enter number of days to verify auto-classification > "
+    return action2('get_number_input', prompt=prompt), state
+
+
+@choice('homicide_month')
+def homicide_month(state: State) -> RxResp:
+    """
+    Choose the particular month from which to assign homicides
+    """
+    current_month = calc.year_month_from_article(
+                                state.articles[state.next_article])
+    prompt = f"Enter homicide month (<Return> for {current_month}) > "
+    return action2('get_text_input', prompt=prompt), state

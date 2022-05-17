@@ -91,3 +91,13 @@ def unassigned_articles(state: State) -> RxResp:
     sql = calc.articles_to_assign_sql()
     days = state.dates_to_assign
     return action2('query_db', sql=sql, days=days), state
+
+
+@query('auto_assigned_articles')
+def auto_assigned_articles(state: State) -> RxResp:
+    """
+    Retrieve auto-classified articles ready to be reclassified
+    """
+    sql = calc.articles_to_assign_sql()
+    days = state.dates_to_reclassify
+    return action2('query_db', sql=sql, days=days), state

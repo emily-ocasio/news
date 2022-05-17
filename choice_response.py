@@ -65,7 +65,7 @@ def new_label(state: State, choice) -> RxResp:
     """
     if choice == "X":
         return controller.show_remaining_lines(state)
-    if state.article_kind == "review" and choice == "":
+    if state.article_kind in ('review','assign','reclassify') and choice == "":
         state = state._replace(next_article = state.next_article+1)
         return controller.next_article(state)
     state = state._replace(new_label = choice)
@@ -80,12 +80,14 @@ def dataset(state: State, choice) -> RxResp:
         review_dataset = 'TRAIN'
     elif choice == "V":
         review_dataset = 'VAL'
-    elif choice == "A":
+    elif choice == "L":
         review_dataset = 'VAL2'
     elif choice == 'S':
         review_dataset = 'TEST'
     elif choice == "E":
         review_dataset = 'TEST2'
+    elif choice == 'A':
+        review_dataset = 'CLASS'
     else:
         raise Exception('Unsupported dataset choice')
     state = state._replace(review_dataset = review_dataset)
@@ -164,3 +166,13 @@ def dates_to_assign(state: State) -> RxResp:
         return choose.initial(state)
     state = state._replace(dates_to_assign = state.outputs)
     return controller.assign_by_date(state)
+
+
+def dates_to_reclassify(state: State) -> RxResp:
+    """
+    Respond to number of days to reclassify auto-classified articles
+    """
+    if state.outputs == 0:
+        return choose.initial(state)
+    state = state._replace(dates_to_reclassify = state.outputs)
+    return controller.reclassify_by_date(state)

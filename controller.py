@@ -98,6 +98,8 @@ def save_label(state: State) -> RxResp:
     """
     Save user provided label for article
     """
+    if state.article_kind == 'assign' and state.new_label == 'M':
+        return select_homicide_month(state)
     return combine_actions(
         from_reaction(save.label),
         from_reaction(next_article)
@@ -129,6 +131,8 @@ def select_review_label(state: State) -> RxResp:
     """
     Select desired label subset to review
     """
+    if state.review_dataset == 'CLASS':
+        return choose.dates_to_reclassify(state)
     return choose.review_label(state)
 
 
@@ -244,10 +248,22 @@ def assign_homicides(state: State) -> RxResp:
     return choose.dates_to_assign(state)
 
 
-@next_event('start')
 def assign_by_date(state: State) -> RxResp:
     """
     Retrieve articles to be assigned
     """
     return retrieve.unassigned_articles(state)
-    # return action2('print_message', message="TODO..."), state
+
+
+def reclassify_by_date(state: State) -> RxResp:
+    """
+    Retrieve articles to be reclassified
+    """
+    return retrieve.auto_assigned_articles(state)
+
+
+def select_homicide_month(state: State) -> RxResp:
+    """
+    Determine which month is the homicide to assign
+    """
+    return choose.homicide_month(state)

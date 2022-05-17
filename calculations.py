@@ -146,7 +146,11 @@ def unified_prompt(prompts, add_quit=True, allow_return=False):
                    + (", <Return> to continue" if allow_return else "")
                    + " > "
     )
-    return full_prompt, re.findall(regex, full_prompt)
+    return (full_prompt if len(full_prompt) < 150
+                else full_prompt.replace(', ', '\n    ')
+                    .replace(': ', ':\n    ')
+                    .replace(' > ', '\n> ')
+            , re.findall(regex, full_prompt))
 
 
 def unverified_articles_sql():
@@ -188,17 +192,18 @@ def verify_article_sql() -> str:
     """
 
 
-def article_type_join_sql():
+def article_type_join_sql(index: str = ""):
     """
     Initial portion of SQL statement joining articles with types
         and aggregating via binary encoding all the possible types
     """
-    return """
+    indexed_sql = "" if not index else f"INDEXED BY {index}"
+    return f"""
         SELECT 
             a.*, 
-            SUM(IIF(t.TypeID IN (7,8,9,10,13,19,21), 0, 1)) AS GoodTypes,
+            SUM(IIF(t.TypeID IN (7,8,9,10,12,13,19,21), 0, 1)) AS GoodTypes,
             SUM(1 << t.TypeId) as BinaryTypes
-        FROM articles a
+        FROM articles a {indexed_sql}
         JOIN articletypes t
         ON a.RecordId = t.RecordId
     """
@@ -257,7 +262,24 @@ def articles_to_assign_sql():
     SQL statement to return auto-classified articles for assignment
     """
     return article_type_join_sql() + """
-    
+         WHERE a.Dataset = "CLASS"
+         AND a.Status IS NULL
+         AND a.Autoclass = "M"
+         AND a.PubDate IN (
+             SELECT PubDate
+             FROM dates
+             WHERE PubDate IN (
+                 SELECT DISTINCT PubDate
+                 FROM articles
+                 WHERE Dataset = "CLASS"
+                 AND Status IS NULL
+                 AND Autoclass = "M"
+             )
+             ORDER BY Priority
+             LIMIT ?
+         )
+         GROUP BY a.RecordId
+         ORDER BY a.PubDate, a.RecordId
     """
 
 
@@ -523,3 +545,11 @@ def statistic_summary(TP, TN, FP, FN) -> str:
            f"Specificity: {100*spec:.2f}%"
            )
     return msg
+
+def year_month_from_article(row: Row) -> str:
+    """
+    Return year and month in YYYY-MM format
+    from an article PubDate
+    """
+    article_date = row['PubDate']
+    return f"{article_date[:4]}-{article_date[4:6]}"
