@@ -7,7 +7,8 @@ import controller
 import choose
 import calculations as calc
 
-def check_defaults(choice_reaction: Callable[[State, str],RxResp]) -> Reaction:
+
+def check_defaults(choice_reaction: Callable[[State, str], RxResp]) -> Reaction:
     """
     Decorator for checking for default responses
     common to many prompts (such as [Q]uit and [C]ontinue)
@@ -26,12 +27,14 @@ def check_defaults(choice_reaction: Callable[[State, str],RxResp]) -> Reaction:
         return choice_reaction(state, choice)
     return wrapper
 
+
 def respond(state: State) -> RxResp:
     """
     Dispatches another function in this module with the name equal to the
         value of state.choice_type
     """
     return globals()[state.choice_type](state)
+
 
 @check_defaults
 def initial(state: State, choice) -> RxResp:
@@ -50,13 +53,15 @@ def initial(state: State, choice) -> RxResp:
         return controller.assign_homicides(state)
     raise Exception("Choice not supported")
 
+
 @check_defaults
 def label_date(state: State, choice) -> RxResp:
     """
     Date to select new labels (ground truth) has been provided
     """
-    state = state._replace(article_date = choice)
+    state = state._replace(article_date=choice)
     return controller.retrieve_unverified(state)
+
 
 @check_defaults
 def new_label(state: State, choice) -> RxResp:
@@ -65,11 +70,13 @@ def new_label(state: State, choice) -> RxResp:
     """
     if choice == "X":
         return controller.show_remaining_lines(state)
-    if state.article_kind in ('review','assign','reclassify') and choice == "":
-        state = state._replace(next_article = state.next_article+1)
+    if state.article_kind in (
+            'review', 'assign', 'reclassify') and choice == "":
+        state = state._replace(next_article=state.next_article+1)
         return controller.next_article(state)
-    state = state._replace(new_label = choice)
+    state = state._replace(new_label=choice)
     return controller.save_label(state)
+
 
 @check_defaults
 def dataset(state: State, choice) -> RxResp:
@@ -90,16 +97,18 @@ def dataset(state: State, choice) -> RxResp:
         review_dataset = 'CLASS'
     else:
         raise Exception('Unsupported dataset choice')
-    state = state._replace(review_dataset = review_dataset)
+    state = state._replace(review_dataset=review_dataset)
     return controller.select_review_label(state)
+
 
 @check_defaults
 def review_label(state: State, choice) -> RxResp:
     """
     Respond to selection of desired label
     """
-    state = state._replace(review_label = choice)
+    state = state._replace(review_label=choice)
     return controller.retrieve_verified(state)
+
 
 @check_defaults
 def match(state: State, choice) -> RxResp:
@@ -112,8 +121,9 @@ def match(state: State, choice) -> RxResp:
         matches = state.nomatches
     else:
         raise Exception("Choice not supported")
-    state = state._replace(articles = matches, article_kind = 'review')
+    state = state._replace(articles=matches, article_kind='review')
     return controller.select_location(state)
+
 
 @check_defaults
 def location(state: State, choice) -> RxResp:
@@ -123,9 +133,10 @@ def location(state: State, choice) -> RxResp:
     if choice not in 'MN':
         raise Exception("Choice not supported")
     state = state._replace(
-        articles = calc.located_articles(state.articles, choice == 'M')
+        articles=calc.located_articles(state.articles, choice == 'M')
     )
     return controller.select_article_type(state)
+
 
 @check_defaults
 def article_type(state: State, choice) -> RxResp:
@@ -135,9 +146,10 @@ def article_type(state: State, choice) -> RxResp:
     if choice not in 'GB':
         raise Exception("Choice not supported")
     state = state._replace(
-        articles = calc.filter_by_type(state.articles, choice=='G')
+        articles=calc.filter_by_type(state.articles, choice == 'G')
     )
     return controller.first_article(state)
+
 
 @check_defaults
 def single_article(state: State, choice) -> RxResp:
@@ -146,8 +158,9 @@ def single_article(state: State, choice) -> RxResp:
     """
     if choice == "":
         return choose.initial(state)
-    state = state._replace(article_id = choice)
+    state = state._replace(article_id=choice)
     return controller.retrieve_single_article(state)
+
 
 def dates_to_classify(state: State) -> RxResp:
     """
@@ -155,8 +168,9 @@ def dates_to_classify(state: State) -> RxResp:
     """
     if state.outputs == 0:
         return choose.initial(state)
-    state = state._replace(dates_to_classify = state.outputs)
+    state = state._replace(dates_to_classify=state.outputs)
     return controller.classify_by_date(state)
+
 
 def dates_to_assign(state: State) -> RxResp:
     """
@@ -164,7 +178,7 @@ def dates_to_assign(state: State) -> RxResp:
     """
     if state.outputs == 0:
         return choose.initial(state)
-    state = state._replace(dates_to_assign = state.outputs)
+    state = state._replace(dates_to_assign=state.outputs)
     return controller.assign_by_date(state)
 
 
@@ -174,5 +188,15 @@ def dates_to_reclassify(state: State) -> RxResp:
     """
     if state.outputs == 0:
         return choose.initial(state)
-    state = state._replace(dates_to_reclassify = state.outputs)
+    state = state._replace(dates_to_reclassify=state.outputs)
     return controller.reclassify_by_date(state)
+
+
+def homicide_month(state: State) -> RxResp:
+    """
+    Respond to selected homicide month to display
+    """
+    if state.outputs == '':
+        return controller.start_point(state)
+    state = state._replace(homicide_month = state.outputs)
+    return controller.select_homicide(state)

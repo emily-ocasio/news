@@ -145,12 +145,11 @@ def unified_prompt(prompts, add_quit=True, allow_return=False):
                    + (", [Q]uit" if add_quit else "")
                    + (", <Return> to continue" if allow_return else "")
                    + " > "
-    )
+                   )
     return (full_prompt if len(full_prompt) < 150
-                else full_prompt.replace(', ', '\n    ')
-                    .replace(': ', ':\n    ')
-                    .replace(' > ', '\n> ')
-            , re.findall(regex, full_prompt))
+            else full_prompt.replace(', ', '\n    ')
+            .replace(': ', ':\n    ')
+            .replace(' > ', '\n> '), re.findall(regex, full_prompt))
 
 
 def unverified_articles_sql():
@@ -259,7 +258,31 @@ def articles_to_classify_sql():
 
 def articles_to_assign_sql():
     """
-    SQL statement to return auto-classified articles for assignment
+    SQL statement to return auto-classified articles for reclassification
+    """
+    return article_type_join_sql() + """
+         WHERE a.Dataset = "CLASS"
+         AND a.Status = "M"
+         AND a.PubDate IN (
+             SELECT PubDate
+             FROM dates
+             WHERE PubDate IN (
+                 SELECT DISTINCT PubDate
+                 FROM articles
+                 WHERE Dataset = "CLASS"
+                 AND Status = "M"
+             )
+             ORDER BY Priority
+             LIMIT ?
+         )
+         GROUP BY a.RecordId
+         ORDER BY a.PubDate, a.RecordId
+    """
+
+
+def articles_to_reclassify_sql():
+    """
+    SQL statement to return auto-classified articles for reclassification
     """
     return article_type_join_sql() + """
          WHERE a.Dataset = "CLASS"
@@ -295,8 +318,35 @@ def classify_sql():
     """
 
 
+def cleanup_sql():
+    """
+    SQL Statement to update dates that have been completely autoclassified
+    """
+    return """
+        WITH datelist AS MATERIALIZED (
+            SELECT DISTINCT PubDate
+            FROM articles
+            INDEXED BY Dataset
+            WHERE Dataset = "CLASS"
+            AND Pubdate NOT IN 
+            (
+                SELECT DISTINCT PubDate
+                FROM articles
+                INDEXED BY Dataset
+                WHERE Dataset != "CLASS"
+            )
+        )
+        UPDATE dates
+        SET Complete = 1
+        WHERE PubDate IN (SELECT PubDate FROM datelist)
+    """
+
+
 def display_article(total: int,
-                    current, row: Row, types) -> tuple[str, tuple[str, ...]]:
+                    current,
+                    row: Row,
+                    types,
+                    limit_lines=True) -> tuple[str, tuple[str, ...]]:
     """
     Full text to display contents and metadata of one article
     """
@@ -306,7 +356,10 @@ def display_article(total: int,
         color_mass_locations(color_text_matches(row['FullText']))
     )
     art_types = article_types(types)
-    return "\n".join(counter + label + art_types + lines[:35]) + '\n', lines
+    return "\n".join(counter
+                     + label
+                     + art_types
+                     + lines[:35] if limit_lines else lines) + '\n', lines
 
 
 def display_remaining_lines(lines) -> str:
@@ -545,6 +598,7 @@ def statistic_summary(TP, TN, FP, FN) -> str:
            f"Specificity: {100*spec:.2f}%"
            )
     return msg
+
 
 def year_month_from_article(row: Row) -> str:
     """

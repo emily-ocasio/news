@@ -187,7 +187,7 @@ def dates_to_classify(state: State) -> RxResp:
 @choice('dates_to_assign')
 def dates_to_assign(state: State) -> RxResp:
     """
-    Choose how many days to assign auto-classified articles
+    Choose how many days to assign homicides to articles
     """
     prompt = "Enter number of days to assign classification > "
     return action2('get_number_input', prompt=prompt), state

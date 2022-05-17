@@ -35,8 +35,16 @@ def classification(state: State) -> RxResp:
     #     msg += f"\n" + disp
     state = state._replace(next_article=state.next_article+1)
     return combine_actions(action2('no_op') if auto_class == 'N'
-                        else
+                           else
                            action2('print_message', message=msg),
                            action2(
                                'command_db', sql=sql, auto_class=auto_class,
                                id=row['RecordId'])), state
+
+
+def dates_cleanup(state: State) -> RxResp:
+    """
+    Cleanup dates database by updating completion state
+    """
+    sql = calc.cleanup_sql()
+    return action2('command_db', sql=sql), state

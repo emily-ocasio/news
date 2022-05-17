@@ -98,6 +98,15 @@ def auto_assigned_articles(state: State) -> RxResp:
     """
     Retrieve auto-classified articles ready to be reclassified
     """
-    sql = calc.articles_to_assign_sql()
+    sql = calc.articles_to_reclassify_sql()
     days = state.dates_to_reclassify
     return action2('query_db', sql=sql, days=days), state
+
+@query('homicides_by_month')
+def homicides_by_month(state: State) -> RxResp:
+    """
+    Retrieve homicides for a specific month
+    """
+    sql = ''
+    month = state.homicide_month
+    return action2('query_db', sql = sql, month = month), state

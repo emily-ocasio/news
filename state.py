@@ -31,6 +31,7 @@ class State(NamedTuple):
     dates_to_classify: int = 0
     dates_to_reclassify: int = 0
     dates_to_assign: int = 0
+    homicide_month: str = ''
     choice_type: str = ''
     query_type: str = ''
     outputs: Any = None

@@ -14,4 +14,3 @@ WITH datelist AS MATERIALIZED (
 UPDATE dates
 SET Complete = 1
 WHERE PubDate IN (SELECT PubDate FROM datelist)
-

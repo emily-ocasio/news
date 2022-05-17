@@ -80,7 +80,8 @@ def show_article(state: State) -> RxResp:
     """
     return combine_actions(
         from_reaction(display.article),
-        from_reaction(choose.label)
+        from_reaction(choose.homicide_month if state.article_kind == 'assign'
+                      else choose.label)
     ), state
 
 
@@ -98,8 +99,6 @@ def save_label(state: State) -> RxResp:
     """
     Save user provided label for article
     """
-    if state.article_kind == 'assign' and state.new_label == 'M':
-        return select_homicide_month(state)
     return combine_actions(
         from_reaction(save.label),
         from_reaction(next_article)
@@ -236,9 +235,12 @@ def classify_next(state: State) -> RxResp:
 @next_event('start')
 def all_classified(state: State) -> RxResp:
     """
-    Notify user all articles in list have been classified
+    Clean up dates database and notify user
+        all articles in list have been classified
     """
-    return action2('print_message', message="All articles classified."), state
+    return combine_actions(
+        from_reaction(save.dates_cleanup),
+        action2('print_message', message="All articles classified.")), state
 
 
 def assign_homicides(state: State) -> RxResp:
@@ -262,8 +264,8 @@ def reclassify_by_date(state: State) -> RxResp:
     return retrieve.auto_assigned_articles(state)
 
 
-def select_homicide_month(state: State) -> RxResp:
+def select_homicide(state: State) -> RxResp:
     """
-    Determine which month is the homicide to assign
+    Show homicides for month and select desired one
     """
-    return choose.homicide_month(state)
+    return retrieve.homicides_by_month(state)
