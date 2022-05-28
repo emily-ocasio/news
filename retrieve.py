@@ -107,6 +107,6 @@ def homicides_by_month(state: State) -> RxResp:
     """
     Retrieve homicides for a specific month
     """
-    sql = ''
+    sql = calc.homicides_by_month_sql()
     month = state.homicide_month
     return action2('query_db', sql = sql, month = month), state

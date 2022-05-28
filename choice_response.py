@@ -196,7 +196,8 @@ def homicide_month(state: State) -> RxResp:
     """
     Respond to selected homicide month to display
     """
-    if state.outputs == '':
+    if state.outputs == 'Q':
         return controller.start_point(state)
-    state = state._replace(homicide_month = state.outputs)
+    if state.outputs != '':
+        state = state._replace(homicide_month = state.outputs)
     return controller.select_homicide(state)

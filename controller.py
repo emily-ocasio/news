@@ -269,3 +269,11 @@ def select_homicide(state: State) -> RxResp:
     Show homicides for month and select desired one
     """
     return retrieve.homicides_by_month(state)
+
+
+@next_event('start')
+def homicide_table(state: State) -> RxResp:
+    """
+    Display homicide table
+    """
+    return display.homicide_table(state)

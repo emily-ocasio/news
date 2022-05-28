@@ -209,5 +209,7 @@ def homicide_month(state: State) -> RxResp:
     """
     current_month = calc.year_month_from_article(
                                 state.articles[state.next_article])
-    prompt = f"Enter homicide month (<Return> for {current_month}) > "
+    state = state._replace(homicide_month = current_month)
+    prompt = (f"Enter homicide month, [Q] to quit, "
+              f"(<Return> for {current_month}) > ")
     return action2('get_text_input', prompt=prompt), state

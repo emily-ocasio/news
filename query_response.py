@@ -76,9 +76,9 @@ def unassigned_articles(state: State) -> RxResp:
     Response to query for articles to assign as homicides
     """
     articles = state.outputs
-    state = state._replace(articles = articles,
-                           next_article = 0,
-                           article_kind = 'assign')
+    state = state._replace(articles=articles,
+                           next_article=0,
+                           article_kind='assign')
     return controller.first_article(state)
 
 
@@ -87,7 +87,16 @@ def auto_assigned_articles(state: State) -> RxResp:
     Response to query for autoclassified articles to be reclassified
     """
     articles = state.outputs
-    state = state._replace(articles = articles,
-                           next_article = 0,
-                           article_kind = 'reclassify')
+    state = state._replace(articles=articles,
+                           next_article=0,
+                           article_kind='reclassify')
     return controller.first_article(state)
+
+
+def homicides_by_month(state: State) -> RxResp:
+    """
+    Response to query for homicides in a particular month
+    """
+    homicides = state.outputs
+    state = state._replace(homicides=homicides)
+    return controller.homicide_table(state)

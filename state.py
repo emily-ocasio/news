@@ -5,6 +5,9 @@ Type Definitions, including:
 """
 from collections.abc import Callable
 from typing import NamedTuple, Optional, Any
+from sqlite3 import Row
+
+Rows = tuple[Row,...]
 
 class State(NamedTuple):
     """
@@ -13,13 +16,14 @@ class State(NamedTuple):
     next_event: str
     article_date: Optional[str] = None
     article_id: Optional[int] = None
-    articles: tuple = tuple()
-    matches: tuple = tuple()
-    nomatches: tuple = tuple()
-    FP: tuple = tuple()
-    FN: tuple = tuple()
-    TP: tuple = tuple()
-    TN: tuple = tuple()
+    articles: Rows = tuple()
+    matches: Rows = tuple()
+    nomatches: Rows = tuple()
+    homicides: Rows = tuple()
+    FP: Rows = tuple()
+    FN: Rows = tuple()
+    TP: Rows = tuple()
+    TN: Rows = tuple()
     article_kind: Optional[str] = None
     review_dataset: Optional[str] = None
     review_label: Optional[str] = None

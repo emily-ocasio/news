@@ -10,6 +10,7 @@ from functools import reduce
 from flashtext import KeywordProcessor  # type: ignore
 from colorama import Fore, Style
 from mass_towns import townlist
+from state import Rows
 
 absolute_roots = (
     'slain',
@@ -342,6 +343,17 @@ def cleanup_sql():
     """
 
 
+def homicides_by_month_sql():
+    """
+    SQL Statement to retrieve homicides based on year-month
+    """
+    return """
+        SELECT *
+        FROM shr
+        WHERE YearMonth = ?
+    """
+
+
 def display_article(total: int,
                     current,
                     row: Row,
@@ -607,3 +619,20 @@ def year_month_from_article(row: Row) -> str:
     """
     article_date = row['PubDate']
     return f"{article_date[:4]}-{article_date[4:6]}"
+
+
+def display_homicide(row: Row) -> str:
+    """
+    Return formatted row of homicide data
+    """
+    return (
+        f"Victim age: {row['VicAge']} sex: {row['VicSex']} "
+        f"Offender age: {row['OffAge']} sex: {row['OffSex']}"
+    )
+
+
+def homicide_table(rows: Rows) -> str:
+    """
+    Return formatted table of homicide info
+    """
+    return '\n'.join(display_homicide(row) for row in rows)

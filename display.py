@@ -40,7 +40,7 @@ def match_summary(state: State) -> RxResp:
     nomatch_count = len(state.nomatches)
     msg = (f"Matched = {match_count}, Not matched = {nomatch_count}, "
            f"Total articles = {total}"
-    )
+           )
     return action2('print_message', message=msg), state
 
 
@@ -79,4 +79,12 @@ def statistics(state: State) -> RxResp:
         len(state.TN),
         len(state.FP),
         len(state.FN))
+    return action2('print_message', message=msg), state
+
+
+def homicide_table(state: State) -> RxResp:
+    """
+    Display formatted table of potential homicides
+    """
+    msg = calc.homicide_table(state.homicides)
     return action2('print_message', message=msg), state
