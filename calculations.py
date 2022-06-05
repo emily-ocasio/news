@@ -2,12 +2,12 @@
 Pure functions with no side effects
 """
 import re
-import textwrap
 from sqlite3 import Row
 from collections.abc import Iterable
 from typing import Optional
 from functools import reduce
 from flashtext import KeywordProcessor  # type: ignore
+from ansiwrap import wrap # type: ignore
 from colorama import Fore, Style
 from mass_towns import townlist
 from state import Rows
@@ -99,6 +99,9 @@ conditional_string = distance_match_regex_string(
 )
 conditional_death_regex = re.compile(conditional_string, re.IGNORECASE)
 
+single_word_regex = re.compile(
+    r"(\S+)", re.IGNORECASE
+)
 
 def colored_word(word: str, color=Fore.RED) -> str:
     """
@@ -106,12 +109,19 @@ def colored_word(word: str, color=Fore.RED) -> str:
     """
     return color + word + Fore.RESET
 
+def colored_phrase(phrase: str, color = Fore.RED) -> str:
+    """
+    Changes longer phrase to show up as red in terminal
+    In order to prevent problems when other words are
+        changed inside the phrase, it changes the color at each word
+    """
+    return single_word_regex.sub(color + r"\1" + Fore.RESET, phrase)
 
 def high_word(word: str, color=Style.BRIGHT) -> str:
     """
     Changes word or phrase to show as bold in terminal
     """
-    return color + word + Style.NORMAL
+    return color + word + Style.NORMAL + "\x1b[0m"
 
 
 kp = KeywordProcessor()
@@ -259,7 +269,7 @@ def articles_to_classify_sql():
 
 def articles_to_assign_sql():
     """
-    SQL statement to return auto-classified articles for reclassification
+    SQL statement to return verified articles for assignmen
     """
     return article_type_join_sql() + """
          WHERE a.Dataset = "CLASS"
@@ -284,8 +294,12 @@ def articles_to_assign_sql():
 def articles_to_reclassify_sql():
     """
     SQL statement to return auto-classified articles for reclassification
+    Used when given a number of dates to grab auto-classified articles
+        in order to verify whether they are in fact true positives
     """
-    return article_type_join_sql() + """
+    return """
+        SELECT a.*
+        FROM articles a
          WHERE a.Dataset = "CLASS"
          AND a.Status IS NULL
          AND a.Autoclass = "M"
@@ -302,7 +316,6 @@ def articles_to_reclassify_sql():
              ORDER BY Priority
              LIMIT ?
          )
-         GROUP BY a.RecordId
          ORDER BY a.PubDate, a.RecordId
     """
 
@@ -365,7 +378,7 @@ def display_article(total: int,
     counter = article_counter(current, total)
     label = article_label(row)
     lines = wrap_lines(
-        color_mass_locations(color_text_matches(row['FullText']))
+        color_text_matches(color_mass_locations(row['FullText']))
     )
     art_types = article_types(types)
     return "\n".join(counter
@@ -387,8 +400,7 @@ def wrap_lines(text, width=140) -> tuple[str, ...]:
     """
     if not text:
         return tuple("No text")
-    return tuple(textwrap.wrap(text, width))
-
+    return tuple(wrap(text, width))
 
 def article_counter(current, total) -> tuple[str, ...]:
     """
@@ -457,9 +469,8 @@ def color_text_matches(document: Optional[str]) -> Optional[str]:
     text = document
     text = absolute_regex.sub(lambda match: colored_word(match.group(0)), text)
     text = conditional_death_regex.sub(
-        lambda match: colored_word(match.group(0)), text)
+        lambda match: colored_phrase(match.group(0)), text)
     return text
-
 
 def filter_row(row: Row) -> bool:
     """
