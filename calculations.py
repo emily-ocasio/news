@@ -6,9 +6,13 @@ from sqlite3 import Row
 from collections.abc import Iterable
 from typing import Optional
 from functools import reduce
+
 from flashtext import KeywordProcessor  # type: ignore
 from ansiwrap import wrap # type: ignore
 from colorama import Fore, Style
+from tabulate import tabulate
+from rich.console import Console, Text
+
 from mass_towns import townlist
 from state import Rows
 
@@ -71,6 +75,18 @@ def any_root_regex_string(roots: tuple[str, ...]) -> str:
     return fr"\b(?:{rootstring})\w*"
 
 
+def any_word_regex_string(words: tuple[str, ...]) -> str:
+    r"""
+    Generates regex string that represents match to any
+        full word/phrase of the list
+    Input: Tuple of words, example: ('word1', 'word2', 'word3')
+    Output: Regex string in the form:
+        \b(?:word1|word2|word3)\b
+    """
+    rootstring = '|'.join(words)
+    return fr"\b(?:{rootstring})\b"
+
+
 def distance_match_regex_string(string1: str,
                                 string2: str, sep: int = 300) -> str:
     """
@@ -102,6 +118,8 @@ conditional_death_regex = re.compile(conditional_string, re.IGNORECASE)
 single_word_regex = re.compile(
     r"(\S+)", re.IGNORECASE
 )
+
+town_regex = re.compile(any_word_regex_string(townlist), re.IGNORECASE)
 
 def colored_word(word: str, color=Fore.RED) -> str:
     """
@@ -377,9 +395,10 @@ def display_article(total: int,
     """
     counter = article_counter(current, total)
     label = article_label(row)
-    lines = wrap_lines(
-        color_text_matches(color_mass_locations(row['FullText']))
-    )
+    # lines = wrap_lines(
+    #     color_text_matches(color_mass_locations(row['FullText']))
+    # )
+    lines = tuple(rich_text(row['FullText']).splitlines())
     art_types = article_types(types)
     return "\n".join(counter
                      + label
@@ -413,7 +432,7 @@ def article_label(row: Row):
     """
     Returns label wtih article metadata
     """
-    return (f"Title: {color_text_matches(row['Title'])}    Date: "
+    return (f"Title: {rich_text(row['Title'])}    Date: "
             f"{row['PubDate'][4:6]}/{row['PubDate'][6:8]}/{row['PubDate'][0:4]}"
             "\n",
             f"Record ID = {row['RecordId']}",
@@ -471,6 +490,35 @@ def color_text_matches(document: Optional[str]) -> Optional[str]:
     text = conditional_death_regex.sub(
         lambda match: colored_phrase(match.group(0)), text)
     return text
+
+
+def rich_text(document: Optional[str]) -> str:
+    """
+    Apply rich text formatting
+    Includes the following:
+        - Color highlighting the word matches
+        - Color highlighting the location matches
+        - Word wrapping long text
+    """
+    if document is None:
+        return ''
+    text = Text(document)
+    text.highlight_regex(absolute_regex, 'red bold') # type: ignore
+    text.highlight_regex(conditional_death_regex, 'red bold') # type: ignore
+    text.highlight_regex(town_regex, 'blue bold') # type: ignore
+    return rich_to_str(text)
+
+
+def rich_to_str(text: Text) -> str:
+    """
+    Returns directly printable string corresponding to a text
+    Applies style formatting and word wrapping automatically
+    """
+    console = Console()
+    with console.capture() as capture:
+        console.print(text)
+    return capture.get()
+
 
 def filter_row(row: Row) -> bool:
     """
@@ -646,4 +694,5 @@ def homicide_table(rows: Rows) -> str:
     """
     Return formatted table of homicide info
     """
-    return '\n'.join(display_homicide(row) for row in rows)
+    return tabulate(rows)
+ #   return '\n'.join(display_homicide(row) for row in rows)
