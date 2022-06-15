@@ -4,14 +4,15 @@ Pure functions with no side effects
 import re
 from sqlite3 import Row
 from collections.abc import Iterable
-from typing import Optional
+from typing import Optional, Union
 from functools import reduce
 
 from flashtext import KeywordProcessor  # type: ignore
 from ansiwrap import wrap # type: ignore
 from colorama import Fore, Style
-from tabulate import tabulate
+# from tabulate import tabulate
 from rich.console import Console, Text
+from rich.table import Table
 
 from mass_towns import townlist
 from state import Rows
@@ -379,8 +380,8 @@ def homicides_by_month_sql():
     SQL Statement to retrieve homicides based on year-month
     """
     return """
-        SELECT *
-        FROM shr
+        SELECT ROW_NUMBER() OVER (ORDER BY Agency, Inc) AS n, *
+        FROM view_shr
         WHERE YearMonth = ?
     """
 
@@ -509,7 +510,7 @@ def rich_text(document: Optional[str]) -> str:
     return rich_to_str(text)
 
 
-def rich_to_str(text: Text) -> str:
+def rich_to_str(text: Union[Text,Table]) -> str:
     """
     Returns directly printable string corresponding to a text
     Applies style formatting and word wrapping automatically
@@ -680,19 +681,15 @@ def year_month_from_article(row: Row) -> str:
     return f"{article_date[:4]}-{article_date[4:6]}"
 
 
-def display_homicide(row: Row) -> str:
-    """
-    Return formatted row of homicide data
-    """
-    return (
-        f"Victim age: {row['VicAge']} sex: {row['VicSex']} "
-        f"Offender age: {row['OffAge']} sex: {row['OffSex']}"
-    )
-
-
 def homicide_table(rows: Rows) -> str:
     """
     Return formatted table of homicide info
     """
-    return tabulate(rows)
- #   return '\n'.join(display_homicide(row) for row in rows)
+    table = Table()
+    for col in rows[0].keys():
+        table.add_column(col)
+    for row in rows:
+        elements = tuple(str(element) for element in row)
+        table.add_row(*elements) # type: ignore
+    return rich_to_str(table)
+    #return tabulate(rows, headers=rows[0].keys())

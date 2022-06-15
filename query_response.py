@@ -25,6 +25,8 @@ def many_articles(state: State) -> RxResp:
 def article_types(state: State) -> RxResp:
     """
     Response to query to pull article types for one record
+    Occurs when article is to be displayed
+    After getting the article types, proceed with displaying full article
     """
     state = state._replace(current_article_types=state.outputs)
     return controller.show_article(state)
@@ -74,6 +76,7 @@ def single_article(state: State) -> RxResp:
 def unassigned_articles(state: State) -> RxResp:
     """
     Response to query for articles to assign as homicides
+    Unassigned articles have been retrieved based on number of days
     """
     articles = state.outputs
     state = state._replace(articles=articles,

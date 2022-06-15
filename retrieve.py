@@ -57,6 +57,7 @@ def all_articles(state: State) -> RxResp:
 def article_types(state: State) -> RxResp:
     """
     Retrieve list of article types for a specific article
+    Used during article processing as a prerequisite for displaying article
     """
     sql = calc.retrieve_types_sql()
     row = state.articles[state.next_article]
@@ -86,7 +87,8 @@ def single_article(state: State) -> RxResp:
 @query('unassigned_articles')
 def unassigned_articles(state: State) -> RxResp:
     """
-    Retrieve unassigned auto-classifed articles ready to be assigned
+    Retrieve unassigned articles post-review ready to be assigned
+    User has selected the desired number of days
     """
     sql = calc.articles_to_assign_sql()
     days = state.dates_to_assign

@@ -7,6 +7,7 @@ import choose
 import retrieve
 import display
 import save
+import calculations as calc
 
 
 def start_point(state: State) -> RxResp:
@@ -49,7 +50,8 @@ def no_articles(state: State) -> RxResp:
 
 def first_article(state: State) -> RxResp:
     """
-    Handle initial article
+    Handle initial article of a group
+    Could be articles to review or assign
     """
     if len(state.articles) == 0:
         return no_articles(state)
@@ -59,10 +61,16 @@ def first_article(state: State) -> RxResp:
 
 def next_article(state: State) -> RxResp:
     """
-    Process next article
+    Process next article of a group
+    Could be article to review or assign
+    First step is to retrieve the article types
     """
     if state.next_article >= len(state.articles):
         return last_article(state)
+    if state.article_kind == 'assign':
+        current_month = calc.year_month_from_article(
+                                state.articles[state.next_article])
+        state = state._replace(homicide_month = current_month)
     return retrieve.article_types(state)
 
 
@@ -77,11 +85,15 @@ def last_article(state: State) -> RxResp:
 def show_article(state: State) -> RxResp:
     """
     Display article contents
+    Preceeded by retrieving the article types
+    If showing article in context of homicide assignment, first
+        show table of homicides for the month
     """
     return combine_actions(
         from_reaction(display.article),
-        from_reaction(choose.homicide_month if state.article_kind == 'assign'
-                      else choose.label)
+        from_reaction(retrieve.homicides_by_month
+                        if state.article_kind == 'assign'
+                        else choose.label)
     ), state
 
 
@@ -104,6 +116,17 @@ def save_label(state: State) -> RxResp:
         from_reaction(next_article)
     ), state
 
+def save_assign_status(state: State) -> RxResp:
+    """
+    Save user selected assign status for article
+    Comes from:
+        User is prompted to assign an article
+        and selects status such as "D" or "E"
+    """
+    return combine_actions(
+        from_reaction(save.assign_status),
+        from_reaction(next_article)
+    ), state
 
 def edit_single_article(state: State) -> RxResp:
     """
@@ -246,6 +269,7 @@ def all_classified(state: State) -> RxResp:
 def assign_homicides(state: State) -> RxResp:
     """
     Assign homicides to articles
+    First step when selected from main menu
     """
     return choose.dates_to_assign(state)
 
@@ -253,6 +277,7 @@ def assign_homicides(state: State) -> RxResp:
 def assign_by_date(state: State) -> RxResp:
     """
     Retrieve articles to be assigned
+    Occurs after user specifies how many dates to assign homicides
     """
     return retrieve.unassigned_articles(state)
 
@@ -275,5 +300,10 @@ def select_homicide(state: State) -> RxResp:
 def homicide_table(state: State) -> RxResp:
     """
     Display homicide table
+    Preceeded by retrieval of homicide table
+    Occurs while showing each article during assignment
     """
-    return display.homicide_table(state)
+    return combine_actions(
+        from_reaction(display.homicide_table),
+        from_reaction(choose.assign_choice)
+    ), state

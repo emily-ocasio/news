@@ -1,0 +1,38 @@
+CREATE TABLE IF NOT EXISTS "shr" (
+"index" INTEGER,
+  "ID" TEXT,
+  "CNTYFIPS" TEXT,
+  "Ori" TEXT,
+  "State" TEXT,
+  "Agency" TEXT,
+  "Agentype" TEXT,
+  "Source" TEXT,
+  "Solved" TEXT,
+  "Year" INTEGER,
+  "StateName" TEXT,
+  "Month" TEXT,
+  "Incident" INTEGER,
+  "ActionType" TEXT,
+  "Homicide" TEXT,
+  "Situation" TEXT,
+  "VicAge" INTEGER,
+  "VicSex" TEXT,
+  "VicRace" TEXT,
+  "VicEthnic" TEXT,
+  "OffAge" INTEGER,
+  "OffSex" TEXT,
+  "OffRace" TEXT,
+  "OffEthnic" TEXT,
+  "Weapon" TEXT,
+  "Relationship" TEXT,
+  "Circumstance" TEXT,
+  "Subcircum" TEXT,
+  "VicCount" INTEGER,
+  "OffCount" INTEGER,
+  "FileDate" REAL,
+  "MSA" TEXT,
+  "YearMonth" TEXT
+, Victim TEXT);
+CREATE INDEX "ix_shr_index"ON "shr" ("index");
+CREATE INDEX "shr_id" on shr (id);
+CREATE INDEX shr_date on shr(YearMonth);

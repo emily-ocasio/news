@@ -191,13 +191,30 @@ def dates_to_reclassify(state: State) -> RxResp:
     state = state._replace(dates_to_reclassify=state.outputs)
     return controller.reclassify_by_date(state)
 
+@check_defaults
+def assign_choice(state: State, choice) -> RxResp:
+    """
+    Perform selected choice during assignment
+    """
+    if choice == 'H':
+        return choose.homicide_month(state)
+    if choice == 'S':
+        state = state._replace(next_article = state.next_article+1)
+        return controller.next_article(state)
+    if choice == 'N' or state.outputs == 'O':
+        state = state._replace(new_label = choice)
+        return controller.save_label(state)
+    if choice == 'E' or state.outputs == 'D':
+        state = state._replace(new_label = choice)
+        return controller.save_assign_status(state)
+    if choice == 'T':
+        raise Exception('Enter note not yet supported')
+    raise Exception('Unsupported dataset choice')
+
 
 def homicide_month(state: State) -> RxResp:
     """
     Respond to selected homicide month to display
     """
-    if state.outputs == 'Q':
-        return controller.start_point(state)
-    if state.outputs != '':
-        state = state._replace(homicide_month = state.outputs)
-    return controller.select_homicide(state)
+    state = state._replace(homicide_month = state.outputs)
+    return controller.show_article(state)

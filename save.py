@@ -17,6 +17,10 @@ def label(state: State) -> RxResp:
                    id=row['RecordId']), state
 
 
+def assign_status(state: State) -> RxResp:
+    """
+    """
+
 @next_event('classified')
 def classification(state: State) -> RxResp:
     """

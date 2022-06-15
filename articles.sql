@@ -38,5 +38,5 @@ CREATE TABLE IF NOT EXISTS topics (
     ShrId INTEGER NOT NULL,
     RecordId INTEGER NOT NULL,
     FOREIGN KEY(RecordId) REFERENCES articles(RecordId),
-    FOREIGN KEY(ShrId) REFERENCES shr(ID)
+    FOREIGN KEY(ShrId) REFERENCES shr("index")
 );

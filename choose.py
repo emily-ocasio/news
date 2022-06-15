@@ -73,6 +73,17 @@ type_prompts = (
 )
 
 
+assign_prompts = (
+    "Change [H]omicide month to diaplay",
+    "[S]kip article",
+    "Homicide [E]arlier than 1976",
+    "[D]one assigning",
+    "Article [N]ot a homicide",
+    "Homicide at [O]ther location",
+    "Enter no[T]e"
+)
+
+
 @choice('initial')
 def initial(state: State) -> RxResp:
     """
@@ -188,6 +199,8 @@ def dates_to_classify(state: State) -> RxResp:
 def dates_to_assign(state: State) -> RxResp:
     """
     Choose how many days to assign homicides to articles
+    This is first request after homicide assignment is selected
+        via main menu
     """
     prompt = "Enter number of days to assign classification > "
     return action2('get_number_input', prompt=prompt), state
@@ -202,14 +215,20 @@ def dates_to_reclassify(state: State) -> RxResp:
     return action2('get_number_input', prompt=prompt), state
 
 
+@choice('assign_choice')
+def assign_choice(state: State) -> RxResp:
+    """
+    Provide choices during assigment
+    Occurs after article and list of homicides for the month is displayed
+    """
+    return choose_with_prompt(state, assign_prompts, "")
+
+
 @choice('homicide_month')
 def homicide_month(state: State) -> RxResp:
     """
-    Choose the particular month from which to assign homicides
+    Choose new homicide month to show during assignment
+    Occurs as a result of user choice
     """
-    current_month = calc.year_month_from_article(
-                                state.articles[state.next_article])
-    state = state._replace(homicide_month = current_month)
-    prompt = (f"Enter homicide month, [Q] to quit, "
-              f"(<Return> for {current_month}) > ")
-    return action2('get_text_input', prompt=prompt), state
+    msg = "Enter new homicide month to display: "
+    return action2('get_text_input', prompt=msg), state
