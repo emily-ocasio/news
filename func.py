@@ -5,6 +5,7 @@ from state import State
 import choice_response
 import query_response
 import controller
+from initialize import initialize_state
 
 
 def what_next(state: State):
@@ -37,7 +38,7 @@ def main():
         These actions are returned, along with a new immutable version of
         the application state, by the functions dispatched via what_next
     """
-    current_state = State(next_event='start')
+    current_state = initialize_state(State(next_event='start'))
     while True:
         action, current_state = what_next(current_state)
         current_state = action(current_state)

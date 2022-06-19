@@ -13,9 +13,13 @@ def article(state: State) -> RxResp:
     total = len(state.articles)
     row = state.articles[state.next_article]
     display, lines = calc.display_article(total, state.next_article,
-                                          row, state.current_article_types)
+                                          row, state.current_article_types,
+                                          limit_lines = 0
+                                            if state.article_kind == 'assign'
+                                            else state.terminal_size[1])
     state = state._replace(article_lines=lines,
-                           remaining_lines=(len(lines) > 35))
+                remaining_lines = False if state.article_kind == 'assign'
+                        else (len(lines) > state.terminal_size[1] - 12))
     return combine_actions(
         action2('clear_screen'),
         action2("print_message", message=display),
@@ -26,7 +30,8 @@ def remaining_lines(state: State) -> RxResp:
     """
     Display additional lines for article which was too long
     """
-    display = calc.display_remaining_lines(state.article_lines)
+    display = calc.display_remaining_lines(state.article_lines,
+                                        limit_lines = state.terminal_size[1])
     state = state._replace(remaining_lines=False)
     return action2("print_message", message=display), state
 

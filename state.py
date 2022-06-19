@@ -14,6 +14,7 @@ class State(NamedTuple):
     Contains all state for application
     """
     next_event: str
+    terminal_size: tuple[int, int] = 0, 0
     article_date: Optional[str] = None
     article_id: Optional[int] = None
     articles: Rows = tuple()

@@ -414,7 +414,7 @@ def display_article(total: int,
                     current,
                     row: Row,
                     types,
-                    limit_lines=True) -> tuple[str, tuple[str, ...]]:
+                    limit_lines = 0) -> tuple[str, tuple[str, ...]]:
     """
     Full text to display contents and metadata of one article
     """
@@ -424,23 +424,26 @@ def display_article(total: int,
     #     color_text_matches(color_mass_locations(row['FullText']))
     # )
     lines = tuple(rich_text(row['FullText']).splitlines())
+    limit = limit_lines - 12
     art_types = article_types(types)
-    return "\n".join(counter
+    return ("\n".join(counter
                      + label
                      + art_types
-                     + lines[:29] if limit_lines else lines) + '\n', lines
+                     + lines[:limit] if limit_lines > 0 else lines)
+                + '\n', lines)
 
 
-def display_remaining_lines(lines) -> str:
+def display_remaining_lines(lines, limit_lines = 0) -> str:
     """
-    Displays lines after 29
+    Displays lines after limit_lines - 12
     """
-    return "\n".join(lines[29:])
+    return "\n".join(lines[limit_lines-12:])
 
 
-def wrap_lines(text, width=140) -> tuple[str, ...]:
+def wrap_lines_old(text, width=140) -> tuple[str, ...]:
     """
     Word wraps text and return individual wrapped lines
+    DEPRECATED - TODO: delete
     """
     if not text:
         return tuple("No text")
