@@ -100,7 +100,7 @@ def label_date(state: State) -> RxResp:
     """
     prompt = ("\n\nSelect date to label articles\n"
               "Enter date in format YYYYMMDD, [Q] to quit > "
-    )
+              )
     return action2('get_text_input', prompt=prompt), state
 
 
@@ -110,15 +110,15 @@ def label(state: State) -> RxResp:
     Choose label for article
     """
     prompts = ((label_prompts[:-1] if state.article_kind == 'reclassify'
-                    else label_prompts)
-                    + (('show e[X]tra lines',) if state.remaining_lines
-                            else tuple())
-    )
+                else label_prompts)
+               + (('show e[X]tra lines',) if state.remaining_lines
+                  else tuple())
+               )
     allow_return = (state.article_kind in ('review', 'assign', 'reclassify'))
     prompt, choices = calc.unified_prompt(prompts, allow_return=allow_return)
     return action2('get_user_input',
-                    prompt=prompt, choices=choices, allow_return=allow_return
-    ), state
+                   prompt=prompt, choices=choices, allow_return=allow_return
+                   ), state
 
 
 def choose_with_prompt(state: State, prompts, question) -> RxResp:
@@ -164,8 +164,9 @@ def match_group(state: State) -> RxResp:
     """
     Choose whether to review matched or unmatched articles
     """
-    return choose_with_prompt(state, review_prompts,
-                        "Which group of articles would you like to review?")
+    return choose_with_prompt(
+        state, review_prompts,
+        "Which group of articles would you like to review?")
 
 
 @choice('location')
@@ -231,4 +232,14 @@ def homicide_month(state: State) -> RxResp:
     Occurs as a result of user choice
     """
     msg = "Enter new homicide month to display: "
+    return action2('get_text_input', prompt=msg), state
+
+
+@choice('notes')
+def notes(state: State) -> RxResp:
+    """
+    Enter notes to be added to article
+    Occurs during assignment after chooses to add note
+    """
+    msg = "Enter new note or <return> to leave unchanged > "
     return action2('get_text_input', prompt=msg), state

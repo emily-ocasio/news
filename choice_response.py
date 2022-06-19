@@ -206,7 +206,7 @@ def assign_choice(state: State, choice) -> RxResp:
         state = state._replace(new_label = choice)
         return controller.save_assign_status(state)
     if choice == 'T':
-        raise Exception('Enter note not yet supported')
+        return controller.choose_new_note(state)
     raise Exception('Unsupported dataset choice')
 
 
@@ -216,3 +216,14 @@ def homicide_month(state: State) -> RxResp:
     """
     state = state._replace(homicide_month = state.outputs)
     return controller.show_article(state)
+
+
+def notes(state: State) -> RxResp:
+    """
+    Respond to newly entered notes for an article by user
+    Occurs during assignment
+    """
+    if state.outputs == "":
+        return controller.next_article(state)
+    state = state._replace(new_notes = state.outputs)
+    return controller.save_new_notes(state)

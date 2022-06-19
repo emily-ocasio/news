@@ -103,3 +103,17 @@ def homicides_by_month(state: State) -> RxResp:
     homicides = state.outputs
     state = state._replace(homicides=homicides)
     return controller.homicide_table(state)
+
+
+def refreshed_article(state: State) -> RxResp:
+    """
+    Reset current article row in state after being refreshed from database
+    Occurs after changing an article during assignment without proceeding
+        to next article (example adding new notes)
+    """
+    row = state.outputs[0]
+    state = state._replace(articles = calc.tuple_replace(
+                                            state.articles,
+                                            state.next_article,
+                                            row))
+    return controller.next_article(state)

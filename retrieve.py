@@ -84,6 +84,16 @@ def single_article(state: State) -> RxResp:
     return action2('query_db', sql=sql, id=article_id), state
 
 
+@query('refreshed_article')
+def refreshed_article(state: State) -> RxResp:
+    """
+    Retrieve (refresh) current article for displaying again
+    """
+    sql = calc.single_article_sql()
+    article_id = state.articles[state.next_article]['RecordId']
+    return action2('query_db', sql=sql, id=article_id), state
+
+
 @query('unassigned_articles')
 def unassigned_articles(state: State) -> RxResp:
     """

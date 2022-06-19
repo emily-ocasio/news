@@ -30,7 +30,7 @@ class State(NamedTuple):
     review_label: Optional[str] = None
     article_lines: tuple = tuple()
     remaining_lines: bool = False
-    current_article_types: tuple = tuple()
+    current_article_types: Rows = tuple()
     new_label: str = ''
     new_notes: str = ''
     next_article: int = 0

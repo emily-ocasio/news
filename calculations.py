@@ -8,7 +8,7 @@ from typing import Optional, Union
 from functools import reduce
 
 from flashtext import KeywordProcessor  # type: ignore
-from ansiwrap import wrap # type: ignore
+from ansiwrap import wrap  # type: ignore
 from colorama import Fore, Style
 # from tabulate import tabulate
 from rich.console import Console, Text
@@ -122,19 +122,22 @@ single_word_regex = re.compile(
 
 town_regex = re.compile(any_word_regex_string(townlist), re.IGNORECASE)
 
+
 def colored_word(word: str, color=Fore.RED) -> str:
     """
     Changes word or phrase to show as red in termimal
     """
     return color + word + Fore.RESET
 
-def colored_phrase(phrase: str, color = Fore.RED) -> str:
+
+def colored_phrase(phrase: str, color=Fore.RED) -> str:
     """
     Changes longer phrase to show up as red in terminal
     In order to prevent problems when other words are
         changed inside the phrase, it changes the color at each word
     """
     return single_word_regex.sub(color + r"\1" + Fore.RESET, phrase)
+
 
 def high_word(word: str, color=Style.BRIGHT) -> str:
     """
@@ -411,10 +414,10 @@ def homicides_by_month_sql():
 
 
 def display_article(total: int,
-                    current,
+                    current: int,
                     row: Row,
-                    types,
-                    limit_lines = 0) -> tuple[str, tuple[str, ...]]:
+                    types: Rows,
+                    limit_lines=0) -> tuple[str, tuple[str, ...]]:
     """
     Full text to display contents and metadata of one article
     """
@@ -427,13 +430,13 @@ def display_article(total: int,
     limit = limit_lines - 12
     art_types = article_types(types)
     return ("\n".join(counter
-                     + label
-                     + art_types
-                     + lines[:limit] if limit_lines > 0 else lines)
-                + '\n', lines)
+                      + label
+                      + art_types
+                      + (lines[:limit] if limit_lines > 0 else lines))
+            + '\n', lines)
 
 
-def display_remaining_lines(lines, limit_lines = 0) -> str:
+def display_remaining_lines(lines, limit_lines=0) -> str:
     """
     Displays lines after limit_lines - 12
     """
@@ -449,14 +452,15 @@ def wrap_lines_old(text, width=140) -> tuple[str, ...]:
         return tuple("No text")
     return tuple(wrap(text, width))
 
-def article_counter(current, total) -> tuple[str, ...]:
+
+def article_counter(current: int, total: int) -> tuple[str, ...]:
     """
     Returns text showing article counter
     """
     return (f"Article {current+1} of {total}:\n",) if total > 1 else tuple()
 
 
-def article_label(row: Row):
+def article_label(row: Row) -> tuple[str, ...]:
     """
     Returns label wtih article metadata
     """
@@ -468,11 +472,19 @@ def article_label(row: Row):
             )
 
 
-def article_types(types: tuple[Row, ...]) -> tuple[str, ...]:
+def article_types(types: Rows) -> tuple[str, ...]:
     """
     Return listing of all article types
     """
     return tuple(f"Article Type: {row['desc']}" for row in types)
+
+
+def article_notes(row: Row) -> str:
+    """
+    Return display of notes for article
+    """
+    notes = row['Notes']
+    return f"Notes: {notes}" if notes else "No notes"
 
 
 def words_in(text: str) -> Iterable[str]:
@@ -531,13 +543,13 @@ def rich_text(document: Optional[str]) -> str:
     if document is None:
         return ''
     text = Text(document)
-    text.highlight_regex(absolute_regex, 'red bold') # type: ignore
-    text.highlight_regex(conditional_death_regex, 'red bold') # type: ignore
-    text.highlight_regex(town_regex, 'blue bold') # type: ignore
+    text.highlight_regex(absolute_regex, 'red bold')  # type: ignore
+    text.highlight_regex(conditional_death_regex, 'red bold')  # type: ignore
+    text.highlight_regex(town_regex, 'blue bold')  # type: ignore
     return rich_to_str(text)
 
 
-def rich_to_str(text: Union[Text,Table]) -> str:
+def rich_to_str(text: Union[Text, Table]) -> str:
     """
     Returns directly printable string corresponding to a text
     Applies style formatting and word wrapping automatically
@@ -717,6 +729,15 @@ def homicide_table(rows: Rows) -> str:
         table.add_column(col)
     for row in rows:
         elements = tuple(str(element) for element in row)
-        table.add_row(*elements) # type: ignore
+        table.add_row(*elements)  # type: ignore
     return rich_to_str(table)
-    #return tabulate(rows, headers=rows[0].keys())
+    # return tabulate(rows, headers=rows[0].keys())
+
+
+def tuple_replace(tup: tuple, index: int, value) -> tuple:
+    """
+    Replaces item in tuple and returns newly created tuple
+    """
+    temp_list = list(tup)
+    temp_list[index] = value
+    return tuple(temp_list)

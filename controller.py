@@ -69,8 +69,8 @@ def next_article(state: State) -> RxResp:
         return last_article(state)
     if state.article_kind == 'assign':
         current_month = calc.year_month_from_article(
-                                state.articles[state.next_article])
-        state = state._replace(homicide_month = current_month)
+            state.articles[state.next_article])
+        state = state._replace(homicide_month=current_month)
     return retrieve.article_types(state)
 
 
@@ -78,8 +78,9 @@ def increment_article(state: State) -> RxResp:
     """
     Increment article point and process next article
     """
-    state = state._replace(next_article = state.next_article+1)
+    state = state._replace(next_article=state.next_article+1)
     return next_article(state)
+
 
 @next_event('start')
 def last_article(state: State) -> RxResp:
@@ -99,8 +100,8 @@ def show_article(state: State) -> RxResp:
     return combine_actions(
         from_reaction(display.article),
         from_reaction(retrieve.homicides_by_month
-                        if state.article_kind == 'assign'
-                        else choose.label)
+                      if state.article_kind == 'assign'
+                      else choose.label)
     ), state
 
 
@@ -123,6 +124,7 @@ def save_label(state: State) -> RxResp:
         from_reaction(increment_article)
     ), state
 
+
 def save_assign_status(state: State) -> RxResp:
     """
     Save user selected assign status for article
@@ -134,6 +136,18 @@ def save_assign_status(state: State) -> RxResp:
         from_reaction(save.assign_status),
         from_reaction(increment_article)
     ), state
+
+
+def save_new_notes(state: State) -> RxResp:
+    """
+    Save newly entered notes
+    Comes from assignment after user has entered the desired notes
+    """
+    return combine_actions(
+        from_reaction(save.notes),
+        from_reaction(refresh_article)
+    ), state
+
 
 def edit_single_article(state: State) -> RxResp:
     """
@@ -147,6 +161,14 @@ def retrieve_single_article(state: State) -> RxResp:
     Retrieve single article by Id for review
     """
     return retrieve.single_article(state)
+
+
+def refresh_article(state: State) -> RxResp:
+    """
+    Refresh article after change was made
+    Occurs within assignment, e.g. after new notes entered
+    """
+    return retrieve.refreshed_article(state)
 
 
 def review_datasets(state: State) -> RxResp:
@@ -266,8 +288,9 @@ def increment_classify(state: State) -> RxResp:
     """
     Increment pointer to classify
     """
-    state = state._replace(next_article = state.next_article+1)
+    state = state._replace(next_article=state.next_article+1)
     return classify_next(state)
+
 
 @next_event('start')
 def all_classified(state: State) -> RxResp:
@@ -309,6 +332,16 @@ def select_homicide(state: State) -> RxResp:
     """
     return retrieve.homicides_by_month(state)
 
+
+def choose_new_note(state:State) -> RxResp:
+    """
+    Ask user for new article note in order to save it
+    Occurs during assigment
+    """
+    return combine_actions(
+        from_reaction(display.current_notes),
+        from_reaction(choose.notes)
+    ), state
 
 @next_event('start')
 def homicide_table(state: State) -> RxResp:
