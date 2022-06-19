@@ -12,14 +12,29 @@ def label(state: State) -> RxResp:
     """
     row = state.articles[state.next_article]
     sql = calc.verify_article_sql()
-    state = state._replace(next_article=state.next_article+1)
     return action2('command_db', sql=sql, status=state.new_label,
                    id=row['RecordId']), state
 
 
 def assign_status(state: State) -> RxResp:
     """
+    Save status of assignment process for article
     """
+    row = state.articles[state.next_article]
+    sql = calc.assign_status_sql()
+    return action2('command_db', sql = sql, status=state.new_label,
+                    id=row['RecordId']), state
+
+
+def notes(state: State) -> RxResp:
+    """
+    Save user notes for an article
+    """
+    row = state.articles[state.next_article]
+    sql = calc.update_note_sql()
+    return action2('command_db', sql = sql, notes = state.new_notes,
+                    id=row['RecordId']), state
+
 
 @next_event('classified')
 def classification(state: State) -> RxResp:
@@ -37,7 +52,7 @@ def classification(state: State) -> RxResp:
     # if auto_class == 'M':
     #     disp, _ = calc.display_article(total, state.next_article, row, ())
     #     msg += f"\n" + disp
-    state = state._replace(next_article=state.next_article+1)
+    #state = state._replace(next_article=state.next_article+1)
     return combine_actions(action2('no_op') if auto_class == 'N'
                                 else
                                 action2('print_message', message=msg),

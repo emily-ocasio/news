@@ -74,6 +74,13 @@ def next_article(state: State) -> RxResp:
     return retrieve.article_types(state)
 
 
+def increment_article(state: State) -> RxResp:
+    """
+    Increment article point and process next article
+    """
+    state = state._replace(next_article = state.next_article+1)
+    return next_article(state)
+
 @next_event('start')
 def last_article(state: State) -> RxResp:
     """
@@ -113,7 +120,7 @@ def save_label(state: State) -> RxResp:
     """
     return combine_actions(
         from_reaction(save.label),
-        from_reaction(next_article)
+        from_reaction(increment_article)
     ), state
 
 def save_assign_status(state: State) -> RxResp:
@@ -125,7 +132,7 @@ def save_assign_status(state: State) -> RxResp:
     """
     return combine_actions(
         from_reaction(save.assign_status),
-        from_reaction(next_article)
+        from_reaction(increment_article)
     ), state
 
 def edit_single_article(state: State) -> RxResp:
@@ -254,6 +261,13 @@ def classify_next(state: State) -> RxResp:
         return all_classified(state)
     return save.classification(state)
 
+
+def increment_classify(state: State) -> RxResp:
+    """
+    Increment pointer to classify
+    """
+    state = state._replace(next_article = state.next_article+1)
+    return classify_next(state)
 
 @next_event('start')
 def all_classified(state: State) -> RxResp:

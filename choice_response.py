@@ -72,8 +72,7 @@ def new_label(state: State, choice) -> RxResp:
         return controller.show_remaining_lines(state)
     if state.article_kind in (
             'review', 'assign', 'reclassify') and choice == "":
-        state = state._replace(next_article=state.next_article+1)
-        return controller.next_article(state)
+        return controller.increment_article(state)
     state = state._replace(new_label=choice)
     return controller.save_label(state)
 
@@ -199,8 +198,7 @@ def assign_choice(state: State, choice) -> RxResp:
     if choice == 'H':
         return choose.homicide_month(state)
     if choice == 'S':
-        state = state._replace(next_article = state.next_article+1)
-        return controller.next_article(state)
+        return controller.increment_article(state)
     if choice == 'N' or state.outputs == 'O':
         state = state._replace(new_label = choice)
         return controller.save_label(state)

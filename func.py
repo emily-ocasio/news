@@ -16,7 +16,7 @@ def what_next(state: State):
         'start': controller.start_point,
         'choice_made': choice_response.respond,
         'query_retrieved': query_response.respond,
-        'classified': controller.classify_next,
+        'classified': controller.increment_classify,
     }
     return dispatch[state.next_event](state)
 

@@ -182,7 +182,7 @@ def unified_prompt(prompts, add_quit=True, allow_return=False):
             .replace(' > ', '\n> '), re.findall(regex, full_prompt))
 
 
-def unverified_articles_sql():
+def unverified_articles_sql() -> tuple[str, str]:
     """
     SQL statement to return articles not yet labeled for given date
     """
@@ -221,7 +221,7 @@ def verify_article_sql() -> str:
     """
 
 
-def article_type_join_sql(index: str = ""):
+def article_type_join_sql(index: str = "") -> str:
     """
     Initial portion of SQL statement joining articles with types
         and aggregating via binary encoding all the possible types
@@ -238,7 +238,7 @@ def article_type_join_sql(index: str = ""):
     """
 
 
-def verified_articles_sql():
+def verified_articles_sql() -> str:
     """
     SQL Statement to return articles with from a specified dataset and label
     """
@@ -249,7 +249,7 @@ def verified_articles_sql():
     """
 
 
-def all_articles_sql():
+def all_articles_sql() -> str:
     """
     SQL statement to return all articles from a specific dataset
     """
@@ -288,11 +288,12 @@ def articles_to_classify_sql():
 
 def articles_to_assign_sql():
     """
-    SQL statement to return verified articles for assignmen
+    SQL statement to return verified articles for assignment
     """
     return article_type_join_sql() + """
          WHERE a.Dataset = "CLASS"
          AND a.Status = "M"
+         AND a.AssignStatus IS NULL
          AND a.PubDate IN (
              SELECT PubDate
              FROM dates
@@ -301,6 +302,7 @@ def articles_to_assign_sql():
                  FROM articles
                  WHERE Dataset = "CLASS"
                  AND Status = "M"
+                 AND AssignStatus IS NULL
              )
              ORDER BY Priority
              LIMIT ?
@@ -351,7 +353,29 @@ def classify_sql():
     """
 
 
-def cleanup_sql():
+def assign_status_sql():
+    """
+    SQL statement to update assignment status for a single article
+    """
+    return """
+        UPDATE articles
+        SET AssignStatus = ?
+        WHERE RecordId = ?
+    """
+
+
+def update_note_sql() -> str:
+    """
+    SQL statement to update note in specific article
+    """
+    return """
+        UPDATE articles
+        SET Notes = ?
+        WHERE RecordID = ?
+    """
+
+
+def cleanup_sql() -> str:
     """
     SQL Statement to update dates that have been completely autoclassified
     """
@@ -404,14 +428,14 @@ def display_article(total: int,
     return "\n".join(counter
                      + label
                      + art_types
-                     + lines[:35] if limit_lines else lines) + '\n', lines
+                     + lines[:29] if limit_lines else lines) + '\n', lines
 
 
 def display_remaining_lines(lines) -> str:
     """
-    Displays lines after 35
+    Displays lines after 29
     """
-    return "\n".join(lines[35:])
+    return "\n".join(lines[29:])
 
 
 def wrap_lines(text, width=140) -> tuple[str, ...]:

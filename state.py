@@ -31,6 +31,7 @@ class State(NamedTuple):
     remaining_lines: bool = False
     current_article_types: tuple = tuple()
     new_label: str = ''
+    new_notes: str = ''
     next_article: int = 0
     dates_to_classify: int = 0
     dates_to_reclassify: int = 0
