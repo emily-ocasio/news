@@ -21,6 +21,8 @@ class State(NamedTuple):
     matches: Rows = tuple()
     nomatches: Rows = tuple()
     homicides: Rows = tuple()
+    homicides_assigned: Rows = tuple()
+    selected_homicide: int = 0
     FP: Rows = tuple()
     FN: Rows = tuple()
     TP: Rows = tuple()

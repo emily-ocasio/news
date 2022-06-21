@@ -103,7 +103,13 @@ def statistics(state: State) -> RxResp:
 
 def homicide_table(state: State) -> RxResp:
     """
-    Display formatted table of potential homicides
+    Displays homicide tables (assigned and available) for a given article
+    Occurs during article assignment
     """
-    msg = calc.homicide_table(state.homicides)
+    msg = (("No homicides assigned to article"
+                if len(state.homicides_assigned) == 0
+                else ("Homicides assigned to article:\n"
+                        + calc.homicide_table(state.homicides_assigned)))
+            + f"\nHomicides available to assign: ({state.homicide_month})\n"
+            + calc.homicide_table(state.homicides))
     return action2('print_message', message=msg), state

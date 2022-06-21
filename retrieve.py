@@ -114,6 +114,7 @@ def auto_assigned_articles(state: State) -> RxResp:
     days = state.dates_to_reclassify
     return action2('query_db', sql=sql, days=days), state
 
+
 @query('homicides_by_month')
 def homicides_by_month(state: State) -> RxResp:
     """
@@ -121,4 +122,15 @@ def homicides_by_month(state: State) -> RxResp:
     """
     sql = calc.homicides_by_month_sql()
     month = state.homicide_month
-    return action2('query_db', sql = sql, month = month), state
+    return action2('query_db', sql=sql, month=month), state
+
+
+@query('assigned_homicides_by_article')
+def assigned_homicides_by_article(state: State) -> RxResp:
+    """
+    Retrieve homicides already assigned to a particular article
+    Needed to show user during assignment
+    """
+    sql = calc.homicides_assigned_by_article_sql()
+    record_id = state.articles[state.next_article]['RecordId']
+    return action2('query_db', sql=sql, id=record_id), state

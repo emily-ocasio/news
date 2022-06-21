@@ -195,6 +195,8 @@ def assign_choice(state: State, choice) -> RxResp:
     """
     Perform selected choice during assignment
     """
+    if choice == 'A':
+        return choose.assigment(state)
     if choice == 'H':
         return choose.homicide_month(state)
     if choice == 'S':
@@ -227,3 +229,19 @@ def notes(state: State) -> RxResp:
         return controller.next_article(state)
     state = state._replace(new_notes = state.outputs)
     return controller.save_new_notes(state)
+
+
+def assignment(state: State) -> RxResp:
+    """
+    Respond to selected homicide number for assignment
+    """
+    if state.outputs == 0:
+        return controller.next_article(state)
+    selected = int(state.outputs)
+    shrid = next(
+        (row['Id'] for row in state.homicides if row['n'] == selected)
+        ,0)
+    if shrid == 0:
+        return controller.next_article(state)
+    state = state._replace(selected_homicide = shrid)
+    return controller.save_assigment(state)

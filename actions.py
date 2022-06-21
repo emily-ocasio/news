@@ -111,12 +111,13 @@ def command_db(sql, **kwargs) -> None:
 
 
 @actiondef
-def get_text_input(prompt):
+def get_text_input(prompt, all_upper = True):
     """
     getting input text
     """
     answer = input(prompt)
-    answer = answer.upper()
+    if all_upper:
+        answer = answer.upper()
     return answer
 
 

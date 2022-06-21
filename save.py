@@ -22,8 +22,8 @@ def assign_status(state: State) -> RxResp:
     """
     row = state.articles[state.next_article]
     sql = calc.assign_status_sql()
-    return action2('command_db', sql = sql, status=state.new_label,
-                    id=row['RecordId']), state
+    return action2('command_db', sql=sql, status=state.new_label,
+                   id=row['RecordId']), state
 
 
 def notes(state: State) -> RxResp:
@@ -32,8 +32,19 @@ def notes(state: State) -> RxResp:
     """
     row = state.articles[state.next_article]
     sql = calc.update_note_sql()
-    return action2('command_db', sql = sql, notes = state.new_notes,
-                    id=row['RecordId']), state
+    return action2('command_db', sql=sql, notes=state.new_notes,
+                   id=row['RecordId']), state
+
+
+def assignment(state: State) -> RxResp:
+    """
+    Assign a homicide to an article
+    """
+    sql = calc.assign_homicide_sql()
+    shr_id = state.selected_homicide
+    record_id = state.articles[state.next_article]['RecordId']
+    return action2('command_db', sql=sql, shrid=shr_id,
+                   recordid=record_id), state
 
 
 @next_event('classified')
@@ -54,12 +65,12 @@ def classification(state: State) -> RxResp:
     #     msg += f"\n" + disp
     #state = state._replace(next_article=state.next_article+1)
     return combine_actions(action2('no_op') if auto_class == 'N'
-                                else
-                                action2('print_message', message=msg),
+                           else
+                           action2('print_message', message=msg),
                            action2('command_db',
-                                    sql=sql,
-                                    auto_class=auto_class,
-                                    id=row['RecordId'])), state
+                                   sql=sql,
+                                   auto_class=auto_class,
+                                   id=row['RecordId'])), state
 
 
 def dates_cleanup(state: State) -> RxResp:

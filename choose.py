@@ -74,6 +74,7 @@ type_prompts = (
 
 
 assign_prompts = (
+    "[A]ssign homicide by number",
     "Change [H]omicide month to diaplay",
     "[S]kip article",
     "Homicide [E]arlier than 1976",
@@ -89,7 +90,8 @@ def initial(state: State) -> RxResp:
     """
     Initial application menu
     """
-    prompt, choices = calc.unified_prompt(initial_prompts)
+    prompt, choices = calc.unified_prompt(initial_prompts,
+                                            width=state.terminal_size[0])
     return action2('get_user_input', prompt=prompt, choices=choices), state
 
 
@@ -115,7 +117,9 @@ def label(state: State) -> RxResp:
                   else tuple())
                )
     allow_return = (state.article_kind in ('review', 'assign', 'reclassify'))
-    prompt, choices = calc.unified_prompt(prompts, allow_return=allow_return)
+    prompt, choices = calc.unified_prompt(prompts,
+                                            allow_return=allow_return,
+                                            width=state.terminal_size[0])
     return action2('get_user_input',
                    prompt=prompt, choices=choices, allow_return=allow_return
                    ), state
@@ -125,7 +129,7 @@ def choose_with_prompt(state: State, prompts, question) -> RxResp:
     """
     Generic choice function based on prompt tuple
     """
-    prompt, choices = calc.unified_prompt(prompts)
+    prompt, choices = calc.unified_prompt(prompts, width=state.terminal_size[0])
     return combine_actions(
         action2('print_message', message=question),
         action2('get_user_input', prompt=prompt, choices=choices)
@@ -242,4 +246,13 @@ def notes(state: State) -> RxResp:
     Occurs during assignment after chooses to add note
     """
     msg = "Enter new note or <return> to leave unchanged > "
-    return action2('get_text_input', prompt=msg), state
+    return action2('get_text_input', prompt=msg, all_upper = False), state
+
+
+@choice('assignment')
+def assigment(state: State) -> RxResp:
+    """
+    Select row number of desired homicide to assign to current article
+    """
+    msg = "Select homicide number (n) to assign, 0 to go back > "
+    return action2('get_number_input', prompt=msg), state

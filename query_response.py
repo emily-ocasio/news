@@ -105,6 +105,14 @@ def homicides_by_month(state: State) -> RxResp:
     return controller.homicide_table(state)
 
 
+def assigned_homicides_by_article(state: State) -> RxResp:
+    """
+    Reponse to query for homicides already assigned to an article
+    """
+    state = state._replace(homicides_assigned = state.outputs)
+    return controller.continue_retrieving_homicides(state)
+
+
 def refreshed_article(state: State) -> RxResp:
     """
     Reset current article row in state after being refreshed from database

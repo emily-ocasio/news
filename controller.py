@@ -95,14 +95,24 @@ def show_article(state: State) -> RxResp:
     Display article contents
     Preceeded by retrieving the article types
     If showing article in context of homicide assignment, first
-        show table of homicides for the month
+        retrieve homicide information (assigned and available), starting
+        with the already assigned homicides
     """
     return combine_actions(
         from_reaction(display.article),
-        from_reaction(retrieve.homicides_by_month
+        from_reaction(retrieve.assigned_homicides_by_article
                       if state.article_kind == 'assign'
                       else choose.label)
     ), state
+
+
+def continue_retrieving_homicides(state: State) -> RxResp:
+    """
+    After homicides by article have been retrieve, proceed to
+        retrieve the available homicides for assignment based on month
+    Occurs when providing information for user for assignment
+    """
+    return retrieve.homicides_by_month(state)
 
 
 def show_remaining_lines(state: State) -> RxResp:
@@ -145,6 +155,17 @@ def save_new_notes(state: State) -> RxResp:
     """
     return combine_actions(
         from_reaction(save.notes),
+        from_reaction(refresh_article)
+    ), state
+
+
+def save_assigment(state: State) -> RxResp:
+    """
+    Save newly selected assignment of homicide to an article
+    Occurs after the user selects the corresponding number
+    """
+    return combine_actions(
+        from_reaction(save.assignment),
         from_reaction(refresh_article)
     ), state
 
@@ -333,7 +354,7 @@ def select_homicide(state: State) -> RxResp:
     return retrieve.homicides_by_month(state)
 
 
-def choose_new_note(state:State) -> RxResp:
+def choose_new_note(state: State) -> RxResp:
     """
     Ask user for new article note in order to save it
     Occurs during assigment
@@ -343,11 +364,11 @@ def choose_new_note(state:State) -> RxResp:
         from_reaction(choose.notes)
     ), state
 
-@next_event('start')
+
 def homicide_table(state: State) -> RxResp:
     """
     Display homicide table
-    Preceeded by retrieval of homicide table
+    Preceeded by retrieval of homicide tables
     Occurs while showing each article during assignment
     """
     return combine_actions(

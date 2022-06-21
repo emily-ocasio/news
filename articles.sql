@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS dates (
 CREATE TABLE IF NOT EXISTS topics (
     ShrId INTEGER NOT NULL,
     RecordId INTEGER NOT NULL,
+    UNIQUE(ShrId, RecordId)
     FOREIGN KEY(RecordId) REFERENCES articles(RecordId),
     FOREIGN KEY(ShrId) REFERENCES shr("index")
 );

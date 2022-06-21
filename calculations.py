@@ -8,9 +8,7 @@ from typing import Optional, Union
 from functools import reduce
 
 from flashtext import KeywordProcessor  # type: ignore
-from ansiwrap import wrap  # type: ignore
-from colorama import Fore, Style
-# from tabulate import tabulate
+from colorama import Style
 from rich.console import Console, Text
 from rich.table import Table
 
@@ -123,22 +121,6 @@ single_word_regex = re.compile(
 town_regex = re.compile(any_word_regex_string(townlist), re.IGNORECASE)
 
 
-def colored_word(word: str, color=Fore.RED) -> str:
-    """
-    Changes word or phrase to show as red in termimal
-    """
-    return color + word + Fore.RESET
-
-
-def colored_phrase(phrase: str, color=Fore.RED) -> str:
-    """
-    Changes longer phrase to show up as red in terminal
-    In order to prevent problems when other words are
-        changed inside the phrase, it changes the color at each word
-    """
-    return single_word_regex.sub(color + r"\1" + Fore.RESET, phrase)
-
-
 def high_word(word: str, color=Style.BRIGHT) -> str:
     """
     Changes word or phrase to show as bold in terminal
@@ -165,24 +147,42 @@ def is_in_mass(gpe):
     return len(in_mass(gpe)) > 0
 
 
-def unified_prompt(prompts, add_quit=True, allow_return=False):
+def unified_prompt(prompts: tuple[str,...],
+                    add_quit: bool = True,
+                    allow_return: bool = False,
+                    width: int = 150) -> tuple[str, tuple]:
     """
     Creates a single prompt including individual choices,
-        also adds an option to quit.
+        also adds an option to quit
+        and option to press <Return> to continue
     Also returns list of menu letters based on letters
         inside brackets in prompts.
+    If all prompts fit inside a single line (based on width parameter)
+        print them separated by commas, otherwise break them into
+        columns
     """
     regex = r'\[(\w)\]'
+    prompt_list = (prompts
+                + (("[Q]uit",) if add_quit else tuple())
+                + (("<Return> to continue",) if allow_return else tuple())
+    )
     full_prompt = ("Select option: "
-                   + ", ".join(prompts)
-                   + (", [Q]uit" if add_quit else "")
-                   + (", <Return> to continue" if allow_return else "")
+                   + ", ".join(prompt_list)
                    + " > "
-                   )
-    return (full_prompt if len(full_prompt) < 150
-            else full_prompt.replace(', ', '\n    ')
-            .replace(': ', ':\n    ')
-            .replace(' > ', '\n> '), re.findall(regex, full_prompt))
+    )
+    if len(full_prompt) > width:
+        max_len = max(len(prompt) for prompt in prompt_list) + 4
+        columns = (width - 5) // max_len
+        full_prompt = ('Select option:\n'
+            + '\n'.join(4*' '+ ''.join(prompt.ljust(max_len)
+                                    for prompt in prompt_list[i:i+columns])
+                        for i in range(0, len(prompt_list), columns))
+            + "\n> ")
+    return full_prompt, tuple(re.findall(regex, full_prompt))
+    # return (full_prompt if len(full_prompt) < width
+    #         else full_prompt.replace(', ', '\n    ')
+    #         .replace(': ', ':\n    ')
+    #         .replace(' > ', '\n> '), re.findall(regex, full_prompt))
 
 
 def unverified_articles_sql() -> tuple[str, str]:
@@ -402,7 +402,7 @@ def cleanup_sql() -> str:
     """
 
 
-def homicides_by_month_sql():
+def homicides_by_month_sql() -> str:
     """
     SQL Statement to retrieve homicides based on year-month
     """
@@ -410,6 +410,34 @@ def homicides_by_month_sql():
         SELECT ROW_NUMBER() OVER (ORDER BY Agency, Inc) AS n, *
         FROM view_shr
         WHERE YearMonth = ?
+    """
+
+
+def homicides_assigned_by_article_sql() -> str:
+    """
+    SQL Statement to retrieve homicides already assigned
+        to a specific article
+    """
+    return """
+        SELECT *
+        FROM view_shr
+        WHERE Id IN
+        (
+            SELECT ShrId
+            FROM topics
+            WHERE RecordId = ?
+        )
+    """
+
+
+def assign_homicide_sql() -> str:
+    """
+    SQL Statement to add assignment of homicide to a specific article
+    """
+    return """
+        INSERT OR IGNORE INTO topics
+        (ShrId, RecordId)
+        VALUES (?, ?)
     """
 
 
@@ -441,16 +469,6 @@ def display_remaining_lines(lines, limit_lines=0) -> str:
     Displays lines after limit_lines - 12
     """
     return "\n".join(lines[limit_lines-12:])
-
-
-def wrap_lines_old(text, width=140) -> tuple[str, ...]:
-    """
-    Word wraps text and return individual wrapped lines
-    DEPRECATED - TODO: delete
-    """
-    if not text:
-        return tuple("No text")
-    return tuple(wrap(text, width))
 
 
 def article_counter(current: int, total: int) -> tuple[str, ...]:
@@ -517,19 +535,6 @@ def filter_text(document: Optional[str]) -> bool:
     if document is None:
         return False
     return test_all_filters(document)
-
-
-def color_text_matches(document: Optional[str]) -> Optional[str]:
-    """
-    Returns text with matches highlighted in color
-    """
-    if document is None:
-        return None
-    text = document
-    text = absolute_regex.sub(lambda match: colored_word(match.group(0)), text)
-    text = conditional_death_regex.sub(
-        lambda match: colored_phrase(match.group(0)), text)
-    return text
 
 
 def rich_text(document: Optional[str]) -> str:
@@ -724,14 +729,13 @@ def homicide_table(rows: Rows) -> str:
     """
     Return formatted table of homicide info
     """
-    table = Table()
+    table = Table(row_styles=['','on grey85'])
     for col in rows[0].keys():
         table.add_column(col)
     for row in rows:
         elements = tuple(str(element) for element in row)
         table.add_row(*elements)  # type: ignore
     return rich_to_str(table)
-    # return tabulate(rows, headers=rows[0].keys())
 
 
 def tuple_replace(tup: tuple, index: int, value) -> tuple:
