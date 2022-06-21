@@ -105,9 +105,13 @@ def command_db(sql, **kwargs) -> None:
     Execute SQL command
     """
     args = tuple(kwargs.values())
+    if "BEGIN TRANSACTION" in sql:
+        print(sql)
+        db.executescript(sql)
+        db.commit()
+        return
     db.execute(sql, args)
     db.commit()
-    return
 
 
 @actiondef

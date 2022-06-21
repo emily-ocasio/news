@@ -24,7 +24,7 @@ CREATE VIEW view_shr AS
         SUBSTR(REPLACE(Relationship, 'Relationship ', ''),1,11) AS Relationship,
         SUBSTR(Circumstance,1,20) as Circumstance,
         SUBSTR(MSA,1,5) as MSA,
-        SUBSTR(Victim,1,30) as Victim,
+        Victim AS Victim,
         YearMonth AS YearMonth
     FROM shr
 

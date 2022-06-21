@@ -55,8 +55,8 @@ def first_article(state: State) -> RxResp:
     """
     if len(state.articles) == 0:
         return no_articles(state)
-    state = state._replace(next_article=0)
-    return next_article(state)
+    state = state._replace(next_article=-1)
+    return increment_article(state)
 
 
 def next_article(state: State) -> RxResp:
@@ -67,10 +67,6 @@ def next_article(state: State) -> RxResp:
     """
     if state.next_article >= len(state.articles):
         return last_article(state)
-    if state.article_kind == 'assign':
-        current_month = calc.year_month_from_article(
-            state.articles[state.next_article])
-        state = state._replace(homicide_month=current_month)
     return retrieve.article_types(state)
 
 
@@ -79,6 +75,10 @@ def increment_article(state: State) -> RxResp:
     Increment article point and process next article
     """
     state = state._replace(next_article=state.next_article+1)
+    if state.article_kind == 'assign':
+        current_month = calc.year_month_from_article(
+            state.articles[state.next_article])
+        state = state._replace(homicide_month=current_month)
     return next_article(state)
 
 
@@ -166,6 +166,17 @@ def save_assigment(state: State) -> RxResp:
     """
     return combine_actions(
         from_reaction(save.assignment),
+        from_reaction(refresh_article)
+    ), state
+
+
+def save_unassignment(state: State) -> RxResp:
+    """
+    Delete requested previously assigned homicide
+    Occurs after the user selects the homicide to unassign
+    """
+    return combine_actions(
+        from_reaction(save.unassignment),
         from_reaction(refresh_article)
     ), state
 

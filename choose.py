@@ -75,6 +75,7 @@ type_prompts = (
 
 assign_prompts = (
     "[A]ssign homicide by number",
+    "[U]nassign homicide by number",
     "Change [H]omicide month to diaplay",
     "[S]kip article",
     "Homicide [E]arlier than 1976",
@@ -255,4 +256,28 @@ def assigment(state: State) -> RxResp:
     Select row number of desired homicide to assign to current article
     """
     msg = "Select homicide number (n) to assign, 0 to go back > "
+    return action2('get_number_input', prompt=msg), state
+
+
+@choice('victim')
+def victim(state: State) -> RxResp:
+    """
+    Select new victim name
+    Occurs when a particular homicide is selected for assignment
+    """
+    current = state.homicides[state.selected_homicide]['Victim']
+    msg = (f"Enter victim's name (<Return> to keep [{current}]) > "
+                if current
+                else
+                  "Enter victim's name (<Return> to keep as None) > ")
+    return action2('get_text_input', prompt=msg, all_upper=False), state
+
+
+@choice('unassignment')
+def unassignment(state: State) -> RxResp:
+    """
+    Select row number of desired homicide to unassign (delete from
+        list of assigned homicides for an article
+    """
+    msg = "Select homicide number (k) to unassign, 0 to go back > "
     return action2('get_number_input', prompt=msg), state

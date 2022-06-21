@@ -40,11 +40,29 @@ def assignment(state: State) -> RxResp:
     """
     Assign a homicide to an article
     """
-    sql = calc.assign_homicide_sql()
-    shr_id = state.selected_homicide
+    shr_id = state.homicides[state.selected_homicide]['Id']
+    record_id = state.articles[state.next_article]['RecordId']
+    return (action2('command_db', sql=calc.assign_homicide_sql(),
+                    shrid=shr_id,
+                    recordid=record_id)
+            if state.victim == ""
+            else
+            action2('command_db',
+                        sql=calc.assign_homicide_victim_sql(shr_id,
+                                                            record_id,
+                                                            victim=state.victim)
+                    )
+            ), state
+
+def unassignment(state: State) -> RxResp:
+    """
+    Unassign a homicide to an article
+    """
+    sql = calc.unassign_homicide_sql()
+    shr_id = state.homicides_assigned[state.selected_homicide]['Id']
     record_id = state.articles[state.next_article]['RecordId']
     return action2('command_db', sql=sql, shrid=shr_id,
-                   recordid=record_id), state
+                    recordid=record_id), state
 
 
 @next_event('classified')

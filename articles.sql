@@ -41,3 +41,10 @@ CREATE TABLE IF NOT EXISTS topics (
     FOREIGN KEY(RecordId) REFERENCES articles(RecordId),
     FOREIGN KEY(ShrId) REFERENCES shr("index")
 );
+
+CREATE INDEX IF NOT EXISTS topics_shrid ON topics(ShrId);
+CREATE INDEX IF NOT EXISTS topics_recordid ON topics(RecordId);
+
+CREATE INDEX IF NOT EXISTS "shr_id" ON shr(id);
+CREATE INDEX IF NOT EXISTS shr_date ON shr(YearMonth);
+CREATE INDEX IF NOT EXISTS shr_victim on shr(Victim);

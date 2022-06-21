@@ -419,7 +419,7 @@ def homicides_assigned_by_article_sql() -> str:
         to a specific article
     """
     return """
-        SELECT *
+        SELECT ROW_NUMBER() OVER (ORDER BY Agency, Inc) AS k, *
         FROM view_shr
         WHERE Id IN
         (
@@ -430,14 +430,44 @@ def homicides_assigned_by_article_sql() -> str:
     """
 
 
+def assign_homicide_victim_sql(shr_id, record_id, victim) -> str:
+    """
+    SQL Statemebt (transation) to add assignment of homicide
+        to a specific article and also adjust the victim name
+    """
+    return f"""
+        BEGIN TRANSACTION;
+            INSERT OR IGNORE INTO topics
+            (ShrId, RecordId)
+            VALUES ({shr_id}, {record_id});
+            UPDATE shr
+            SET Victim = '{victim}'
+            WHERE "index" = {shr_id};
+        COMMIT;
+    """
+
+
 def assign_homicide_sql() -> str:
     """
-    SQL Statement to add assignment of homicide to a specific article
+    SQL Statement to add assignment of homicide
+        without changing victim's name
     """
     return """
         INSERT OR IGNORE INTO topics
         (ShrId, RecordId)
         VALUES (?, ?)
+    """
+
+
+def unassign_homicide_sql() -> str:
+    """
+    SQL Statement to un-assign (delete from assignment list)
+        a particular homicide previously assigned to an article
+    """
+    return """
+        DELETE FROM topics
+        WHERE ShrId = ?
+        AND RecordId = ?
     """
 
 
