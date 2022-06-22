@@ -315,6 +315,22 @@ def articles_to_assign_sql():
     """
 
 
+def articles_to_assign_by_year_sql():
+    """
+    SQL Statement to return verified articles for assignment
+        Instead of priority filter by year
+    """
+    return article_type_join_sql() + """
+        WHERE a.Dataset = 'CLASS'
+        AND a.Status = 'M'
+        AND a.AssignStatus IS NULL
+        AND a.PubDate >= ? 
+        AND a.PubDate <= ?
+        GROUP BY a.RecordId
+        ORDER BY a.PubDate, a.RecordId
+    """
+
+
 def articles_to_reclassify_sql():
     """
     SQL statement to return auto-classified articles for reclassification
@@ -432,7 +448,7 @@ def homicides_assigned_by_article_sql() -> str:
 
 def assign_homicide_victim_sql(shr_id, record_id, victim) -> str:
     """
-    SQL Statemebt (transation) to add assignment of homicide
+    SQL Statement (transation) to add assignment of homicide
         to a specific article and also adjust the victim name
     """
     return f"""

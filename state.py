@@ -42,6 +42,8 @@ class State(NamedTuple):
     dates_to_classify: int = 0
     dates_to_reclassify: int = 0
     dates_to_assign: int = 0
+    assign_begin: str = '1976-01'
+    assign_end: str = '1983-12'
     homicide_month: str = ''
     choice_type: str = ''
     query_type: str = ''

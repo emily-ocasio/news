@@ -105,6 +105,19 @@ def unassigned_articles(state: State) -> RxResp:
     return action2('query_db', sql=sql, days=days), state
 
 
+@query('unassigned_articles')
+def unassigned_articles_by_year(state: State) -> RxResp:
+    """
+    Retrieve unassigned articles post-review ready to be assigned
+        based on years
+    User has selected the begin and end years
+    """
+    sql = calc.articles_to_assign_by_year_sql()
+    begin = state.assign_begin
+    end = state.assign_end
+    return action2('query_db', sql=sql, begin=begin, end=end), state
+
+
 @query('auto_assigned_articles')
 def auto_assigned_articles(state: State) -> RxResp:
     """

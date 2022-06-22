@@ -3,8 +3,8 @@ EXPLAIN QUERY PLAN
             a.*
         FROM articles a 
         WHERE a.Dataset = "CLASS"
-        AND a.Status IS NULL
-        AND a.Autoclass = "M"
+        AND a.Status = 'M'
+        AND a.AssignStatus IS NULL
         AND a.PubDate IN (
             SELECT PubDate
             FROM dates
@@ -12,8 +12,8 @@ EXPLAIN QUERY PLAN
                 SELECT DISTINCT PubDate
                 FROM articles
                 WHERE Dataset = "CLASS"
-                AND Status IS NULL
-                AND Autoclass = "M"
+                AND Status = 'M'
+                AND AssignStatus IS NULL
             )
             ORDER BY Priority
             LIMIT ?

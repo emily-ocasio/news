@@ -134,3 +134,24 @@ def get_number_input(prompt):
     while not answer.isnumeric():
         answer = input(prompt)
     return answer
+
+@actiondef
+def get_years_input(prompt):
+    """
+    Prompt for a year range and keep asking until single year or
+        two years separated by a comma are entered
+    Years must be in the range 1976-1983
+    """
+    def is_good_year(ans: str) -> bool:
+        if not ans.isnumeric():
+            return False
+        return 1976 <= int(ans) <= 1983
+    while True:
+        answer = input(prompt)
+        if answer == '':
+            return answer
+        years = answer.split(',')
+        if len(years) == 1 and is_good_year(years[0]):
+            return tuple(years)
+        if len(years) == 2 and all(is_good_year(year) for year in years):
+            return tuple(years)

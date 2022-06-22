@@ -82,7 +82,8 @@ assign_prompts = (
     "[D]one assigning",
     "Article [N]ot a homicide",
     "Homicide at [O]ther location",
-    "Enter no[T]e"
+    "Enter no[T]e",
+    "[P]ass and review later"
 )
 
 
@@ -211,6 +212,18 @@ def dates_to_assign(state: State) -> RxResp:
     prompt = "Enter number of days to assign classification > "
     return action2('get_number_input', prompt=prompt), state
 
+
+@choice('years_to_assign')
+def years_to_assign(state: State) -> RxResp:
+    """
+    Choose which years to assign homicides to articles
+    Useful when multiple users are assigning at the same time
+    This is first request after homicide assignment is selected
+        via main menu
+    """
+    prompt = ("Enter years to classify separated by comma (e,g. 1976,1978)\n"
+              'or <Return> to select all years > ')
+    return action2('get_years_input', prompt=prompt), state
 
 @choice('dates_to_reclassify')
 def dates_to_reclassify(state: State) -> RxResp:

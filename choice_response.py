@@ -178,13 +178,31 @@ def dates_to_classify(state: State) -> RxResp:
 
 def dates_to_assign(state: State) -> RxResp:
     """
-    Respond to number of days to assign auto-classified articles
+    Respond to number of days to assign reclassified articles
     """
     if state.outputs == 0:
         return choose.initial(state)
     state = state._replace(dates_to_assign=state.outputs)
     return controller.assign_by_date(state)
 
+
+def years_to_assign(state: State) -> RxResp:
+    """
+    Respond to years to assign reclassified articles
+    """
+    if state.outputs == '':
+        begin = 1976
+        end = 1983
+    elif len(state.outputs) == 1:
+        begin = state.outputs[0]
+        end = state.outputs[0]
+    elif len(state.outputs) == 2:
+        begin = state.outputs[0]
+        end = state.outputs[1]
+    else:
+        raise Exception('Incorrect year input')
+    state = state._replace(assign_begin=f"{begin}0101", assign_end=f"{end}1231")
+    return controller.assign_by_year(state)
 
 def dates_to_reclassify(state: State) -> RxResp:
     """
@@ -208,7 +226,7 @@ def assign_choice(state: State, choice) -> RxResp:
         return choose.homicide_month(state)
     if choice == 'S':
         return controller.increment_article(state)
-    if choice == 'N' or state.outputs == 'O':
+    if choice == 'N' or state.outputs == 'O' or state.outputs == 'P':
         state = state._replace(new_label = choice)
         return controller.save_label(state)
     if choice == 'E' or state.outputs == 'D':

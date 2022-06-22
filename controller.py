@@ -339,7 +339,7 @@ def assign_homicides(state: State) -> RxResp:
     Assign homicides to articles
     First step when selected from main menu
     """
-    return choose.dates_to_assign(state)
+    return choose.years_to_assign(state)
 
 
 def assign_by_date(state: State) -> RxResp:
@@ -348,6 +348,14 @@ def assign_by_date(state: State) -> RxResp:
     Occurs after user specifies how many dates to assign homicides
     """
     return retrieve.unassigned_articles(state)
+
+
+def assign_by_year(state: State) -> RxResp:
+    """
+    Retrieve articles to be assignned
+    Occurs after user specifies which years to assign to
+    """
+    return retrieve.unassigned_articles_by_year(state)
 
 
 def reclassify_by_date(state: State) -> RxResp:
