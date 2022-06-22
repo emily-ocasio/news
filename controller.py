@@ -14,6 +14,7 @@ def start_point(state: State) -> RxResp:
     """
     Initial starting point of application
     """
+    state = state._replace(article_kind = '')
     return choose.initial(state)
 
 
@@ -28,7 +29,6 @@ def new_labels(state: State) -> RxResp:
     """
     Labeling of articles by date
     """
-    state = state._replace(article_kind='new', next_event='date_selected')
     return choose.label_date(state)
 
 
@@ -44,7 +44,6 @@ def no_articles(state: State) -> RxResp:
     """
     Endpoint when no articles are found by query
     """
-    state = state._replace(article_kind='')
     return action2('print_message', message='No articles found.'), state
 
 

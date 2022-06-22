@@ -69,7 +69,7 @@ def single_article(state: State) -> RxResp:
     """
     articles = state.outputs
     state = state._replace(
-        articles=articles, next_article=0, article_kind='review')
+        articles=articles, next_article=0)
     return controller.first_article(state)
 
 
@@ -79,9 +79,7 @@ def unassigned_articles(state: State) -> RxResp:
     Unassigned articles have been retrieved based on number of days
     """
     articles = state.outputs
-    state = state._replace(articles=articles,
-                           next_article=0,
-                           article_kind='assign')
+    state = state._replace(articles=articles, next_article=0)
     return controller.first_article(state)
 
 
@@ -90,9 +88,7 @@ def auto_assigned_articles(state: State) -> RxResp:
     Response to query for autoclassified articles to be reclassified
     """
     articles = state.outputs
-    state = state._replace(articles=articles,
-                           next_article=0,
-                           article_kind='reclassify')
+    state = state._replace(articles=articles, next_article=0)
     return controller.first_article(state)
 
 

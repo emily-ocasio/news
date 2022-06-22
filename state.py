@@ -17,6 +17,8 @@ class State(NamedTuple):
     terminal_size: tuple[int, int] = 0, 0
     article_date: Optional[str] = None
     article_id: Optional[int] = None
+    multi_count: int = 1
+    multi_mod: int = 0
     articles: Rows = tuple()
     matches: Rows = tuple()
     nomatches: Rows = tuple()

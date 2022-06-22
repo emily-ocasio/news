@@ -42,14 +42,18 @@ def initial(state: State, choice) -> RxResp:
     Main menu
     """
     if choice == "N":
+        state = state._replace(article_kind = 'new')
         return controller.new_labels(state)
     if choice == "R":
+        state = state._replace(article_kind = 'review')
         return controller.review_datasets(state)
     if choice == "F":
+        state = state._replace(article_kind = 'review')
         return controller.edit_single_article(state)
     if choice == 'A':
         return controller.auto_classify(state)
     if choice == "H":
+        state = state._replace(article_kind = 'assign')
         return controller.assign_homicides(state)
     raise Exception("Choice not supported")
 
@@ -93,6 +97,7 @@ def dataset(state: State, choice) -> RxResp:
     elif choice == "E":
         review_dataset = 'TEST2'
     elif choice == 'A':
+        state = state._replace(article_kind='reclassify')
         review_dataset = 'CLASS'
     else:
         raise Exception('Unsupported dataset choice')
@@ -120,7 +125,7 @@ def match(state: State, choice) -> RxResp:
         matches = state.nomatches
     else:
         raise Exception("Choice not supported")
-    state = state._replace(articles=matches, article_kind='review')
+    state = state._replace(articles=matches)
     return controller.select_location(state)
 
 
