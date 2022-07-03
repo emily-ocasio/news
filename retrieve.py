@@ -128,6 +128,18 @@ def auto_assigned_articles(state: State) -> RxResp:
     return action2('query_db', sql=sql, days=days), state
 
 
+@query('auto_assigned_articles')
+def auto_assigned_articles_by_year(state: State) -> RxResp:
+    """
+    Retrieve auto-assigned articles for particular year(s)
+    Occurs when user enter desired years to review auto-assigned articles
+    """
+    sql = calc.articles_to_reclassify_by_year_sql()
+    begin = state.reclassify_begin
+    end = state.reclassify_end
+    return action2('query_db', sql=sql, begin=begin, end=end), state
+
+
 @query('homicides_by_month')
 def homicides_by_month(state: State) -> RxResp:
     """

@@ -74,7 +74,9 @@ def increment_article(state: State) -> RxResp:
     Increment article point and process next article
     """
     state = state._replace(next_article=state.next_article+1)
-    if state.article_kind == 'assign':
+    if (state.next_article < len(state.articles)
+            and (state.article_kind == 'assign'
+            or state.articles[state.next_article]['Status'] in 'MP')):
         current_month = calc.year_month_from_article(
             state.articles[state.next_article])
         state = state._replace(homicide_month=current_month)
@@ -96,12 +98,14 @@ def show_article(state: State) -> RxResp:
     If showing article in context of homicide assignment, first
         retrieve homicide information (assigned and available), starting
         with the already assigned homicides
+    If article has murder (or pass) status, treat as assignment regardless
     """
     return combine_actions(
         from_reaction(display.article),
         from_reaction(retrieve.assigned_homicides_by_article
-                      if state.article_kind == 'assign'
-                      else choose.label)
+                    if (state.article_kind == 'assign'
+                        or state.articles[state.next_article]['Status'] in 'MP')
+                    else choose.label)
     ), state
 
 
@@ -214,7 +218,7 @@ def select_review_label(state: State) -> RxResp:
     Select desired label subset to review
     """
     if state.review_dataset == 'CLASS':
-        return choose.dates_to_reclassify(state)
+        return choose.years_to_reclassify(state)
     return choose.review_label(state)
 
 
@@ -363,6 +367,14 @@ def reclassify_by_date(state: State) -> RxResp:
     Retrieve articles to be reclassified
     """
     return retrieve.auto_assigned_articles(state)
+
+
+def reclassify_by_year(state: State) -> RxResp:
+    """
+    Retrieve articles to be reclassified by year
+    Occurs after user enters years
+    """
+    return retrieve.auto_assigned_articles_by_year(state)
 
 
 def select_homicide(state: State) -> RxResp:

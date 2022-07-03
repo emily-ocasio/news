@@ -360,6 +360,26 @@ def articles_to_reclassify_sql():
     """
 
 
+def articles_to_reclassify_by_year_sql() -> str:
+    """
+    SQL statemnet to return auto-classified articles for reclassification
+        given a particular year or set of years
+    Used when selecting to review auto-classified articles and particularly
+        in order to separate groups and have multiple users simultaneously
+        reclassifying
+    """
+    return """
+        SELECT a.*
+        FROM articles a
+        WHERE a.Dataset = 'CLASS'
+        AND a.Status IS NULL
+        AND a.AutoClass = 'M'
+        AND a.PubDate >= ?
+        AND a.PubDate <= ?
+        ORDER BY a.PubDate, a.RecordId
+    """
+
+
 def classify_sql():
     """
     SQL statement to update auto-classification of a single article

@@ -145,7 +145,7 @@ def get_years_input(prompt):
     def is_good_year(ans: str) -> bool:
         if not ans.isnumeric():
             return False
-        return 1976 <= int(ans) <= 1983
+        return 1976 <= int(ans) <= 1984
     while True:
         answer = input(prompt)
         if answer == '':

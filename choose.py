@@ -221,9 +221,10 @@ def years_to_assign(state: State) -> RxResp:
     This is first request after homicide assignment is selected
         via main menu
     """
-    prompt = ("Enter years to classify separated by comma (e,g. 1976,1978)\n"
+    prompt = ("Enter years to assign separated by comma (e,g. 1976,1978)\n"
               'or <Return> to select all years > ')
     return action2('get_years_input', prompt=prompt), state
+
 
 @choice('dates_to_reclassify')
 def dates_to_reclassify(state: State) -> RxResp:
@@ -234,13 +235,29 @@ def dates_to_reclassify(state: State) -> RxResp:
     return action2('get_number_input', prompt=prompt), state
 
 
+@choice('years_to_reclassify')
+def years_to_reclassify(state: State) -> RxResp:
+    """
+    Choose which years to reclassify auto-classified articles
+    Useful when multiple users are reviewing at the same time
+    Occurs after Review Auto-Assigned articles is selected
+    """
+    prompt = ("Enter years to classify separated by comma (e.g. 1976,1978)\n"
+              "or <Return> to select all years > ")
+    return action2('get_years_input', prompt=prompt), state
+
+
 @choice('assign_choice')
 def assign_choice(state: State) -> RxResp:
     """
     Provide choices during assigment
     Occurs after article and list of homicides for the month is displayed
+    Add prompt to make article 'M' if it's 'P' as part of assignment
     """
-    return choose_with_prompt(state, assign_prompts, "")
+    prompts = assign_prompts + (("Article is [M]ass. homicide",)
+                if state.articles[state.next_article]['Status'] == 'P'
+                else tuple())
+    return choose_with_prompt(state, prompts, "")
 
 
 @choice('homicide_month')
