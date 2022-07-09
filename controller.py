@@ -131,7 +131,14 @@ def show_remaining_lines(state: State) -> RxResp:
 def save_label(state: State) -> RxResp:
     """
     Save user provided label for article
+        and proceed with next article
+        except when making article 'M' during assignment
     """
+    if state.new_label == 'M' and state.article_kind == 'assign':
+        return combine_actions(
+            from_reaction(save.label),
+            from_reaction(next_article)
+        ), state
     return combine_actions(
         from_reaction(save.label),
         from_reaction(increment_article)
