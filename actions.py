@@ -106,7 +106,6 @@ def command_db(sql, **kwargs) -> None:
     """
     args = tuple(kwargs.values())
     if "BEGIN TRANSACTION" in sql:
-        print(sql)
         db.executescript(sql)
         db.commit()
         return
@@ -140,7 +139,7 @@ def get_years_input(prompt):
     """
     Prompt for a year range and keep asking until single year or
         two years separated by a comma are entered
-    Years must be in the range 1976-1983
+    Years must be in the range 1976-1984
     """
     def is_good_year(ans: str) -> bool:
         if not ans.isnumeric():
@@ -155,3 +154,23 @@ def get_years_input(prompt):
             return tuple(years)
         if len(years) == 2 and all(is_good_year(year) for year in years):
             return tuple(years)
+
+@actiondef
+def get_month_input(prompt):
+    """
+    Prompt for a specific Year-Month
+    Must be between 1976-1984
+    """
+    def is_good_month(ans: str) -> bool:
+        if len(ans) != 7 or ans[4] != '-':
+            return False
+        year= ans[0:4]
+        month = ans[5:7]
+        return (year.isnumeric() and month.isnumeric()
+                    and (1976 <= int(year) <= 1984)
+                    and (1 <= int(month) <= 12)
+        )
+    while True:
+        answer = input(prompt)
+        if is_good_month(answer):
+            return answer

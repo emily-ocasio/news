@@ -83,7 +83,8 @@ assign_prompts = (
     "Article [N]ot a homicide",
     "Homicide at [O]ther location",
     "Enter no[T]e",
-    "[P]ass and review later"
+    "[P]ass and review later",
+    "[C]ontinue without assigning"
 )
 
 
@@ -267,7 +268,7 @@ def homicide_month(state: State) -> RxResp:
     Occurs as a result of user choice
     """
     msg = "Enter new homicide month to display: "
-    return action2('get_text_input', prompt=msg), state
+    return action2('get_month_input', prompt=msg), state
 
 
 @choice('notes')
