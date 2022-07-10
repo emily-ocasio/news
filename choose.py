@@ -84,6 +84,7 @@ assign_prompts = (
     "Homicide at [O]ther location",
     "Enter no[T]e",
     "[P]ass and review later",
+    "Search for [V]ictim by name",
     "[C]ontinue without assigning"
 )
 
@@ -269,6 +270,16 @@ def homicide_month(state: State) -> RxResp:
     """
     msg = "Enter new homicide month to display: "
     return action2('get_month_input', prompt=msg), state
+
+
+@choice('homicide_victim')
+def homicide_victim(state: State) -> RxResp:
+    """
+    Select the name of homicide victim during assignment
+        in order to choose homicides to assign based on name
+    """
+    msg = "Enter name of victim to search for: "
+    return action2('get_text_input', prompt=msg), state
 
 
 @choice('notes')

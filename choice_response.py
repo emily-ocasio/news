@@ -245,6 +245,8 @@ def assign_choice(state: State, choice) -> RxResp:
         return choose.unassignment(state)
     if choice == 'H':
         return choose.homicide_month(state)
+    if choice == 'V':
+        return choose.homicide_victim(state)
     if choice == 'S':
         return controller.increment_article(state)
     if choice in 'NOPM':
@@ -262,7 +264,15 @@ def homicide_month(state: State) -> RxResp:
     """
     Respond to selected homicide month to display
     """
-    state = state._replace(homicide_month = state.outputs)
+    state = state._replace(homicide_month = state.outputs, homicide_victim = '')
+    return controller.show_article(state)
+
+
+def homicide_victim(state: State) -> RxResp:
+    """
+    Respond to desired name of victim to search for
+    """
+    state = state._replace(homicide_victim = state.outputs)
     return controller.show_article(state)
 
 

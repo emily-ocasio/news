@@ -449,6 +449,17 @@ def homicides_by_month_sql() -> str:
     """
 
 
+def homicides_by_victim_sql() -> str:
+    """
+    SQL Statement to retrieve homicides based on victim name
+    """
+    return """
+        SELECT ROW_NUMBER() OVER (ORDER BY YearMonth, Agency, Inc) AS n, *
+        FROM view_shr
+        WHERE Victim LIKE '%' || ? || '%'
+    """
+
+
 def homicides_assigned_by_article_sql() -> str:
     """
     SQL Statement to retrieve homicides already assigned

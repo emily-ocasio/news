@@ -47,6 +47,7 @@ class State(NamedTuple):
     assign_begin: str = '1976-01'
     assign_end: str = '1984-12'
     homicide_month: str = ''
+    homicide_victim: str = ''
     choice_type: str = ''
     query_type: str = ''
     outputs: Any = None

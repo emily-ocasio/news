@@ -150,6 +150,16 @@ def homicides_by_month(state: State) -> RxResp:
     return action2('query_db', sql=sql, month=month), state
 
 
+@query('homicides_by_month')
+def homicides_by_victim(state: State) -> RxResp:
+    """
+    Retrieve homicides based on a match to victim name
+    """
+    sql = calc.homicides_by_victim_sql()
+    victim = state.homicide_victim
+    return action2('query_db', sql=sql, victim=victim), state
+
+
 @query('assigned_homicides_by_article')
 def assigned_homicides_by_article(state: State) -> RxResp:
     """

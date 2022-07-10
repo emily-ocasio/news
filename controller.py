@@ -79,7 +79,8 @@ def increment_article(state: State) -> RxResp:
             or state.articles[state.next_article]['Status'] in 'MP')):
         current_month = calc.year_month_from_article(
             state.articles[state.next_article])
-        state = state._replace(homicide_month=current_month)
+        state = state._replace(homicide_month=current_month,
+                                homicide_victim = '')
     return next_article(state)
 
 
@@ -114,8 +115,12 @@ def continue_retrieving_homicides(state: State) -> RxResp:
     After homicides by article have been retrieve, proceed to
         retrieve the available homicides for assignment based on month
     Occurs when providing information for user for assignment
+    If user has selected a victim name, retrieve based on name instead
     """
-    return retrieve.homicides_by_month(state)
+    return (retrieve.homicides_by_victim(state)
+                if len(state.homicide_victim) > 0
+                else retrieve.homicides_by_month(state)
+    )
 
 
 def show_remaining_lines(state: State) -> RxResp:
@@ -134,14 +139,12 @@ def save_label(state: State) -> RxResp:
         and proceed with next article
         except when making article 'M' during assignment
     """
-    if state.new_label == 'M' and state.article_kind == 'assign':
-        return combine_actions(
-            from_reaction(save.label),
-            from_reaction(next_article)
-        ), state
     return combine_actions(
         from_reaction(save.label),
-        from_reaction(increment_article)
+        from_reaction(next_article
+                        if state.new_label == 'M'
+                        and state.article_kind == 'assign'
+                        else increment_article)
     ), state
 
 
