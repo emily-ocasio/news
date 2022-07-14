@@ -307,7 +307,7 @@ def victim(state: State) -> RxResp:
     Select new victim name
     Occurs when a particular homicide is selected for assignment
     """
-    current = state.homicides[state.selected_homicide]['Victim']
+    current = state.homicides[state.selected_homicides[0]]['Victim']
     msg = (f"Enter victim's name (<Return> to keep [{current}]) > "
                 if current
                 else

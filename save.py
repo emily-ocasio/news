@@ -37,25 +37,6 @@ def notes(state: State) -> RxResp:
                    id=row['RecordId']), state
 
 
-def assignment(state: State) -> RxResp:
-    """
-    Assign a homicide to an article
-    """
-    shr_id = state.homicides[state.selected_homicide]['Id']
-    record_id = state.articles[state.next_article]['RecordId']
-    return (action2('command_db', sql=calc.assign_homicide_sql(),
-                    shrid=shr_id,
-                    recordid=record_id)
-            if state.victim == ""
-            else
-            action2('command_db', sql=calc.assign_homicide_victim_sql(),
-                        id=shr_id,
-                        record=record_id,
-                        victim=state.victim,
-                        id2=shr_id)
-            ), state
-
-
 def assignments(state: State) -> RxResp:
     """
     Assign one or more homicides to an article
@@ -69,7 +50,9 @@ def assignments(state: State) -> RxResp:
         shr_id = state.homicides[state.selected_homicides[0]]['Id']
         return action2('command_db', sql=calc.assign_homicide_victim_sql(),
                         shrid = shr_id,
-                        recordid = record_id), state
+                        recordid = record_id,
+                        victim=state.victim,
+                        id2=shr_id), state
     shr_ids = tuple(state.homicides[hom_ix]['Id']
                         for hom_ix in state.selected_homicides)
     args = chain.from_iterable((shr_id, record_id) for shr_id in shr_ids)

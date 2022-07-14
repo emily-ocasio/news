@@ -287,17 +287,6 @@ def notes(state: State) -> RxResp:
     return controller.save_new_notes(state)
 
 
-def assignment(state: State) -> RxResp:
-    """
-    Respond to selected homicide number for assignment
-    """
-    selected = int(state.outputs)
-    if selected == 0 or selected > len(state.homicides):
-        return controller.next_article(state)
-    state = state._replace(selected_homicide = selected-1)
-    return choose.victim(state)
-
-
 def assignments(state: State) -> RxResp:
     """
     Respond to selected homicide range for assignment
