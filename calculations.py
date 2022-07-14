@@ -477,20 +477,18 @@ def homicides_assigned_by_article_sql() -> str:
     """
 
 
-def assign_homicide_victim_sql(shr_id, record_id, victim) -> str:
+def assign_homicide_victim_sql() -> str:
     """
     SQL Statement (transation) to add assignment of homicide
         to a specific article and also adjust the victim name
     """
-    return f"""
-        BEGIN TRANSACTION;
+    return """
             INSERT OR IGNORE INTO topics
             (ShrId, RecordId)
-            VALUES ({shr_id}, {record_id});
+            VALUES (?, ?);
             UPDATE shr
-            SET Victim = '{victim}'
-            WHERE "index" = {shr_id};
-        COMMIT;
+            SET Victim = ?
+            WHERE "index" = ?
     """
 
 

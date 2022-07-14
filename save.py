@@ -47,11 +47,11 @@ def assignment(state: State) -> RxResp:
                     recordid=record_id)
             if state.victim == ""
             else
-            action2('command_db',
-                        sql=calc.assign_homicide_victim_sql(shr_id,
-                                                            record_id,
-                                                            victim=state.victim)
-                    )
+            action2('command_db', sql=calc.assign_homicide_victim_sql(),
+                        id=shr_id,
+                        record=record_id,
+                        victim=state.victim,
+                        id2=shr_id)
             ), state
 
 def unassignment(state: State) -> RxResp:

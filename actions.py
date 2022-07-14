@@ -103,13 +103,19 @@ def query_db(sql, **kwargs):
 def command_db(sql, **kwargs) -> None:
     """
     Execute SQL command
+    If SQL has multiple statements separated by ;
+        then apply parameters to each and execute one at a time
+        and commit at the end
     """
     args = tuple(kwargs.values())
-    if "BEGIN TRANSACTION" in sql:
-        db.executescript(sql)
-        db.commit()
-        return
-    db.execute(sql, args)
+    if ';' in sql:
+        sqls = sql.split(';')
+        argcnts = tuple(ssql.count('?') for ssql in sqls)
+        for i,ssql in enumerate(sqls):
+            priorargs = sum(argcnts[:i])
+            db.execute(ssql, args[priorargs:priorargs+argcnts[i]])
+    else:
+        db.execute(sql,args)
     db.commit()
 
 
