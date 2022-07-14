@@ -111,6 +111,10 @@ def homicide_table(state: State) -> RxResp:
                 if len(state.homicides_assigned) == 0
                 else ("Homicides assigned to article:\n"
                         + calc.homicide_table(state.homicides_assigned)))
-            + f"\nHomicides available to assign: ({state.homicide_month})\n"
-            + calc.homicide_table(state.homicides))
+            + "\nHomicides available to assign: "
+            + (f"(Victim name contains '{state.homicide_victim}')\n"
+                    if len(state.homicide_victim) > 0
+                    else f"({(state.homicide_month)})\n")
+            + ("No homicides found" if len(state.homicides) == 0
+                else calc. homicide_table(state.homicides)))
     return action2('print_message', message=msg), state
