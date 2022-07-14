@@ -292,13 +292,13 @@ def notes(state: State) -> RxResp:
     return action2('get_text_input', prompt=msg, all_upper = False), state
 
 
-@choice('assignment')
+@choice('assignments')
 def assigment(state: State) -> RxResp:
     """
     Select row number of desired homicide to assign to current article
     """
     msg = "Select homicide number (n) to assign, 0 to go back > "
-    return action2('get_number_input', prompt=msg), state
+    return action2('get_number_range_input', prompt=msg), state
 
 
 @choice('victim')

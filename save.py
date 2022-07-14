@@ -1,6 +1,7 @@
 """
 Functions that save data to database
 """
+from itertools import chain
 from actionutil import combine_actions, action2, next_event
 from state import RxResp, State
 import calculations as calc
@@ -53,6 +54,28 @@ def assignment(state: State) -> RxResp:
                         victim=state.victim,
                         id2=shr_id)
             ), state
+
+
+def assignments(state: State) -> RxResp:
+    """
+    Assign one or more homicides to an article
+    If single homicide with new victim name is selected, use multi-statement
+        SQL in a transaction
+    For multiple homicides (no victims names allowed) then use multi-row
+        insert SQL
+    """
+    record_id = state.articles[state.next_article]['RecordId']
+    if state.victim != '':
+        shr_id = state.homicides[state.selected_homicides[0]]['Id']
+        return action2('command_db', sql=calc.assign_homicide_victim_sql(),
+                        shrid = shr_id,
+                        recordid = record_id), state
+    shr_ids = tuple(state.homicides[hom_ix]['Id']
+                        for hom_ix in state.selected_homicides)
+    args = chain.from_iterable((shr_id, record_id) for shr_id in shr_ids)
+    kwargs = {f"arg{i}":arg for i,arg in enumerate(args)}
+    return action2('command_db', sql=calc.assign_homicide_sql(len(shr_ids)),
+                                    **kwargs), state
 
 def unassignment(state: State) -> RxResp:
     """

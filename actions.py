@@ -141,6 +141,24 @@ def get_number_input(prompt):
     return answer
 
 @actiondef
+def get_number_range_input(prompt):
+    """
+    Prompt for user input and validate it is either a single integer or
+        a range of numbers separated by a - (hyphen)
+    Returns a tuple of one (single number) or two (range) integers
+    """
+    while True:
+        answer = input(prompt)
+        if answer.isnumeric():
+            return (int(answer),)
+        if answer.count('-') == 1:
+            first, last = answer.split('-')
+            if (first.isnumeric() and last.isnumeric()
+                and int(first) <= int(last)):
+                return (int(first), int(last))
+
+
+@actiondef
 def get_years_input(prompt):
     """
     Prompt for a year range and keep asking until single year or

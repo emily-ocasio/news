@@ -298,13 +298,31 @@ def assignment(state: State) -> RxResp:
     return choose.victim(state)
 
 
+def assignments(state: State) -> RxResp:
+    """
+    Respond to selected homicide range for assignment
+    If single number, ask for victim name
+    """
+    selection = state.outputs
+    if selection[0] == 0 or selection[0] > len(state.homicides):
+        return controller.next_article(state)
+    if len(selection) == 1:
+        state = state._replace(selected_homicides = (selection[0]-1,))
+        return choose.victim(state)
+    state = state._replace(victim = '', selected_homicides =
+                tuple(h_ix-1 for h_ix in
+                        range(selection[0],
+                            min(selection[1]+1, len(state.homicides)+1))))
+    return controller.save_assignment(state)
+
+
 def victim(state: State) -> RxResp:
     """
     Respond to entered name of victim
     Occurs when homicide assignment is selected
     """
     state = state._replace(victim = state.outputs)
-    return controller.save_assigment(state)
+    return controller.save_assignment(state)
 
 
 def unassignment(state: State) -> RxResp:

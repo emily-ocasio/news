@@ -25,6 +25,7 @@ class State(NamedTuple):
     homicides: Rows = tuple()
     homicides_assigned: Rows = tuple()
     selected_homicide: int = 0
+    selected_homicides: tuple[int,...] = tuple()
     victim: str = ''
     FP: Rows = tuple()
     FN: Rows = tuple()

@@ -492,16 +492,16 @@ def assign_homicide_victim_sql() -> str:
     """
 
 
-def assign_homicide_sql() -> str:
+def assign_homicide_sql(repeat:int = 1) -> str:
     """
     SQL Statement to add assignment of homicide
         without changing victim's name
+    Allows for multi-row insert (repeat number of rows inserted)
     """
     return """
         INSERT OR IGNORE INTO topics
         (ShrId, RecordId)
-        VALUES (?, ?)
-    """
+        VALUES """ + ' , '.join(('(?, ?)',) * repeat)
 
 
 def unassign_homicide_sql() -> str:

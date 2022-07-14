@@ -172,13 +172,13 @@ def save_new_notes(state: State) -> RxResp:
     ), state
 
 
-def save_assigment(state: State) -> RxResp:
+def save_assignment(state: State) -> RxResp:
     """
     Save newly selected assignment of homicide to an article
     Occurs after the user selects the corresponding number
     """
     return combine_actions(
-        from_reaction(save.assignment),
+        from_reaction(save.assignments),
         from_reaction(refresh_article)
     ), state
 
