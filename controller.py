@@ -142,9 +142,10 @@ def save_label(state: State) -> RxResp:
     return combine_actions(
         from_reaction(save.label),
         from_reaction(next_article
-                        if state.new_label == 'M'
-                        and state.article_kind == 'assign'
-                        else increment_article)
+                if state.new_label == 'M'
+                and (state.article_kind == 'assign'
+                        or state.articles[state.next_article]['Status'] in 'MP')
+                else increment_article)
     ), state
 
 
