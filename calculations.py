@@ -213,13 +213,25 @@ def retrieve_types_sql() -> str:
     """
 
 
-def verify_article_sql() -> str:
+def verify_article_sql_old() -> str:
     """
     SQL statement to update specific article with given label
     """
     return """
         UPDATE articles
         SET Status = ?
+        WHERE RecordId = ?
+    """
+
+
+def verify_article_sql() -> str:
+    """
+    SQL statement to update specific article with given label
+    """
+    return """
+        UPDATE articles
+        SET Status = ?,
+        LastUpdated = ?
         WHERE RecordId = ?
     """
 
@@ -392,7 +404,7 @@ def classify_sql():
     """
 
 
-def assign_status_sql():
+def assign_status_sql_old():
     """
     SQL statement to update assignment status for a single article
     """
@@ -403,13 +415,37 @@ def assign_status_sql():
     """
 
 
-def update_note_sql() -> str:
+def assign_status_sql():
+    """
+    SQL statement to update assignment status for a single article
+    """
+    return """
+        UPDATE articles
+        SET AssignStatus = ?,
+        LastUpdated = ?
+        WHERE RecordId = ?
+    """
+
+
+def update_note_sql_old() -> str:
     """
     SQL statement to update note in specific article
     """
     return """
         UPDATE articles
         SET Notes = ?
+        WHERE RecordID = ?
+    """
+
+
+def update_note_sql() -> str:
+    """
+    SQL statement to update note in specific article
+    """
+    return """
+        UPDATE articles
+        SET Notes = ?,
+        LastUpdated = ?
         WHERE RecordID = ?
     """
 
@@ -460,6 +496,17 @@ def homicides_by_victim_sql() -> str:
     """
 
 
+def homicides_by_county_sql() -> str:
+    """
+    SQL Statement to retrieve all homicides from a county
+    """
+    return """
+        SELECT ROW_NUMBER() OVER (ORDER BY YearMonth, Agency, Inc) AS n, *
+        FROM view_shr
+        WHERE County LIKE ?
+    """
+
+
 def homicides_assigned_by_article_sql() -> str:
     """
     SQL Statement to retrieve homicides already assigned
@@ -477,9 +524,9 @@ def homicides_assigned_by_article_sql() -> str:
     """
 
 
-def assign_homicide_victim_sql() -> str:
+def assign_homicide_victim_sql_old() -> str:
     """
-    SQL Statement (transation) to add assignment of homicide
+    SQL Statement (transaction) to add assignment of homicide
         to a specific article and also adjust the victim name
     """
     return """
@@ -492,7 +539,22 @@ def assign_homicide_victim_sql() -> str:
     """
 
 
-def assign_homicide_sql(repeat:int = 1) -> str:
+def assign_homicide_victim_sql() -> str:
+    """
+    SQL Statement (transaction) to add assignment of homicide
+        to a specific article and also adjust the victim name
+    """
+    return """
+            INSERT OR IGNORE INTO topics
+            (ShrId, RecordId, LastUpdated)
+            VALUES (?, ?, ?);
+            UPDATE shr
+            SET Victim = ?
+            WHERE "index" = ?
+    """
+
+
+def assign_homicide_sql_old(repeat:int = 1) -> str:
     """
     SQL Statement to add assignment of homicide
         without changing victim's name
@@ -502,6 +564,18 @@ def assign_homicide_sql(repeat:int = 1) -> str:
         INSERT OR IGNORE INTO topics
         (ShrId, RecordId)
         VALUES """ + ' , '.join(('(?, ?)',) * repeat)
+
+
+def assign_homicide_sql(repeat:int = 1) -> str:
+    """
+    SQL Statement to add assignment of homicide
+        without changing victim's name
+    Allows for multi-row insert (repeat number of rows inserted)
+    """
+    return """
+        INSERT OR IGNORE INTO topics
+        (ShrId, RecordId, LastUpdated)
+        VALUES """ + ' , '.join(('(?, ?, ?)',) * repeat)
 
 
 def unassign_homicide_sql() -> str:
@@ -804,7 +878,7 @@ def homicide_table(rows: Rows) -> str:
     """
     Return formatted table of homicide info
     """
-    table = Table(row_styles=['','on grey85'])
+    table = Table(row_styles=['','bold on grey85'])
     for col in rows[0].keys():
         table.add_column(col)
     for row in rows:

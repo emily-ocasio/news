@@ -14,6 +14,7 @@ class State(NamedTuple):
     Contains all state for application
     """
     next_event: str
+    user: str = ''
     terminal_size: tuple[int, int] = 0, 0
     article_date: Optional[str] = None
     article_id: Optional[int] = None
@@ -27,6 +28,7 @@ class State(NamedTuple):
     selected_homicide: int = 0
     selected_homicides: tuple[int,...] = tuple()
     victim: str = ''
+    county: str = ''
     FP: Rows = tuple()
     FN: Rows = tuple()
     TP: Rows = tuple()

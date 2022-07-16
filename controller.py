@@ -15,6 +15,9 @@ def start_point(state: State) -> RxResp:
     Initial starting point of application
     """
     state = state._replace(article_kind = '')
+    if len(state.user) == 0:
+        print(state.user)
+        return choose.username(state)
     return choose.initial(state)
 
 
@@ -80,7 +83,7 @@ def increment_article(state: State) -> RxResp:
         current_month = calc.year_month_from_article(
             state.articles[state.next_article])
         state = state._replace(homicide_month=current_month,
-                                homicide_victim = '')
+                                homicide_victim = '', county = '')
     return next_article(state)
 
 
@@ -116,10 +119,13 @@ def continue_retrieving_homicides(state: State) -> RxResp:
         retrieve the available homicides for assignment based on month
     Occurs when providing information for user for assignment
     If user has selected a victim name, retrieve based on name instead
+    If user has selected a county, retrieve all county homicides instead
     """
     return (retrieve.homicides_by_victim(state)
                 if len(state.homicide_victim) > 0
-                else retrieve.homicides_by_month(state)
+                else (retrieve.homicides_by_county(state)
+                        if len(state.county) > 0
+                        else retrieve.homicides_by_month(state))
     )
 
 

@@ -85,8 +85,19 @@ assign_prompts = (
     "Enter no[T]e",
     "[P]ass and review later",
     "Search for [V]ictim by name",
+    "Display all homicides in a count[Y]",
     "[C]ontinue without assigning"
 )
+
+
+@choice('username')
+def username(state: State) -> RxResp:
+    """
+    Ask for user's name at the beginning of the program
+    Used to audit updates
+    """
+    msg = "Please enter your name > "
+    return action2('get_text_input', prompt=msg, ), state
 
 
 @choice('initial')
@@ -279,6 +290,16 @@ def homicide_victim(state: State) -> RxResp:
         in order to choose homicides to assign based on name
     """
     msg = "Enter name of victim to search for: "
+    return action2('get_text_input', prompt=msg), state
+
+
+@choice('homicide_county')
+def homicide_county(state: State) -> RxResp:
+    """
+    Select the name of the county during assignment
+        in order to choose homicides to assign based on county
+    """
+    msg = "Enter name of county to search for: "
     return action2('get_text_input', prompt=msg), state
 
 

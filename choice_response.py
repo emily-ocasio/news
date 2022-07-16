@@ -36,6 +36,17 @@ def respond(state: State) -> RxResp:
     return globals()[state.choice_type](state)
 
 
+def username(state: State) -> RxResp:
+    """
+    Respond to the intial signing with the user's name
+    Used to add LastUpdated to all updates as a form of audit
+    """
+    if len(state.outputs) < 4:
+        return choose.username(state)
+    state = state._replace(user = state.outputs)
+    return choose.initial(state)
+
+
 @check_defaults
 def initial(state: State, choice) -> RxResp:
     """
@@ -247,6 +258,8 @@ def assign_choice(state: State, choice) -> RxResp:
         return choose.homicide_month(state)
     if choice == 'V':
         return choose.homicide_victim(state)
+    if choice == 'Y':
+        return choose.homicide_county(state)
     if choice == 'S':
         return controller.increment_article(state)
     if choice in 'NOPM':
@@ -264,7 +277,9 @@ def homicide_month(state: State) -> RxResp:
     """
     Respond to selected homicide month to display
     """
-    state = state._replace(homicide_month = state.outputs, homicide_victim = '')
+    state = state._replace(homicide_month = state.outputs,
+                            homicide_victim = '',
+                            county = '')
     return controller.show_article(state)
 
 
@@ -272,7 +287,15 @@ def homicide_victim(state: State) -> RxResp:
     """
     Respond to desired name of victim to search for
     """
-    state = state._replace(homicide_victim = state.outputs)
+    state = state._replace(homicide_victim = state.outputs, county = '')
+    return controller.show_article(state)
+
+
+def homicide_county(state: State) -> RxResp:
+    """
+    Respond to desired name of county to search for
+    """
+    state = state._replace(county = state.outputs, homicide_victim = '')
     return controller.show_article(state)
 
 
