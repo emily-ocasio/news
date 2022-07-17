@@ -239,6 +239,17 @@ def years_to_assign(state: State) -> RxResp:
     return action2('get_years_input', prompt=prompt), state
 
 
+@choice('months_to_assign')
+def months_to_assign(state: State) -> RxResp:
+    """
+    Choose with particular month to assign homicide to articles
+    This happens after a particular year is selected
+    """
+    prompt = ("Enter month to assign (number between 1 and 12)\n"
+                "or '0' to select the entire year > ")
+    return action2('get_number_input', prompt=prompt), state
+
+
 @choice('dates_to_reclassify')
 def dates_to_reclassify(state: State) -> RxResp:
     """

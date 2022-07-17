@@ -204,7 +204,9 @@ def years_to_assign(state: State) -> RxResp:
     if state.outputs == '':
         begin = 1976
         end = 1984
-    elif len(state.outputs) == 1:
+        state = state._replace(assign_begin='19760101', assign_end='19841231')
+        return controller.assign_by_year(state)
+    if len(state.outputs) == 1:
         begin = state.outputs[0]
         end = state.outputs[0]
     elif len(state.outputs) == 2:
@@ -213,6 +215,21 @@ def years_to_assign(state: State) -> RxResp:
     else:
         raise Exception('Incorrect year input')
     state = state._replace(assign_begin=f"{begin}0101", assign_end=f"{end}1231")
+    return choose.months_to_assign(state)
+
+
+def months_to_assign(state: State) -> RxResp:
+    """
+    Respond to months to assign reclassified articles
+    """
+    month = int(state.outputs)
+    if month == 0:
+        return controller.assign_by_year(state)
+    if month < 1 or month > 12:
+        return choose.years_to_assign(state)
+    begin = state.assign_begin[0:4] + f"{month:0>2}" + '01'
+    end = state.assign_end[0:4] + f"{month:0>2}" + '31'
+    state = state._replace(assign_begin = begin, assign_end = end)
     return controller.assign_by_year(state)
 
 
