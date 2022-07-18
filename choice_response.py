@@ -97,6 +97,8 @@ def dataset(state: State, choice) -> RxResp:
     """
     Respond to selection of desired dataset
     """
+    if choice == 'P':
+        return controller.review_passed_articles(state)
     if choice == "T":
         review_dataset = 'TRAIN'
     elif choice == "V":
@@ -349,7 +351,10 @@ def victim(state: State) -> RxResp:
     """
     Respond to entered name of victim
     Occurs when homicide assignment is selected
+    Try again if name is just one letter (not a space)
     """
+    if len(state.outputs) == 1 and state.outputs != ' ':
+        return choose.victim(state)
     state = state._replace(victim = state.outputs)
     return controller.save_assignment(state)
 

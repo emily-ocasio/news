@@ -3,7 +3,7 @@ Actions (functions that produce side effects)
 """
 import sqlite3
 from sqlite3 import Cursor
-import os
+#import os
 from functools import wraps
 from collections.abc import Callable
 from state import State, Action
@@ -60,7 +60,7 @@ def clear_screen() -> None:
     """
     Clear the terminal screen
     """
-    os.system('clear')
+    #os.system('clear')
     return
 
 

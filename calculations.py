@@ -284,6 +284,17 @@ def single_article_sql():
     """
 
 
+def passed_articles_sql() -> str:
+    """
+    SQL Statement to return articles with status 'P' (passed)
+    """
+    return article_type_join_sql() + """
+        WHERE a.Status = 'P'
+        GROUP BY a.RecordId
+        ORDER BY a.PubDate
+    """
+
+
 def articles_to_classify_sql():
     """
     SQL statement to return articles to auto-classify based on date priority

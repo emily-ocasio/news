@@ -147,10 +147,10 @@ def save_label(state: State) -> RxResp:
     """
     return combine_actions(
         from_reaction(save.label),
-        from_reaction(next_article
+        from_reaction(refresh_article
                 if state.new_label == 'M'
                 and (state.article_kind == 'assign'
-                        or state.articles[state.next_article]['Status'] in 'MP')
+                    or state.articles[state.next_article]['Status'] in 'NMP')
                 else increment_article)
     ), state
 
@@ -228,6 +228,14 @@ def review_datasets(state: State) -> RxResp:
     Select desired dataset for review
     """
     return choose.dataset(state)
+
+
+def review_passed_articles(state: State) -> RxResp:
+    """
+    Review previously passed articles
+    """
+    state = state._replace(article_kind = 'assign')
+    return retrieve.passed_articles(state)
 
 
 def select_review_label(state: State) -> RxResp:

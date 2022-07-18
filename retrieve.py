@@ -94,6 +94,15 @@ def refreshed_article(state: State) -> RxResp:
     return action2('query_db', sql=sql, id=article_id), state
 
 
+@query('many_articles')
+def passed_articles(state: State) -> RxResp:
+    """
+    Retrieve articles passed for further review
+    """
+    sql = calc.passed_articles_sql()
+    return action2('query_db', sql=sql), state
+
+
 @query('unassigned_articles')
 def unassigned_articles(state: State) -> RxResp:
     """
