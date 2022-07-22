@@ -38,6 +38,7 @@ label_prompts = (
     "[O]ther location homicides",
     "[N]ot homicides",
     "[P]ass and label later",
+    "[C]continue without reviewing"
 )
 
 label_review_prompts = label_prompts + (

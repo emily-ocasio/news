@@ -108,7 +108,7 @@ def show_article(state: State) -> RxResp:
         from_reaction(display.article),
         from_reaction(retrieve.assigned_homicides_by_article
                     if (state.article_kind == 'assign'
-                        or state.articles[state.next_article]['Status'] in 'MP')
+                        or state.articles[state.next_article]['Status'] == 'M')
                     else choose.label)
     ), state
 
@@ -234,7 +234,7 @@ def review_passed_articles(state: State) -> RxResp:
     """
     Review previously passed articles
     """
-    state = state._replace(article_kind = 'assign')
+    state = state._replace(article_kind = 'review')
     return retrieve.passed_articles(state)
 
 
