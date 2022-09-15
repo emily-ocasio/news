@@ -14,7 +14,7 @@ def label(state: State) -> RxResp:
     row = state.articles[state.next_article]
     sql = calc.verify_article_sql()
     return action2('command_db', sql=sql, status=state.new_label,
-                    user=state.user, id=row['RecordId']), state
+                   user=state.user, id=row['RecordId']), state
 
 
 def assign_status(state: State) -> RxResp:
@@ -49,18 +49,19 @@ def assignments(state: State) -> RxResp:
     if state.victim != '':
         shr_id = state.homicides[state.selected_homicides[0]]['Id']
         return action2('command_db', sql=calc.assign_homicide_victim_sql(),
-                        shrid = shr_id,
-                        recordid = record_id,
-                        user = state.user,
-                        victim=state.victim,
-                        id2=shr_id), state
+                       shrid=shr_id,
+                       recordid=record_id,
+                       user=state.user,
+                       victim=state.victim,
+                       id2=shr_id), state
     shr_ids = tuple(state.homicides[hom_ix]['Id']
-                        for hom_ix in state.selected_homicides)
+                    for hom_ix in state.selected_homicides)
     args = chain.from_iterable((shr_id, record_id, state.user)
-                                            for shr_id in shr_ids)
-    kwargs = {f"arg{i}":arg for i,arg in enumerate(args)}
+                               for shr_id in shr_ids)
+    kwargs = {f"arg{i}": arg for i, arg in enumerate(args)}
     return action2('command_db', sql=calc.assign_homicide_sql(len(shr_ids)),
-                                    **kwargs), state
+                   **kwargs), state
+
 
 def unassignment(state: State) -> RxResp:
     """
@@ -70,6 +71,19 @@ def unassignment(state: State) -> RxResp:
     shr_id = state.homicides_assigned[state.selected_homicide]['Id']
     record_id = state.articles[state.next_article]['RecordId']
     return action2('command_db', sql=sql, shrid=shr_id,
+                   recordid=record_id), state
+
+
+def manual_humanizing(state: State) -> RxResp:
+    """
+    Assign a manual (human ground truth) humanizing level to a specific
+        victim in an article
+    """
+    sql = calc.manual_humanizing_sql()
+    shr_id = state.homicides_assigned[state.selected_homicide]['Id']
+    record_id = state.articles[state.next_article]['RecordId']
+    humanizing = state.humanizing
+    return action2('command_db', sql=sql, human=humanizing, shrid=shr_id,
                     recordid=record_id), state
 
 

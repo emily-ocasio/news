@@ -49,6 +49,7 @@ class State(NamedTuple):
     dates_to_assign: int = 0
     assign_begin: str = '1976-01'
     assign_end: str = '1984-12'
+    humanizing: str = ''
     homicide_month: str = ''
     homicide_victim: str = ''
     choice_type: str = ''

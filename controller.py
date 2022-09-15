@@ -201,6 +201,16 @@ def save_unassignment(state: State) -> RxResp:
     ), state
 
 
+def save_manual_humanizing(state: State) -> RxResp:
+    """
+    Save a manual humanizing level to a specific victim in an article
+    """
+    return combine_actions(
+        from_reaction(save.manual_humanizing),
+        from_reaction(refresh_article)
+    ), state
+
+
 def edit_single_article(state: State) -> RxResp:
     """
     Review label for single article

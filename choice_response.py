@@ -273,6 +273,8 @@ def assign_choice(state: State, choice) -> RxResp:
         return choose.assigment(state)
     if choice == 'U':
         return choose.unassignment(state)
+    if choice == 'M':
+        return choose.humanize(state)
     if choice == 'H':
         return choose.homicide_month(state)
     if choice == 'V':
@@ -347,6 +349,18 @@ def assignments(state: State) -> RxResp:
     return controller.save_assignment(state)
 
 
+def humanize(state: State)  -> RxResp:
+    """
+    Resond to selected homicide for humanizing
+        After selection, ask for humanizing level
+    """
+    selection = int(state.outputs)
+    if selection == 0 or selection > len(state.homicides):
+        return controller.next_article(state)
+    state = state._replace(selected_homicide = selection-1)
+    return choose.manual_humanizing(state)
+
+
 def victim(state: State) -> RxResp:
     """
     Respond to entered name of victim
@@ -368,3 +382,15 @@ def unassignment(state: State) -> RxResp:
         return controller.next_article(state)
     state = state._replace(selected_homicide = selected-1)
     return controller.save_unassignment(state)
+
+
+def manual_humanizing(state: State) -> RxResp:
+    """
+    Respond to user choice of manual humanizing
+    Occurs after user has selected the humanizing level
+    """
+    human = state.outputs
+    if human =='' or not 1 <= int(human) <= 3:
+        return controller.next_article(state)
+    state = state._replace(humanizing = human)
+    return controller.save_manual_humanizing(state)

@@ -2,6 +2,7 @@ __pycache__/
 .dmypy.json
 .ipynb_checkpoints/
 newarticles.db
+homicide_data.csv
 apcs.py
 shr_mass.pkl
 .vscode/

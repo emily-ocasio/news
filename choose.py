@@ -78,6 +78,7 @@ type_prompts = (
 assign_prompts = (
     "[A]ssign homicide by number",
     "[U]nassign homicide by number",
+    "Hu[M]anize victim by number",
     "Change [H]omicide month to diaplay",
     "[S]kip article",
     "Homicide [E]arlier than 1976",
@@ -353,7 +354,25 @@ def victim(state: State) -> RxResp:
 def unassignment(state: State) -> RxResp:
     """
     Select row number of desired homicide to unassign (delete from
-        list of assigned homicides for an article
+        list of assigned homicides for an article)
     """
     msg = "Select homicide number (k) to unassign, 0 to go back > "
+    return action2('get_number_input', prompt=msg), state
+
+
+@choice('humanize')
+def humanize(state: State) -> RxResp:
+    """
+    Select row number of desired homicide to humanize
+    """
+    msg = "Select homicide number (k) to manually humanize, 0 to go back > "
+    return action2('get_number_input', prompt=msg), state
+
+
+@choice('manual_humanizing')
+def manual_humanizing(state: State) -> RxResp:
+    """
+    Select humanizing level for human ground truth
+    """
+    msg = "Select humanizing level (1-3) > "
     return action2('get_number_input', prompt=msg), state

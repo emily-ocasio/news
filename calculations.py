@@ -522,16 +522,15 @@ def homicides_assigned_by_article_sql() -> str:
     """
     SQL Statement to retrieve homicides already assigned
         to a specific article
+    Also retrieves result of manual and automatic humanizing
     """
     return """
-        SELECT ROW_NUMBER() OVER (ORDER BY Agency, Inc) AS k, *
-        FROM view_shr
-        WHERE Id IN
-        (
-            SELECT ShrId
-            FROM topics
-            WHERE RecordId = ?
-        )
+        SELECT ROW_NUMBER() OVER (ORDER BY Agency, Inc) AS k, v.*,
+            IFNULL(t.HumanManual, '') AS HM, IFNULL(t.Human, '') AS H
+        FROM view_shr v
+        INNER JOIN topics t
+        ON t.ShrId = v.Id
+        WHERE RecordId = ?
     """
 
 
@@ -596,6 +595,19 @@ def unassign_homicide_sql() -> str:
     """
     return """
         DELETE FROM topics
+        WHERE ShrId = ?
+        AND RecordId = ?
+    """
+
+
+def manual_humanizing_sql() -> str:
+    """
+    SQL Statement to set the manual (human ground truth)
+        humanizing value for a particular victim in an article
+    """
+    return """
+        UPDATE topics
+        SET HumanManual = ?
         WHERE ShrId = ?
         AND RecordId = ?
     """
