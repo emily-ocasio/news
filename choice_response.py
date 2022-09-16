@@ -281,6 +281,8 @@ def assign_choice(state: State, choice) -> RxResp:
         return choose.homicide_victim(state)
     if choice == 'Y':
         return choose.homicide_county(state)
+    if choice == 'G':
+        return choose.gpt3_humanize(state)
     if choice == 'S':
         return controller.increment_article(state)
     if choice in 'NOPM':
@@ -351,7 +353,7 @@ def assignments(state: State) -> RxResp:
 
 def humanize(state: State)  -> RxResp:
     """
-    Resond to selected homicide for humanizing
+    Respond to selected homicide for humanizing
         After selection, ask for humanizing level
     """
     selection = int(state.outputs)
@@ -359,6 +361,17 @@ def humanize(state: State)  -> RxResp:
         return controller.next_article(state)
     state = state._replace(selected_homicide = selection-1)
     return choose.manual_humanizing(state)
+
+
+def gpt3_humanize(state: State) -> RxResp:
+    """
+    Respond to selected homicide for GPT-3 to humanize
+    """
+    selection = int(state.outputs)
+    if selection == 0 or selection > len(state.homicides):
+        return controller.next_article(state)
+    state = state._replace(selected_homicide = selection-1)
+    return controller.gpt3_humanize(state)
 
 
 def victim(state: State) -> RxResp:

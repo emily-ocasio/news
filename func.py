@@ -4,6 +4,7 @@ Main starting point for program
 from state import State
 import choice_response
 import query_response
+import gpt3_response
 import controller
 from initialize import initialize_state
 
@@ -17,6 +18,7 @@ def what_next(state: State):
         'start': controller.start_point,
         'choice_made': choice_response.respond,
         'query_retrieved': query_response.respond,
+        'gpt3_responded': gpt3_response.respond,
         'classified': controller.increment_classify,
     }
     return dispatch[state.next_event](state)

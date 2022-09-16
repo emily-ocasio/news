@@ -6,6 +6,8 @@ from sqlite3 import Cursor
 #import os
 from functools import wraps
 from collections.abc import Callable
+import openai
+from secr_apis.gpt3_key import GPT3_API_KEY
 from state import State, Action
 
 
@@ -38,12 +40,11 @@ def no_op() -> None:
     return
 
 @actiondef
-def print_message(message: str) -> None:
+def print_message(message: str, end = '\n') -> None:
     """
     Display any message
     """
-    print(message)
-    return
+    print(message, end=end)
 
 
 @actiondef
@@ -199,3 +200,20 @@ def get_month_input(prompt):
         answer = input(prompt)
         if is_good_month(answer):
             return answer
+
+@actiondef
+def prompt_gpt3(prompt, msg):
+    """
+    Prompt GPT3
+    """
+    openai.api_key = GPT3_API_KEY
+    response = openai.Completion.create(
+        model="text-davinci-002",
+        prompt=prompt,
+        temperature=0,
+        max_tokens=256,
+        top_p=1,
+        frequency_penalty=0,
+        presence_penalty=2
+    )
+    return response.choices[0].text, msg

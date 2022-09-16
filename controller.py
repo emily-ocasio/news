@@ -4,6 +4,7 @@ Reactions that control overall program flow
 from actionutil import combine_actions, action2, from_reaction, next_event
 from state import RxResp, State
 import choose
+import gpt3_prompt
 import retrieve
 import display
 import save
@@ -440,3 +441,10 @@ def homicide_table(state: State) -> RxResp:
         from_reaction(display.homicide_table),
         from_reaction(choose.assign_choice)
     ), state
+
+
+def gpt3_humanize(state: State) -> RxResp:
+    """
+    Prompt GPT-3 to determine whether article is humanizing
+    """
+    return gpt3_prompt.prompt_gpt(state)

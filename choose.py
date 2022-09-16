@@ -79,6 +79,7 @@ assign_prompts = (
     "[A]ssign homicide by number",
     "[U]nassign homicide by number",
     "Hu[M]anize victim by number",
+    "Send to [G]PT-3 for humanizing",
     "Change [H]omicide month to diaplay",
     "[S]kip article",
     "Homicide [E]arlier than 1976",
@@ -375,4 +376,14 @@ def manual_humanizing(state: State) -> RxResp:
     Select humanizing level for human ground truth
     """
     msg = "Select humanizing level (1-3) > "
+    return action2('get_number_input', prompt=msg), state
+
+
+@choice('gpt3_humanize')
+def gpt3_humanize(state: State) -> RxResp:
+    """
+    Select row number of desired homicide to sent to GPT-3 for humanizing
+    """
+    msg = ("Select homicide number (k) to send to GPT-3 for humanizing, "
+            "or 0 to go back > ")
     return action2('get_number_input', prompt=msg), state

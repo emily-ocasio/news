@@ -5,5 +5,6 @@ newarticles.db
 homicide_data.csv
 apcs.py
 shr_mass.pkl
+secr_apis/
 .vscode/
 .DS_Store

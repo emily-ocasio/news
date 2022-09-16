@@ -726,14 +726,14 @@ def rich_text(document: Optional[str]) -> str:
     return rich_to_str(text)
 
 
-def rich_to_str(text: Union[Text, Table]) -> str:
+def rich_to_str(text: Union[Text, Table, str], end = '\n') -> str:
     """
     Returns directly printable string corresponding to a text
     Applies style formatting and word wrapping automatically
     """
     console = Console()
     with console.capture() as capture:
-        console.print(text)
+        console.print(text, end=end)
     return capture.get()
 
 
@@ -917,3 +917,27 @@ def tuple_replace(tup: tuple, index: int, value) -> tuple:
     temp_list = list(tup)
     temp_list[index] = value
     return tuple(temp_list)
+
+
+def full_gpt3_prompt(pre_article: str, post_article: str,
+                        article: str, victim: str) -> tuple[str,str]:
+    """
+    Prepare a GPT-3 prompt
+    Returns GPT-3 prompt and human readable prompt without the full article
+    """
+    prompt = f"{pre_article}\n\n\"{article}\"\n\n{post_article}".replace(
+                '$VICTIM', victim)
+    msg = (f"Prompt for humanization of victim {victim}:\n"
+                f"{pre_article}\n\n<ARTICLE>\n\n{post_article}".replace(
+                '$VICTIM',victim))
+    return prompt, msg
+
+
+def prompt_response(prompt: str, response: str) -> str:
+    """
+    Bolded text
+    """
+    full = Text()
+    full.append(prompt)
+    full.append(response, 'black bold')
+    return rich_to_str(full)
