@@ -110,6 +110,28 @@ def gpt3_humanize(state: State) -> RxResp:
                     prompt=prompt, response=response), state
 
 
+def gpt3_extract(state: State) -> RxResp:
+    """
+    Save the extract of the article corresponding to the
+    information specific to a particular homidice victim
+    """
+    sql = calc.gpt3_extract_sql()
+    homicide = state.homicides_assigned[state.selected_homicide]
+    article = state.articles[state.next_article]
+    shr_id = homicide['Id']
+    record_id = article['RecordId']
+    pre_article = state.pre_article_prompt
+    post_article = state.post_article_prompt
+    prompt = state.gpt3_prompt
+    response = state.gpt3_response
+    extract = state.extract
+    return action2('command_db', sql=sql, extract=extract, shrid=shr_id,
+                    record_id=record_id, record_id2=record_id, shr_id2=shr_id,
+                    human2='', human_manual='',
+                    pre_article=pre_article, post_article=post_article,
+                    prompt=prompt, response=response), state
+
+
 @next_event('classified')
 def classification(state: State) -> RxResp:
     """

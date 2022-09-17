@@ -109,7 +109,9 @@ def command_db(sql, **kwargs) -> None:
         and commit at the end
     """
     args = tuple(kwargs.values())
+    # print(sql, kwargs)
     if ';' in sql:
+        #print(sql, kwargs)
         sqls = sql.split(';')
         argcnts = tuple(ssql.count('?') for ssql in sqls)
         for i,ssql in enumerate(sqls):

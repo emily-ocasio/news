@@ -621,12 +621,29 @@ def gpt3_humanizing_sql() -> str:
     return """
         UPDATE topics
         SET Human = ?
-        WHERE ShrId =?
-        AND RecordId =?;
+        WHERE ShrId = ?
+        AND RecordId = ?;
         INSERT INTO gptAttempts
         (RecordId, ShrId, Human, HumanManual, PreArticle, PostArticle,
             Prompt, Response)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """
+
+
+def gpt3_extract_sql() -> str:
+    """
+    SQL Statement to save the GPT-3 extracted text
+        specific to a particlar victim
+    """
+    return """
+        UPDATE topics
+        SET Extract = ?
+        WHERE ShrId = ?
+        AND RecordId = ?;
+        INSERT INTO gptAttempts
+        (RecordId, ShrId, Human, HumanManual, PreArticle, PostArticle,
+            Prompt, Response)
+        VALUES (?,?,?,?,?,?,?,?)
     """
 
 

@@ -49,9 +49,11 @@ class State(NamedTuple):
     dates_to_assign: int = 0
     assign_begin: str = '1976-01'
     assign_end: str = '1984-12'
+    gpt3_action: str = 'humanize'
     pre_article_prompt: str = 'reporter'
-    post_article_prompt: str = '3L_slightly'
+    post_article_prompt: str = '3L_not3'
     humanizing: str = ''
+    extract: str = ''
     gpt3_prompt: str = ''
     gpt3_response: str = ''
     homicide_month: str = ''
