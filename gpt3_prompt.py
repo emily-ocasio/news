@@ -43,9 +43,9 @@ def prompt_gpt(state: State) -> RxResp:
     """
     This is the prompt for the GPT model.
     """
-    pre_article = pre_article_prompts['reporter']
+    pre_article = pre_article_prompts[state.pre_article_prompt]
     article = state.articles[state.next_article]['FullText']
-    post_article = post_article_prompts['3L_slightly']
+    post_article = post_article_prompts[state.post_article_prompt]
     victim = state.homicides_assigned[state.selected_homicide]['Victim']
     prompt, msg = calc.full_gpt3_prompt(pre_article=pre_article,
                 post_article=post_article,

@@ -282,6 +282,9 @@ def assign_choice(state: State, choice) -> RxResp:
     if choice == 'Y':
         return choose.homicide_county(state)
     if choice == 'G':
+        if len(state.homicides_assigned) == 1:
+            state = state._replace(selected_homicide = 0)
+            return controller.gpt3_humanize(state)
         return choose.gpt3_humanize(state)
     if choice == 'S':
         return controller.increment_article(state)
@@ -368,7 +371,7 @@ def gpt3_humanize(state: State) -> RxResp:
     Respond to selected homicide for GPT-3 to humanize
     """
     selection = int(state.outputs)
-    if selection == 0 or selection > len(state.homicides):
+    if selection == 0 or selection > len(state.homicides_assigned):
         return controller.next_article(state)
     state = state._replace(selected_homicide = selection-1)
     return controller.gpt3_humanize(state)

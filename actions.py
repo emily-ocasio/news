@@ -116,7 +116,7 @@ def command_db(sql, **kwargs) -> None:
             priorargs = sum(argcnts[:i])
             db.execute(ssql, args[priorargs:priorargs+argcnts[i]])
     else:
-        print(sql, kwargs)
+        #print(sql, kwargs)
         db.execute(sql,args)
     db.commit()
 

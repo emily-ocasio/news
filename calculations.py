@@ -613,6 +613,23 @@ def manual_humanizing_sql() -> str:
     """
 
 
+def gpt3_humanizing_sql() -> str:
+    """
+    SQL Statement to set the gpt3
+        humanizing value for a particular victim in an article
+    """
+    return """
+        UPDATE topics
+        SET Human = ?
+        WHERE ShrId =?
+        AND RecordId =?;
+        INSERT INTO gptAttempts
+        (RecordId, ShrId, Human, HumanManual, PreArticle, PostArticle,
+            Prompt, Response)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """
+
+
 def display_article(total: int,
                     current: int,
                     row: Row,
@@ -941,3 +958,10 @@ def prompt_response(prompt: str, response: str) -> str:
     full.append(prompt)
     full.append(response, 'black bold')
     return rich_to_str(full)
+
+
+def humanizing_from_response(response: str) -> str:
+    """
+    Detect humaninizing level from GPT-3 response
+    """
+    return response[1]

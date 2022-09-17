@@ -37,10 +37,29 @@ CREATE TABLE IF NOT EXISTS dates (
 CREATE TABLE IF NOT EXISTS topics (
     ShrId INTEGER NOT NULL,
     RecordId INTEGER NOT NULL,
-    UNIQUE(ShrId, RecordId)
+    LastUpdated TEXT,
+    Human TEXT,
+    HumanManual TEXT,
+    UNIQUE(ShrId, RecordId),
     FOREIGN KEY(RecordId) REFERENCES articles(RecordId),
     FOREIGN KEY(ShrId) REFERENCES shr("index")
 );
+
+CREATE TABLE IF NOT EXISTS gptAttempts (
+    RecordId INTEGER NOT NULL,
+    ShrId INTEGER NOT NULL,
+    Human TEXT NOT NULL,
+    HumanManual TEXT NOT NULL,
+    PreArticle TEXT NOT NULL,
+    PostArticle TEXT NOT NULL,
+    Prompt TEXT NOT NULL,
+    Response TEXT NOT NULL,
+    FOREIGN KEY(RecordId) REFERENCES articles(RecordId),
+    FOREIGN KEY(ShrId) REFERENCES shr("index")
+);
+
+CREATE INDEX IF NOT EXISTS attempts 
+    ON gptAttempts(ShrId, RecordId, PostArticle, PreArticle);
 
 CREATE INDEX IF NOT EXISTS topics_shrid ON topics(ShrId);
 CREATE INDEX IF NOT EXISTS topics_recordid ON topics(RecordId);
