@@ -81,6 +81,7 @@ assign_prompts = (
     "Hu[M]anize victim by number",
     "Send to [G]PT-3 for humanizing",
     "E[X]tract victim details for GPT-3 use",
+    "Create sma[L]ler extract",
     "Change [H]omicide month to diaplay",
     "[S]kip article",
     "Homicide [E]arlier than 1976",
@@ -396,5 +397,15 @@ def gpt3_extract(state: State) -> RxResp:
     Select row number of desired homicide to extract for humanizing
     """
     msg = ("Select homicide number (k) to extract for humanizing, "
+            "or 0 to go back > ")
+    return action2('get_number_input', prompt=msg), state
+
+
+@choice('gpt3_small_extract')
+def gpt3_small_extract(state: State) -> RxResp:
+    """
+    Select row number of desired homicide to further extract for humanizing
+    """
+    msg = ("Select homicide number (k) to further extract for humanizing, "
             "or 0 to go back > ")
     return action2('get_number_input', prompt=msg), state

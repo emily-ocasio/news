@@ -447,7 +447,7 @@ def gpt3_humanize(state: State) -> RxResp:
     """
     Prompt GPT-3 to determine whether article is humanizing
     """
-    state = state._replace(gpt3_action = 'humanize')
+    state = state._replace(gpt3_action = 'humanize', gpt3_source='article')
     return gpt3_prompt.prompt_gpt(state)
 
 
@@ -455,5 +455,13 @@ def gpt3_extract(state: State) -> RxResp:
     """
     Prompt GPT-3 to extract the victim specific information
     """
-    state = state._replace(gpt3_action = 'extract')
+    state = state._replace(gpt3_action = 'extract', gpt3_source='article')
+    return gpt3_prompt.prompt_gpt(state)
+
+
+def gpt3_small_extract(state: State) -> RxResp:
+    """
+    Prompt GPT-3 to further extract relevant victim specific information
+    """
+    state = state._replace(gpt3_action ='small_extract', gpt3_source='extract')
     return gpt3_prompt.prompt_gpt(state)

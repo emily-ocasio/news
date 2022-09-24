@@ -295,6 +295,13 @@ def assign_choice(state: State, choice) -> RxResp:
             state = state._replace(selected_homicide = 0)
             return controller.gpt3_extract(state)
         return choose.gpt3_extract(state)
+    if choice == 'L':
+        state = state._replace(pre_article_prompt ='extract',
+                post_article_prompt ='rewrite')
+        if len(state.homicides_assigned) == 1:
+            state = state._replace(selected_homicide = 0)
+            return controller.gpt3_small_extract(state)
+        return choose.gpt3_small_extract(state)
     if choice == 'S':
         return controller.increment_article(state)
     if choice in 'NOPM':
@@ -395,6 +402,17 @@ def gpt3_extract(state: State) -> RxResp:
         return controller.next_article(state)
     state = state._replace(selected_homicide = selection-1)
     return controller.gpt3_extract(state)
+
+
+def gpt3_small_extract(state: State) -> RxResp:
+    """
+    Respond to selected homicide for GPT-3 to further extract
+    """
+    selection = int(state.outputs)
+    if selection == 0 or selection > len(state.homicides_assigned):
+        return controller.next_article(state)
+    state = state._replace(selected_homicide = selection-1)
+    return controller.gpt3_small_extract(state)
 
 
 def victim(state: State) -> RxResp:

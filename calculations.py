@@ -526,7 +526,9 @@ def homicides_assigned_by_article_sql() -> str:
     """
     return """
         SELECT ROW_NUMBER() OVER (ORDER BY Agency, Inc) AS k, v.*,
-            IFNULL(t.HumanManual, '') AS HM, IFNULL(t.Human, '') AS H
+            IFNULL(t.HumanManual, '') AS HM, IFNULL(t.Human, '') AS H,
+            IFNULL(t.Extract, '') AS Extract,
+            IFNULL(t.SmallExtract, '') AS SmallExtract
         FROM view_shr v
         INNER JOIN topics t
         ON t.ShrId = v.Id
@@ -633,11 +635,28 @@ def gpt3_humanizing_sql() -> str:
 def gpt3_extract_sql() -> str:
     """
     SQL Statement to save the GPT-3 extracted text
-        specific to a particlar victim
+        specific to a particular victim
     """
     return """
         UPDATE topics
         SET Extract = ?
+        WHERE ShrId = ?
+        AND RecordId = ?;
+        INSERT INTO gptAttempts
+        (RecordId, ShrId, Human, HumanManual, PreArticle, PostArticle,
+            Prompt, Response)
+        VALUES (?,?,?,?,?,?,?,?)
+    """
+
+
+def gpt3_small_extract_sql() -> str:
+    """
+    SQL Statement to save the GPT-3 extracted text
+        specific to a particular victim
+    """
+    return """
+        UPDATE topics
+        SET SmallExtract = ?
         WHERE ShrId = ?
         AND RecordId = ?;
         INSERT INTO gptAttempts
@@ -934,14 +953,28 @@ def year_month_from_article(row: Row) -> str:
 def homicide_table(rows: Rows) -> str:
     """
     Return formatted table of homicide info
+    Exclude Extract as a column
     """
     table = Table(row_styles=['','bold on grey85'])
     for col in rows[0].keys():
-        table.add_column(col)
+        if 'Extract' not in col:
+            table.add_column(col)
     for row in rows:
-        elements = tuple(str(element) for element in row)
+        extract = row_get(row, 'Extract')
+        small = row_get(row, 'SmallExtract')
+        exclude = (extract, small)
+        elements = tuple(str(element) for element in row
+                                        if element not in exclude)
         table.add_row(*elements)  # type: ignore
     return rich_to_str(table)
+
+
+def row_get(row: Row, key: str, default = '%%%%%%',):
+    """
+    Simulate dictionary get method for Row objects
+    Returns value of the column 'key' or default if column not in row
+    """
+    return row[key] if key in row.keys() else default
 
 
 def tuple_replace(tup: tuple, index: int, value) -> tuple:
@@ -982,3 +1015,31 @@ def humanizing_from_response(response: str) -> str:
     Detect humaninizing level from GPT-3 response
     """
     return response[1]
+
+
+def display_homicide_extracts(homicides: Rows) -> str:
+    """
+    Display all the homicide extracts
+    """
+    def homicide_extract(homicide: Row) -> str:
+        """
+        Display extract for single homicide
+        """
+        victim = homicide['Victim']
+        extract = rich_to_str(homicide['Extract'])
+        small_extract = rich_to_str(homicide['SmallExtract'])
+        return (f"Extract for {victim}:\n{extract}\n\n"
+                    f"Small extract for {victim}:\n{small_extract}\n")
+
+    if len(homicides) == 0:
+        return ""
+
+    return "\n".join(map(homicide_extract, homicides))
+
+
+def remove_quotes(text: str) -> str:
+    """
+    Remove initial lines as well as double quotes around the whole text
+    Also replace any additional double quotes with single quotes
+    """
+    return text.lstrip('\n"').rstrip('\n"').replace('"', "'")

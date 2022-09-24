@@ -50,6 +50,7 @@ class State(NamedTuple):
     assign_begin: str = '1976-01'
     assign_end: str = '1984-12'
     gpt3_action: str = 'humanize'
+    gpt3_source: str = 'article'
     pre_article_prompt: str = 'reporter'
     post_article_prompt: str = '3L_not3'
     humanizing: str = ''

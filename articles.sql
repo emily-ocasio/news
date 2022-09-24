@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS topics (
     LastUpdated TEXT,
     Human TEXT,
     HumanManual TEXT,
+    Extract TEXT,
     UNIQUE(ShrId, RecordId),
     FOREIGN KEY(RecordId) REFERENCES articles(RecordId),
     FOREIGN KEY(ShrId) REFERENCES shr("index")

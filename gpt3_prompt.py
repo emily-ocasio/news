@@ -11,7 +11,9 @@ pre_article_prompts = {
         "Here is the news article draft "
         "(there could be multiple unrelated stories mixed together):",
     'article': "The following is a newspaper article that may include "
-        "unrelated stories mixed together:"
+        "unrelated stories mixed together:",
+    'extract': "The following text includes information about "
+        "homicide victim $VICTIM"
 }
 
 post_article_prompts = {
@@ -121,7 +123,18 @@ post_article_prompts = {
         "about his life before the incident:\n",
     'alsopast2': "Create an extract that includes all the information in the "
         "article that refers to the victim $VICTIM, especially any facts "
-        "about $VICTIM's life before the incident:\n"
+        "about $VICTIM's life before the incident:\n",
+    'remove': "Create an extract that includes all the information in the "
+        "article that refers to the victim $VICTIM, especially any facts "
+        "about $VICTIM's life before the incident. Remove from extract "
+        "information about age, gender, location, circumstances of death "
+        "and information about the suspect and the case:\n",
+    'summary': "Summarize information after removing age, gender, location, "
+        "circumstances of death and information about the suspect and "
+        "the case:\n",
+    'rewrite': "Rewrite text after removing age, gender, address, "
+        "circumstances of death and information about the suspect and "
+        "the investigation:\n",
 }
 
 
@@ -131,7 +144,9 @@ def prompt_gpt(state: State) -> RxResp:
     This is the prompt for the GPT model.
     """
     pre_article = pre_article_prompts[state.pre_article_prompt]
-    article = state.articles[state.next_article]['FullText']
+    article = (state.articles[state.next_article]['FullText']
+            if state.gpt3_source == 'article'
+            else state.homicides_assigned[state.selected_homicide]['Extract'])
     post_article = post_article_prompts[state.post_article_prompt]
     victim = state.homicides_assigned[state.selected_homicide]['Victim']
     prompt, msg = calc.full_gpt3_prompt(pre_article=pre_article,

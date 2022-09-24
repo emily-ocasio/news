@@ -112,10 +112,14 @@ def gpt3_humanize(state: State) -> RxResp:
 
 def gpt3_extract(state: State) -> RxResp:
     """
-    Save the extract of the article corresponding to the
-    information specific to a particular homidice victim
+    Save extract of the article corresponding to the
+        information specific to a particular homicide victim
+    Extract could be initial or secondary
+        (further extract removing standard data)
     """
-    sql = calc.gpt3_extract_sql()
+    sql = (calc.gpt3_extract_sql()
+            if state.gpt3_action == 'extract'
+            else calc.gpt3_small_extract_sql())
     homicide = state.homicides_assigned[state.selected_homicide]
     article = state.articles[state.next_article]
     shr_id = homicide['Id']

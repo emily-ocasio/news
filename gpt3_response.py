@@ -15,8 +15,8 @@ def respond(state: State) -> RxResp:
     response, prompt = state.outputs
     msg = calc.prompt_response(prompt, response)
     state = state._replace(gpt3_prompt = prompt, gpt3_response = response)
-    if state.gpt3_action == 'extract':
-        state = state._replace(extract = response)
+    if state.gpt3_action in ('extract','small_extract'):
+        state = state._replace(extract = calc.remove_quotes(response))
         reaction = save.gpt3_extract
     elif state.gpt3_action == 'humanize':
         state = state._replace(
