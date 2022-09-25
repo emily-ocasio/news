@@ -16,6 +16,7 @@ class State(NamedTuple):
     next_event: str
     user: str = ''
     terminal_size: tuple[int, int] = 0, 0
+    main_action: str = ''
     article_date: Optional[str] = None
     article_id: Optional[int] = None
     multi_count: int = 1

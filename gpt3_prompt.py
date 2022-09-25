@@ -9,11 +9,42 @@ pre_article_prompts = {
     'reporter': "A news reporter is having a conversation with his editor. "
         "The reporter presented his draft of an article to the editor. "
         "Here is the news article draft "
-        "(there could be multiple unrelated stories mixed together):",
+        "(there could be multiple unrelated stories mixed together):\n\n",
     'article': "The following is a newspaper article that may include "
-        "unrelated stories mixed together:",
+        "unrelated stories mixed together:\n\n",
     'extract': "The following text includes information about "
-        "homicide victim $VICTIM"
+        "homicide victim $VICTIM\n\n",
+    'few-shot': "Articles about homicide victims are humanizing when they "
+        "focus on their lives, such as their occupations, relationships and "
+        "families. Articles are impersonal when they focus only on what "
+        "happened and the criminal's background. An expert editor is asked "
+        "to evaluate this article based on these definitions and provide "
+        "an opinion on whether the article is humanizing or impersonal.\n"
+        "Summary: \"Police made an arrest in an alleged murder yesterday "
+        "afternoon. The victim, Raymond Johnson, was found shot once in "
+        "the chest with a 38-caliber revolver. Carol Ross was with him at "
+        "the time of his murder and will be arraigned tomorrow.\"\n"
+        "Response: Impersonal, because it only mentions what happened\n"
+        "Summary: \"George Healey was a homicide victim who had been "
+        "boarding in the home for 15 years. The 100-pound Healey's "
+        "favorite pasttime was fishing in the nearby Connecticut River.\"\n"
+        "Response: Humanizing, because it mentions the victim's pastime\n"
+        "Summary: ",
+    'few-shot2': "Articles about homicide victims are humanizing when they "
+        "focus on their lives, such as their occupations, relationships and "
+        "families. Articles are impersonal when they focus only on what "
+        "happened and the criminal's background. An expert editor is asked "
+        "to evaluate this article based on these definitions and provide "
+        "an opinion on whether the article is humanizing or impersonal.\n"
+        "Summary: \"Raymond Johnson was a man who lived with his companion, "
+        "Carol Ross. On the day of his death, he was shot once in the chest "
+        "and was found by police on the floor of his apartment.\"\n"
+        "Response: Impersonal, because it only mentions what happened\n"
+        "Summary: \"George Healey was a homicide victim who had been "
+        "boarding in the home for 15 years. The 100-pound Healey's "
+        "favorite pasttime was fishing in the nearby Connecticut River.\"\n"
+        "Response: Humanizing, because it mentions the victim's pastime\n"
+        "Summary: "
 }
 
 post_article_prompts = {
@@ -115,26 +146,40 @@ post_article_prompts = {
         "the victim $VICTIM:\n",
     'notonly': "The article may have information about multiple topics. "
         "Extract every part of the article that refer specifically to "
-        "the victim $VICTIM:\n",
+        "the victim $VICTIM:",
     'every': "Create an extract that includes all the information in the "
-        "article that refers to the victim $VICTIM:\n",
-    'alsopast': "Create an extract that includes all the information in the "
-        "article that refers to the victim $VICTIM, especially any facts "
-        "about his life before the incident:\n",
-    'alsopast2': "Create an extract that includes all the information in the "
-        "article that refers to the victim $VICTIM, especially any facts "
-        "about $VICTIM's life before the incident:\n",
-    'remove': "Create an extract that includes all the information in the "
+        "article that refers to the victim $VICTIM:",
+    'alsopast': "\n\nCreate an extract that includes all the information in "
+        "the article that refers to the victim $VICTIM, especially any facts "
+        "about his life before the incident:",
+    'alsopast2': "\n\nCreate an extract that includes all the information in "
+        "the article that refers to the victim $VICTIM, especially any facts "
+        "about $VICTIM's life before the incident:",
+    'alsopast3': "\n\nCreate a text that only includes every piece of "
+        "information in the article that refers to the victim $VICTIM, "
+        "especially any facts about $VICTIM's life before the incident:",
+    'alsopast4': "\n\nCreate a text that only includes every piece of "
+        "information in the article that refers to the victim $VICTIM, "
+        "especially any facts about $VICTIM's life, occupation, family, and "
+        "relationship before the incident:",
+    'remove': "\n\nCreate an extract that includes all the information in the "
         "article that refers to the victim $VICTIM, especially any facts "
         "about $VICTIM's life before the incident. Remove from extract "
         "information about age, gender, location, circumstances of death "
-        "and information about the suspect and the case:\n",
-    'summary': "Summarize information after removing age, gender, location, "
+        "and information about the suspect and the case:",
+    'summary': "\n\nSummarize information after removing age, gender, "
+        "location, circumstances of death and information about the suspect "
+        "and the case:",
+    'rewrite': "\n\nRewrite text after removing age, gender, address, "
         "circumstances of death and information about the suspect and "
-        "the case:\n",
-    'rewrite': "Rewrite text after removing age, gender, address, "
-        "circumstances of death and information about the suspect and "
-        "the investigation:\n",
+        "the investigation:",
+    'rewrite2': "\n\nRewrite text after removing age, gender, address, "
+        "circumstances of death and information about the suspect:",
+    'rewrite3': "\n\nRewrite text after removing age, gender, address, "
+        "crime details, and information about the suspect:",
+    'rewrite4': "\n\nRewrite text after removing age, gender, address, "
+        "and information about the suspect:",
+    'few-shot': "\nResponse:",
 }
 
 
@@ -144,13 +189,17 @@ def prompt_gpt(state: State) -> RxResp:
     This is the prompt for the GPT model.
     """
     pre_article = pre_article_prompts[state.pre_article_prompt]
-    article = (state.articles[state.next_article]['FullText']
-            if state.gpt3_source == 'article'
-            else state.homicides_assigned[state.selected_homicide]['Extract'])
+    if state.gpt3_source == 'article':
+        article = state.articles[state.next_article]['FullText']
+    elif state.gpt3_source == 'small':
+        article = (
+            state.homicides_assigned[state.selected_homicide]['SmallExtract'])
+    else:
+        article = state.homicides_assigned[state.selected_homicide]['Extract']
     post_article = post_article_prompts[state.post_article_prompt]
     victim = state.homicides_assigned[state.selected_homicide]['Victim']
     prompt, msg = calc.full_gpt3_prompt(pre_article=pre_article,
                 post_article=post_article,
                 article = article,
-                victim = victim)
+                victim = victim if victim is not None else 'unknown')
     return action2('prompt_gpt3', prompt=prompt, msg=msg), state

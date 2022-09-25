@@ -992,10 +992,11 @@ def full_gpt3_prompt(pre_article: str, post_article: str,
     Prepare a GPT-3 prompt
     Returns GPT-3 prompt and human readable prompt without the full article
     """
-    prompt = f"{pre_article}\n\n\"{article}\"\n\n{post_article}".replace(
+    text = remove_quotes(article)
+    prompt = f"{pre_article}\"{text}\"{post_article}".replace(
                 '$VICTIM', victim)
     msg = (f"Prompt for humanization of victim {victim}:\n"
-                f"{pre_article}\n\n<ARTICLE>\n\n{post_article}".replace(
+                f"{pre_article}<ARTICLE>{post_article}".replace(
                 '$VICTIM',victim))
     return prompt, msg
 
@@ -1010,11 +1011,19 @@ def prompt_response(prompt: str, response: str) -> str:
     return rich_to_str(full)
 
 
-def humanizing_from_response(response: str) -> str:
+def humanizing_from_response(response: str, response_type='level') -> str:
     """
     Detect humaninizing level from GPT-3 response
     """
-    return response[1]
+    if response_type == 'level':
+        return response[1]
+    answer = remove_quotes(response).lstrip().lower()[:5]
+    if answer == 'human':
+        return '3'
+    if answer == 'imper':
+        return '1'
+    print(f"{answer=}")
+    return '2'
 
 
 def display_homicide_extracts(homicides: Rows) -> str:

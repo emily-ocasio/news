@@ -20,7 +20,7 @@ def respond(state: State) -> RxResp:
         reaction = save.gpt3_extract
     elif state.gpt3_action == 'humanize':
         state = state._replace(
-            humanizing=calc.humanizing_from_response(response))
+            humanizing=calc.humanizing_from_response(response, 'word'))
         reaction = save.gpt3_humanize
     else:
         raise Exception('Unknown GPT action')

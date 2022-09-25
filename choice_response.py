@@ -282,22 +282,22 @@ def assign_choice(state: State, choice) -> RxResp:
     if choice == 'Y':
         return choose.homicide_county(state)
     if choice == 'G':
-        state = state._replace(pre_article_prompt = 'reporter',
-                post_article_prompt = '3L_not3')
+        state = state._replace(pre_article_prompt = 'few-shot2',
+                post_article_prompt = 'few-shot')
         if len(state.homicides_assigned) == 1:
             state = state._replace(selected_homicide = 0)
             return controller.gpt3_humanize(state)
         return choose.gpt3_humanize(state)
     if choice == 'X':
         state = state._replace(pre_article_prompt ='article',
-                post_article_prompt = 'alsopast2')
+                post_article_prompt = 'alsopast4')
         if len(state.homicides_assigned) == 1:
             state = state._replace(selected_homicide = 0)
             return controller.gpt3_extract(state)
         return choose.gpt3_extract(state)
     if choice == 'L':
         state = state._replace(pre_article_prompt ='extract',
-                post_article_prompt ='rewrite')
+                post_article_prompt ='rewrite4')
         if len(state.homicides_assigned) == 1:
             state = state._replace(selected_homicide = 0)
             return controller.gpt3_small_extract(state)
@@ -376,7 +376,7 @@ def humanize(state: State)  -> RxResp:
         After selection, ask for humanizing level
     """
     selection = int(state.outputs)
-    if selection == 0 or selection > len(state.homicides):
+    if selection == 0 or selection > len(state.homicides_assigned):
         return controller.next_article(state)
     state = state._replace(selected_homicide = selection-1)
     return choose.manual_humanizing(state)

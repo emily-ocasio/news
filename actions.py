@@ -204,18 +204,19 @@ def get_month_input(prompt):
             return answer
 
 @actiondef
-def prompt_gpt3(prompt, msg):
+def prompt_gpt3(prompt, msg, model = 'davinci'):
     """
     Prompt GPT3
     """
+    models = {'curie': 'text-curie-001', 'davinci': 'text-davinci-002'}
     openai.api_key = GPT3_API_KEY
     response = openai.Completion.create(
-        model="text-davinci-002",
+        model=models[model],
         prompt=prompt,
         temperature=0,
         max_tokens=256,
         top_p=1,
         frequency_penalty=0,
-        presence_penalty=2
+        presence_penalty=0
     )
     return response.choices[0].text, msg

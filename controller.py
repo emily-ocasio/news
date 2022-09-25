@@ -447,7 +447,7 @@ def gpt3_humanize(state: State) -> RxResp:
     """
     Prompt GPT-3 to determine whether article is humanizing
     """
-    state = state._replace(gpt3_action = 'humanize', gpt3_source='article')
+    state = state._replace(gpt3_action = 'humanize', gpt3_source='small')
     return gpt3_prompt.prompt_gpt(state)
 
 
