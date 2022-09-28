@@ -1,8 +1,9 @@
 """
 Reactions that control overall program flow
 """
+from collections.abc import Callable
 from actionutil import combine_actions, action2, from_reaction, next_event
-from state import RxResp, State
+from state import RxResp, State, Reaction
 import choose
 import gpt3_prompt
 import retrieve
@@ -10,14 +11,37 @@ import display
 import save
 import calculations as calc
 
+dispatch: dict[str, Reaction] = {}
 
+def main_flow(flow: str) -> Callable[[Reaction], Reaction]:
+    """
+    Decorator for assigning main flow routes
+    Usage:
+        add @main_flow as decorator before controller reaction
+        argument specifies the name of the main flow that is to be handled
+    """
+    def decorator_main(reaction: Reaction) -> Reaction:
+        if flow in dispatch:
+            raise Exception(f"Main flow route {flow} duplicated")
+        dispatch[flow] = reaction
+        return reaction
+    return decorator_main
+
+def main(state: State) -> RxResp:
+    """
+    Central controller that dispatches based on main application workflow
+    """
+    if state.main_flow not in dispatch:
+        raise Exception("Main flow route not supported")
+    return dispatch[state.main_flow](state)
+
+@main_flow('start')
 def start_point(state: State) -> RxResp:
     """
     Initial starting point of application
     """
-    state = state._replace(article_kind = '')
+    state = state._replace(article_kind = '', review_type = '')
     if len(state.user) == 0:
-        print(state.user)
         return choose.username(state)
     return choose.initial(state)
 
@@ -234,28 +258,47 @@ def refresh_article(state: State) -> RxResp:
     return retrieve.refreshed_article(state)
 
 
+@main_flow('review')
 def review_datasets(state: State) -> RxResp:
     """
-    Select desired dataset for review
+    Main workflow for reviewing articles
     """
-    return choose.dataset(state)
-
-
-def review_passed_articles(state: State) -> RxResp:
-    """
-    Review previously passed articles
-    """
-    state = state._replace(article_kind = 'review')
-    return retrieve.passed_articles(state)
-
-
-def select_review_label(state: State) -> RxResp:
-    """
-    Select desired label subset to review
-    """
-    if state.review_dataset == 'CLASS':
+    if state.review_type == '':
+        # First time - select which set of articles to review
+        state = state._replace(article_kind = 'review',
+                                articles_retrieved = False)
+        return choose.dataset(state)
+    if state.articles_retrieved:
+        return first_article(state)
+    if state.review_type == 'PASSED':
+        # Review previously passed articles
+        return retrieve.passed_articles(state)
+    state = state._replace(review_dataset = state.review_type)
+    if state.review_dataset in '12':
+        # Review assigned articles by victim
+        return retrieve.articles_humanizing_group(state)
+    if state.review_type == 'CLASS':
+        # Review previously auto-classified articles to reclassify
+        state = state._replace(article_kind = 'reclassify')
         return choose.years_to_reclassify(state)
     return choose.review_label(state)
+
+
+# def review_passed_articles(state: State) -> RxResp:
+#     """
+#     Review previously passed articles
+#     """
+#     state = state._replace(article_kind = 'review')
+#     return retrieve.passed_articles(state)
+
+
+# def select_review_label(state: State) -> RxResp:
+#     """
+#     Select desired label subset to review
+#     """
+#     if state.review_dataset == 'CLASS':
+#         return choose.years_to_reclassify(state)
+#     return choose.review_label(state)
 
 
 def retrieve_verified(state: State) -> RxResp:

@@ -41,10 +41,9 @@ def username(state: State) -> RxResp:
     Respond to the intial signing with the user's name
     Used to add LastUpdated to all updates as a form of audit
     """
-    if len(state.outputs) < 4:
-        return choose.username(state)
-    state = state._replace(user = state.outputs)
-    return choose.initial(state)
+    state = state._replace(user = state.outputs
+                            if len(state.outputs) >=5 else '')
+    return controller.main(state)
 
 
 @check_defaults
@@ -52,12 +51,21 @@ def initial(state: State, choice) -> RxResp:
     """
     Main menu
     """
+    flow_choice = {
+        'N': 'new_labels',
+        'R': 'review',
+        'F': 'single_review',
+        'A': 'auto_categorize',
+        'H': 'assign'
+    }
+    if choice not in flow_choice:
+        raise Exception("Choice not supported")
     if choice == "N":
         state = state._replace(article_kind = 'new')
         return controller.new_labels(state)
-    if choice == "R":
-        state = state._replace(article_kind = 'review')
-        return controller.review_datasets(state)
+    # if choice == "R":
+    #     state = state._replace(article_kind = 'review')
+    #     return controller.review_datasets(state)
     if choice == "F":
         state = state._replace(article_kind = 'review')
         return controller.edit_single_article(state)
@@ -66,7 +74,8 @@ def initial(state: State, choice) -> RxResp:
     if choice == "H":
         state = state._replace(article_kind = 'assign')
         return controller.assign_homicides(state)
-    raise Exception("Choice not supported")
+    state = state._replace(main_flow = flow_choice[choice])
+    return controller.main(state)
 
 
 @check_defaults
@@ -95,27 +104,42 @@ def new_label(state: State, choice) -> RxResp:
 @check_defaults
 def dataset(state: State, choice) -> RxResp:
     """
-    Respond to selection of desired dataset
+    Respond to selection of desired dataset for review
     """
-    if choice == 'P':
-        return controller.review_passed_articles(state)
-    if choice == "T":
-        review_dataset = 'TRAIN'
-    elif choice == "V":
-        review_dataset = 'VAL'
-    elif choice == "L":
-        review_dataset = 'VAL2'
-    elif choice == 'S':
-        review_dataset = 'TEST'
-    elif choice == "E":
-        review_dataset = 'TEST2'
-    elif choice == 'A':
-        state = state._replace(article_kind='reclassify')
-        review_dataset = 'CLASS'
-    else:
-        raise Exception('Unsupported dataset choice')
-    state = state._replace(review_dataset=review_dataset)
-    return controller.select_review_label(state)
+    dataset_choice = {
+        'P': 'PASSED',
+        'T': 'TRAIN',
+        'V': 'VAL',
+        'L': 'VAL2',
+        'S': 'TEST',
+        'E': 'TEST2',
+        'A': 'CLASS',
+        '1': '1',
+        '2': '2',
+    }
+    if choice not in dataset_choice:
+        raise Exception("Unsupported dataset choice")
+    # if choice == 'P':
+    #     return controller.review_passed_articles(state)
+    # if choice == "T":
+    #     review_dataset = 'TRAIN'
+    # elif choice == "V":
+    #     review_dataset = 'VAL'
+    # elif choice == "L":
+    #     review_dataset = 'VAL2'
+    # elif choice == 'S':
+    #     review_dataset = 'TEST'
+    # elif choice == "E":
+    #     review_dataset = 'TEST2'
+    # elif choice == 'A':
+    #     state = state._replace(article_kind='reclassify')
+    #     review_dataset = 'CLASS'
+    # else:
+    #     raise Exception('Unsupported dataset choice')
+    # state = state._replace(review_dataset=review_dataset)
+    #return controller.select_review_label(state)
+    state = state._replace(review_type = dataset_choice[choice])
+    return controller.main(state)
 
 
 @check_defaults

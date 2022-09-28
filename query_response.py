@@ -83,6 +83,15 @@ def unassigned_articles(state: State) -> RxResp:
     return controller.first_article(state)
 
 
+def articles_retrieved(state: State) -> RxResp:
+    """
+    Generic response to multiple articles retrieved
+    """
+    articles = state.outputs
+    state = state._replace(articles=articles, next_article=0,
+                            articles_retrieved = True)
+    return controller.main(state)
+
 def auto_assigned_articles(state: State) -> RxResp:
     """
     Response to query for autoclassified articles to be reclassified

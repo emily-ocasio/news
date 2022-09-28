@@ -354,6 +354,25 @@ def articles_to_assign_by_year_sql():
     """
 
 
+def articles_humanizing_group_sql() -> str:
+    """
+    SQL Statement to select group of articles for humaninizing test
+    Articles are based on homicide victim randomized groups
+    Assumes homicides are each assigned to single articles
+    """
+    return article_type_join_sql() + """
+        WHERE a.RecordId IN (
+            SELECT RecordId
+            FROM topics t
+            INNER JOIN assigned a2
+            ON t.ShrId = a2.ShrId
+            WHERE a2.GroupSet = ?
+        )
+        GROUP BY a.RecordId
+        ORDER BY a.RecordId
+    """
+
+
 def articles_to_reclassify_sql():
     """
     SQL statement to return auto-classified articles for reclassification

@@ -59,6 +59,8 @@ dataset_prompts = (
     "Review T[E]st2 dataset",
     "Review [A]uto classified articles",
     "Review previously [P]assed articles",
+    "Review Assigned Group [1]",
+    "Review Assigned Group [2]",
     "[C]ontinue without reviewing"
 )
 

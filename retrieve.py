@@ -149,6 +149,17 @@ def auto_assigned_articles_by_year(state: State) -> RxResp:
     return action2('query_db', sql=sql, begin=begin, end=end), state
 
 
+@query('articles_retrieved')
+def articles_humanizing_group(state: State) -> RxResp:
+    """
+    Retrieve articles already assigned based on test group
+    Occurs when user wants to enter humanizing assessment
+    """
+    sql = calc.articles_humanizing_group_sql()
+    group = state.review_dataset
+    return action2('query_db', sql=sql, group=group), state
+
+
 @query('homicides_by_month')
 def homicides_by_month(state: State) -> RxResp:
     """

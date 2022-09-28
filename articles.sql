@@ -59,6 +59,15 @@ CREATE TABLE IF NOT EXISTS gptAttempts (
     FOREIGN KEY(ShrId) REFERENCES shr("index")
 );
 
+CREATE TABLE IF NOT EXISTS assigned (
+    ShrId INTEGER NOT NULL,
+    ArticleCount INTEGER NOT NULL,
+    GroupSet TEXT,
+    Priority INTEGER,
+    GroupPriority INTEGER,
+    FOREIGN KEY(ShrId) REFERENCES shr("index")
+);
+
 CREATE INDEX IF NOT EXISTS attempts 
     ON gptAttempts(ShrId, RecordId, PostArticle, PreArticle);
 
@@ -68,3 +77,6 @@ CREATE INDEX IF NOT EXISTS topics_recordid ON topics(RecordId);
 CREATE INDEX IF NOT EXISTS "shr_id" ON shr(id);
 CREATE INDEX IF NOT EXISTS shr_date ON shr(YearMonth);
 CREATE INDEX IF NOT EXISTS shr_victim on shr(Victim);
+
+CREATE INDEX IF NOT EXISTS assigned_shrid 
+    ON assigned(ShrId, GroupSet, GroupPriority);
