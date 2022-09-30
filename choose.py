@@ -30,7 +30,8 @@ initial_prompts = (
     "[F]ix errors by Record Id",
     "Enter [N]ew labels",
     "[A]uto categorize by date",
-    "Assign articles to [H]omicides"
+    "Assign articles to [H]omicides",
+    "Determine humani[Z]ing coverage"
 )
 
 label_prompts = (
@@ -95,6 +96,13 @@ assign_prompts = (
     "Search for [V]ictim by name",
     "Display all homicides in a count[Y]",
     "[C]ontinue without assigning"
+)
+
+
+humanize_prompts = (
+    "[M]anually determine humanizing",
+    "[A]utomatically determine humanizing",
+    "[C]ontinue without humanizing"
 )
 
 
@@ -410,4 +418,40 @@ def gpt3_small_extract(state: State) -> RxResp:
     """
     msg = ("Select homicide number (k) to further extract for humanizing, "
             "or 0 to go back > ")
+    return action2('get_number_input', prompt=msg), state
+
+
+@choice('homicide_group')
+def homicide_group(state: State) -> RxResp:
+    """
+    Select numbered homicide group for humanizing
+    """
+    msg = "Enter group number (1-2) or 0 to go back > "
+    return action2('get_number_input', prompt=msg), state
+
+
+@choice('humanize_action')
+def humanize_action(state: State) -> RxResp:
+    """
+    Select the action to perform related to humanizing homicides
+    """
+    return choose_with_prompt(state, humanize_prompts,
+                "Which action would you like to perform?")
+
+
+@choice('homicide_to_humanize')
+def homicide_to_humanize(state: State) -> RxResp:
+    """
+    Select which homicide from group to manually humanize
+    """
+    msg = "Enter homicide number (k) to manually humanize or 0 to go back > "
+    return action2('get_number_input', prompt=msg), state
+
+
+@choice('humanize_homicide')
+def humanize_homicide(state: State) -> RxResp:
+    """
+    Select humanizing level for human ground truth
+    """
+    msg = "Select humanizing level (1-3) > "
     return action2('get_number_input', prompt=msg), state

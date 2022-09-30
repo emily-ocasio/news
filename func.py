@@ -20,6 +20,7 @@ def what_next(state: State):
         'query_retrieved': query_response.respond,
         'gpt3_responded': gpt3_response.respond,
         'classified': controller.increment_classify,
+        'main': controller.main
     }
     return dispatch[state.next_event](state)
 

@@ -160,6 +160,16 @@ def articles_humanizing_group(state: State) -> RxResp:
     return action2('query_db', sql=sql, group=group), state
 
 
+@query('homicides_retrieved')
+def homicides_by_group(state: State) -> RxResp:
+    """
+    Retrieve homicides based on assigned group
+    """
+    sql = calc.homicides_by_group_sql()
+    group = state.homicide_group
+    return action2('query_db',sql=sql,group=group), state
+
+
 @query('homicides_by_month')
 def homicides_by_month(state: State) -> RxResp:
     """
@@ -199,3 +209,13 @@ def assigned_homicides_by_article(state: State) -> RxResp:
     sql = calc.homicides_assigned_by_article_sql()
     record_id = state.articles[state.next_article]['RecordId']
     return action2('query_db', sql=sql, id=record_id), state
+
+
+@query('articles_retrieved')
+def articles_from_homicide(state: State) -> RxResp:
+    """
+    Retrieve articles that are assigned to a particular homicide
+    """
+    sql = calc.articles_from_homicide_sql()
+    shrid = state.homicides[state.current_homicide]['Id']
+    return action2('query_db', sql=sql, shrid=shrid), state

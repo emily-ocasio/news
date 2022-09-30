@@ -27,6 +27,7 @@ def main_flow(flow: str) -> Callable[[Reaction], Reaction]:
         return reaction
     return decorator_main
 
+
 def main(state: State) -> RxResp:
     """
     Central controller that dispatches based on main application workflow
@@ -35,12 +36,16 @@ def main(state: State) -> RxResp:
         raise Exception("Main flow route not supported")
     return dispatch[state.main_flow](state)
 
+
 @main_flow('start')
 def start_point(state: State) -> RxResp:
     """
     Initial starting point of application
     """
-    state = state._replace(article_kind = '', review_type = '')
+    state = state._replace(article_kind = '',
+                            review_type = '',
+                            homicide_group = '',
+                            homicides = tuple())
     if len(state.user) == 0:
         return choose.username(state)
     return choose.initial(state)
@@ -508,3 +513,75 @@ def gpt3_small_extract(state: State) -> RxResp:
     """
     state = state._replace(gpt3_action ='small_extract', gpt3_source='extract')
     return gpt3_prompt.prompt_gpt(state)
+
+@main_flow('humanize')
+def humanize_homicides(state: State) -> RxResp:
+    """
+    Flow for determining whether articles are humanizing
+        organized by homicide
+    """
+    # Always return to this flow as a default
+    state = state._replace(next_event = 'main')
+    if state.homicide_group == '':
+        # First time - select homicide group to work with
+        state = state._replace(homicides_retrieved = False,
+                                homicide_action = '')
+        return choose.homicide_group(state)
+    if not state.homicides_retrieved:
+        # Group selected but not retrieved yet
+        return retrieve.homicides_by_group(state)
+    if len(state.homicides) == 0:
+        # No homicides returned from query
+        msg = "No homicides in that group"
+        state = state._replace(main_flow = 'start')
+        return action2('print_message', msg), state
+    if state.homicide_action == '':
+        state = state._replace(current_homicide = -1,
+                                articles_retrieved = False,
+                                article_kind='assign')
+        return combine_actions(
+            from_reaction(display.homicides),
+            from_reaction(choose.humanize_action)
+        ), state
+    if state.homicide_action == 'manual':
+        if state.current_homicide == -1:
+            state = state._replace(articles = tuple(),
+                                    humanizing = '0')
+            return choose.homicide_to_humanize(state)
+        if not state.articles_retrieved:
+            return retrieve.articles_from_homicide(state)
+        if state.next_article >= len(state.articles):
+            state = state._replace(homicide_action = '',
+                                homicides_retrieved = False)
+            msg = "All articles manually humanized.\n"
+            return combine_actions(
+                action2('print_message', msg),
+                action2('wait_enter')
+            ), state
+        if int(state.humanizing) == 0:
+            state = state._replace(humanizing_saved = False)
+            msg = (f"\nHumanize article #{state.next_article+1} for victim "
+                f"{state.homicides[state.current_homicide]['Victim']}")
+            return combine_actions(
+                action2('print_message', message=msg),
+                from_reaction(display.article),
+                from_reaction(display.article_extracts),
+                from_reaction(choose.humanize_homicide)
+            ), state
+        if not state.humanizing_saved:
+            # Manual humanizing level just selected, must save
+            state = state._replace(humanizing_saved = True)
+            return save.homicide_humanizing(state)
+        # Humanzing level saved
+        msg = f"Humanizing level saved ({state.humanizing})"
+        state = state._replace(next_article = state.next_article+1)
+        return action2('print_message', message = msg), state
+    # Automatically humanize via GPT-3
+    state = state._replace(current_homicide = state.current_homicide+1)
+    if state.current_homicide >= len(state.homicides):
+        # Completed cycling through homicides
+        msg = "All homicides reviewed"
+        state = state._replace(homicide_action = '')
+        return action2('print_message', msg), state
+    msg = f"Victim: {state.homicides[state.current_homicide]['Victim']}"
+    return action2('print_message', msg), state

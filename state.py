@@ -27,7 +27,11 @@ class State(NamedTuple):
     matches: Rows = tuple()
     nomatches: Rows = tuple()
     homicides: Rows = tuple()
+    homicides_retrieved: bool = False
+    current_homicide: int = -1
+    homicide_action: str = ''
     homicides_assigned: Rows = tuple()
+    homicide_group: str = ''
     selected_homicide: int = 0
     selected_homicides: tuple[int,...] = tuple()
     victim: str = ''
@@ -58,6 +62,7 @@ class State(NamedTuple):
     pre_article_prompt: str = 'reporter'
     post_article_prompt: str = '3L_not3'
     humanizing: str = ''
+    humanizing_saved: bool = False
     extract: str = ''
     gpt3_prompt: str = ''
     gpt3_response: str = ''

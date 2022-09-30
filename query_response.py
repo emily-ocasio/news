@@ -92,6 +92,18 @@ def articles_retrieved(state: State) -> RxResp:
                             articles_retrieved = True)
     return controller.main(state)
 
+
+def homicides_retrieved(state: State) -> RxResp:
+    """
+    Response to multiple homicides retrived
+    """
+    homicides = state.outputs
+    state = state._replace(homicides=homicides,
+                            homicides_retrieved=True,
+                            current_homicide=-1)
+    return controller.main(state)
+
+
 def auto_assigned_articles(state: State) -> RxResp:
     """
     Response to query for autoclassified articles to be reclassified

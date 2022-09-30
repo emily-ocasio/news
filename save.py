@@ -168,3 +168,16 @@ def dates_cleanup(state: State) -> RxResp:
     """
     sql = calc.cleanup_sql()
     return action2('command_db', sql=sql), state
+
+
+def homicide_humanizing(state: State) -> RxResp:
+    """
+    Assign a manual (human ground truth) humanizing level to a specific
+        victim in an article
+    """
+    sql = calc.manual_humanizing_sql()
+    shr_id = state.homicides[state.current_homicide]['Id']
+    record_id = state.articles[state.next_article]['RecordId']
+    humanizing = state.humanizing
+    return action2('command_db', sql=sql, human=humanizing, shrid=shr_id,
+                    recordid=record_id), state

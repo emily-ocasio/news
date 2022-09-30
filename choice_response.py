@@ -23,7 +23,8 @@ def check_defaults(choice_reaction: Callable[[State, str], RxResp]) -> Reaction:
         if choice == 'Q':
             return controller.end_program(state)
         if choice == 'C':
-            return choose.initial(state)
+            state = state._replace(main_flow = 'start')
+            return controller.main(state)
         return choice_reaction(state, choice)
     return wrapper
 
@@ -56,7 +57,8 @@ def initial(state: State, choice) -> RxResp:
         'R': 'review',
         'F': 'single_review',
         'A': 'auto_categorize',
-        'H': 'assign'
+        'H': 'assign',
+        'Z': 'humanize',
     }
     if choice not in flow_choice:
         raise Exception("Choice not supported")
@@ -472,3 +474,57 @@ def manual_humanizing(state: State) -> RxResp:
         return controller.next_article(state)
     state = state._replace(humanizing = human)
     return controller.save_manual_humanizing(state)
+
+
+def homicide_group(state: State) -> RxResp:
+    """
+    Respond to user entering homicide group in order to humanize
+    """
+    group = state.outputs
+    if group in '0':
+        state = state._replace(main_flow = 'start')
+    state = state._replace(homicide_group = group)
+    if int(group) > 2:
+        state = state._replace(homicide_group = '')
+    return controller.main(state)
+
+
+@check_defaults
+def humanize_action(state: State, choice) -> RxResp:
+    """
+    Respond to user enter humanizing action to perform
+    """
+    action_choice = {
+        'M': 'manual',
+        'A': 'auto',
+        'C': 'end'
+    }
+    if choice not in action_choice:
+        raise Exception("Choice not supported")
+    state = state._replace(homicide_action = action_choice[choice])
+    return controller.main(state)
+
+
+def homicide_to_humanize(state: State) -> RxResp:
+    """
+    Respond to homicide humber for manual humanizing
+    """
+    selected = int(state.outputs)
+    if 0 < selected <= len(state.homicides):
+        state = state._replace(current_homicide = selected-1)
+    else:
+        state = state._replace(homicide_action = '')
+    return controller.main(state)
+
+
+def humanize_homicide(state: State) -> RxResp:
+    """
+    Respond to user choice of manual humanizing
+    Occurs after user has selected the humanizing level
+    Specifically within the homicide groups
+    """
+    human = state.outputs
+    if human =='' or not 1 <= int(human) <= 3:
+        return controller.main(state)
+    state = state._replace(humanizing = human)
+    return controller.main(state)

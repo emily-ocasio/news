@@ -236,17 +236,20 @@ def verify_article_sql() -> str:
     """
 
 
-def article_type_join_sql(index: str = "") -> str:
+def article_type_join_sql(index: str = "", extract: bool = False) -> str:
     """
     Initial portion of SQL statement joining articles with types
         and aggregating via binary encoding all the possible types
     """
     indexed_sql = "" if not index else f"INDEXED BY {index}"
+    extract_sql = ("" if not extract
+                    else ", t2.Extract, t2.SmallExtract, s.Victim")
     return f"""
         SELECT 
             a.*, 
             SUM(IIF(t.TypeID IN (7,8,9,10,12,13,19,21), 0, 1)) AS GoodTypes,
             SUM(1 << t.TypeId) as BinaryTypes
+            {extract_sql}
         FROM articles a {indexed_sql}
         JOIN articletypes t
         ON a.RecordId = t.RecordId
@@ -552,6 +555,44 @@ def homicides_assigned_by_article_sql() -> str:
         INNER JOIN topics t
         ON t.ShrId = v.Id
         WHERE RecordId = ?
+    """
+
+
+def homicides_by_group_sql() -> str:
+    """
+    SQL Statement to retrieve homicides based on priority group
+    Also computes humanizing status
+    """
+    return """
+        SELECT ROW_NUMBER() OVER (ORDER BY Victim) AS k, v.*,
+            MAX(IIF(t.Human = 3,1,0)) AS H,
+            MAX(IIF(t.HumanManual = 3,1,0)) AS HM
+        FROM view_shr v
+        INNER JOIN topics t
+        ON t.ShrId = v.Id
+        WHERE v.Id IN
+            (
+                SELECT ShrId
+                FROM assigned a
+                WHERE a.GroupSet = ?
+            )
+        GROUP BY v.Id
+    """
+
+
+def articles_from_homicide_sql() -> str:
+    """
+    SQL Statement to retrieve articles that have been already assigned to
+        a particular homicide
+    """
+    return article_type_join_sql(extract = True) + """
+        INNER JOIN topics t2
+        ON t2.RecordId = a.RecordId
+        INNER JOIN shr s
+        on t2.ShrId = s."Index"
+        WHERE t2.ShrId = ?
+        GROUP BY a.RecordId
+        ORDER BY a.RecordId
     """
 
 
@@ -1049,20 +1090,21 @@ def display_homicide_extracts(homicides: Rows) -> str:
     """
     Display all the homicide extracts
     """
-    def homicide_extract(homicide: Row) -> str:
-        """
-        Display extract for single homicide
-        """
-        victim = homicide['Victim']
-        extract = rich_to_str(homicide['Extract'])
-        small_extract = rich_to_str(homicide['SmallExtract'])
-        return (f"Extract for {victim}:\n{extract}\n\n"
-                    f"Small extract for {victim}:\n{small_extract}\n")
-
     if len(homicides) == 0:
         return ""
 
     return "\n".join(map(homicide_extract, homicides))
+
+
+def homicide_extract(homicide: Row) -> str:
+    """
+    Display extract for single homicide
+    """
+    victim = homicide['Victim']
+    extract = rich_to_str(homicide['Extract'])
+    small_extract = rich_to_str(homicide['SmallExtract'])
+    return (f"Extract for {victim}:\n{extract}\n\n"
+                f"Small extract for {victim}:\n{small_extract}\n")
 
 
 def remove_quotes(text: str) -> str:

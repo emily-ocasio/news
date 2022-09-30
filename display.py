@@ -32,6 +32,15 @@ def article(state: State) -> RxResp:
     ), state
 
 
+def article_extracts(state: State) -> RxResp:
+    """
+    Display extracts for that article
+    Occurs when showing article specific to a homicide
+    """
+    display = calc.homicide_extract(state.articles[state.next_article])
+    return action2('print_message', message = display), state
+
+
 def current_notes(state: State) -> RxResp:
     """
     Display current notes for article
@@ -118,4 +127,13 @@ def homicide_table(state: State) -> RxResp:
                     else f"({(state.homicide_month)})\n")
             + ("No homicides found" if len(state.homicides) == 0
                 else calc. homicide_table(state.homicides)))
+    return action2('print_message', message=msg), state
+
+
+def homicides(state: State) -> RxResp:
+    """
+    Display all homicides in a group
+    Occurs when reviewing homicides to determine humanizing
+    """
+    msg = calc.homicide_table(state.homicides)
     return action2('print_message', message=msg), state
