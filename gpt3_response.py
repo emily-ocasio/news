@@ -28,7 +28,7 @@ def respond(state: State) -> RxResp:
     return combine_actions(
         action2('print_message', msg),
         from_reaction(reaction),
-        action2('wait_enter'),
+        action2('no_op' if state.main_flow == 'humanize' else 'wait_enter'),
         from_reaction(controller.main if state.main_flow == 'humanize'
                         else controller.refresh_article)
     ), state

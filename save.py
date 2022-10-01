@@ -93,7 +93,9 @@ def gpt3_humanize(state: State) -> RxResp:
         victim in an article
     """
     sql = calc.gpt3_humanizing_sql()
-    homicide = state.homicides_assigned[state.selected_homicide]
+    homicide = (state.homicides[state.current_homicide]
+                    if state.main_flow == 'humanize'
+                    else state.homicides_assigned[state.selected_homicide])
     article = state.articles[state.next_article]
     shr_id = homicide['Id']
     record_id = article['RecordId']

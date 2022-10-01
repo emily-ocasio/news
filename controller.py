@@ -619,8 +619,10 @@ def humanize_homicides_auto(state: State) -> RxResp:
         # Auto humanizing completed for this homicide
         # (either because all articles analyzed or one article is humanizing)
         msg = "Auto-humanizing completed for "
-        msg = f"victim: {state.homicides[state.current_homicide]['Victim']}, "
-        msg += f"Number of articles: {len(state.articles)}"
+        msg += f"victim: {state.homicides[state.current_homicide]['Victim']}, "
+        msg += f"Id: {state.homicides[state.current_homicide]['Id']}, "
+        msg += f"Number of articles: {len(state.articles)}, "
+        msg += f"Humanizing = ({state.homicides[state.current_homicide]['H']})"
         state = state._replace(current_homicide = state.current_homicide+1,
                                     articles = tuple(),
                                     humanizing = '0',
@@ -653,15 +655,28 @@ def humanize_homicides_auto_gpt3(state: State) -> RxResp:
                                 gpt3_action = 'small_extract',
                                 gpt3_source = 'extract')
         return gpt3_prompt.prompt_gpt(state)
-    if not state.humanizing_saved:
-        msg = f"Article #{state.next_article+1} of {len(state.articles)}:"
-        msg += "\nAuto humanizing..."
-        state = state._replace(humanizing_saved = True)
-        return combine_actions(
-            action2('print_message', message=msg),
-            from_reaction(retrieve.refreshed_homicide)
-        ), state
-    msg = "Humanizing saved"
-    state = state._replace(humanizing_saved = False,
-                            next_article = state.next_article+1)
-    return action2('print_message', msg), state
+    if not state.articles[state.next_article]['Human']:
+        # Final GPT-3 Humanizing not yet done - do it now
+        if state.refresh_article:
+            return refresh_article(state)
+        state = state._replace(pre_article_prompt = 'few-shot2',
+                                post_article_prompt = 'few-shot',
+                                gpt3_action = 'humanize',
+                                gpt3_source = 'small')
+        return gpt3_prompt.prompt_gpt(state)
+    # Auto humanizing complete
+    state = state._replace(next_article = state.next_article+1)
+    return retrieve.refreshed_homicide(state)
+    # if not state.humanizing_saved:
+    #     msg = f"Article #{state.next_article+1} of {len(state.articles)}"
+    #     msg += "Humanizing level is "
+    #     msg += f"({state.articles[state.next_article]['Human']})"
+    #     state = state._replace(humanizing_saved = True)
+    #     return combine_actions(
+    #         action2('print_message', message=msg),
+    #         from_reaction(retrieve.refreshed_homicide)
+    #     ), state
+    # msg = "Humanizing saved"
+    # state = state._replace(humanizing_saved = False,
+    #                         next_article = state.next_article+1)
+    # return action2('print_message', msg), state

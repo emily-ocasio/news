@@ -243,7 +243,7 @@ def article_type_join_sql(index: str = "", extract: bool = False) -> str:
     """
     indexed_sql = "" if not index else f"INDEXED BY {index}"
     extract_sql = ("" if not extract
-                    else ", t2.Extract, t2.SmallExtract, s.Victim")
+                    else ", t2.Extract, t2.SmallExtract, s.Victim, t2.Human")
     return f"""
         SELECT 
             a.*, 

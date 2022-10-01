@@ -195,7 +195,7 @@ def prompt_gpt(state: State) -> RxResp:
     if state.gpt3_source == 'article':
         article = state.articles[state.next_article]['FullText']
     elif state.gpt3_source == 'small':
-        article = (state.articles[state.next_article]['Extract']
+        article = (state.articles[state.next_article]['SmallExtract']
             if state.main_flow == 'humanize'
             else homicide['SmallExtract'])
     else:
