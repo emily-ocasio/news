@@ -14,7 +14,8 @@ def respond(state: State) -> RxResp:
     """
     response, prompt = state.outputs
     msg = calc.prompt_response(prompt, response)
-    state = state._replace(gpt3_prompt = prompt, gpt3_response = response)
+    state = state._replace(gpt3_prompt = prompt, gpt3_response = response,
+                            refresh_article = True)
     if state.gpt3_action in ('extract','small_extract'):
         state = state._replace(extract = calc.remove_quotes(response))
         reaction = save.gpt3_extract
@@ -28,5 +29,6 @@ def respond(state: State) -> RxResp:
         action2('print_message', msg),
         from_reaction(reaction),
         action2('wait_enter'),
-        from_reaction(controller.refresh_article)
+        from_reaction(controller.main if state.main_flow == 'humanize'
+                        else controller.refresh_article)
     ), state

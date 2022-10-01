@@ -94,6 +94,18 @@ def refreshed_article(state: State) -> RxResp:
     return action2('query_db', sql=sql, id=article_id), state
 
 
+@query('refreshed_article')
+def refreshed_article_with_extract(state: State) -> RxResp:
+    """
+    Retrieve (refresh) current article, plus associated extracts
+    """
+    sql = calc.single_article_with_extracts_sql()
+    shrid = state.homicides[state.current_homicide]['Id']
+    article_id = state.articles[state.next_article]['RecordId']
+    return action2('query_db', sql=sql,
+                        shrid=shrid, article_id=article_id), state
+
+
 @query('many_articles')
 def passed_articles(state: State) -> RxResp:
     """
@@ -209,6 +221,16 @@ def assigned_homicides_by_article(state: State) -> RxResp:
     sql = calc.homicides_assigned_by_article_sql()
     record_id = state.articles[state.next_article]['RecordId']
     return action2('query_db', sql=sql, id=record_id), state
+
+
+@query('refreshed_homicide')
+def refreshed_homicide(state: State) -> RxResp:
+    """
+    Retrieve single homicide again to refresh humanizing information
+    """
+    sql = calc.homicide_refreshed_sql()
+    shrid = state.homicides[state.current_homicide]['Id']
+    return action2('query_db', sql=sql, shrid=shrid), state
 
 
 @query('articles_retrieved')

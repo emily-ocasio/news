@@ -524,7 +524,7 @@ def humanize_homicide(state: State) -> RxResp:
     Specifically within the homicide groups
     """
     human = state.outputs
-    if human =='' or not 1 <= int(human) <= 3:
+    if human =='' or not 0 <= int(human) <= 3:
         return controller.main(state)
     state = state._replace(humanizing = human)
     return controller.main(state)

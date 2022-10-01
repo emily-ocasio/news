@@ -188,16 +188,22 @@ def prompt_gpt(state: State) -> RxResp:
     """
     This is the prompt for the GPT model.
     """
+    homicide = (state.homicides[state.current_homicide]
+        if state.main_flow == 'humanize'
+        else state.homicides_assigned[state.selected_homicide])
     pre_article = pre_article_prompts[state.pre_article_prompt]
     if state.gpt3_source == 'article':
         article = state.articles[state.next_article]['FullText']
     elif state.gpt3_source == 'small':
-        article = (
-            state.homicides_assigned[state.selected_homicide]['SmallExtract'])
+        article = (state.articles[state.next_article]['Extract']
+            if state.main_flow == 'humanize'
+            else homicide['SmallExtract'])
     else:
-        article = state.homicides_assigned[state.selected_homicide]['Extract']
+        article = (state.articles[state.next_article]['Extract']
+            if state.main_flow == 'humanize'
+            else homicide['Extract'])
     post_article = post_article_prompts[state.post_article_prompt]
-    victim = state.homicides_assigned[state.selected_homicide]['Victim']
+    victim = homicide['Victim']
     prompt, msg = calc.full_gpt3_prompt(pre_article=pre_article,
                 post_article=post_article,
                 article = article,

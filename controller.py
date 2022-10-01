@@ -260,7 +260,9 @@ def refresh_article(state: State) -> RxResp:
     Refresh article after change was made
     Occurs within assignment, e.g. after new notes entered
     """
-    return retrieve.refreshed_article(state)
+    return (retrieve.refreshed_article_with_extract(state)
+                if state.main_flow == 'humanize'
+                else retrieve.refreshed_article(state))
 
 
 @main_flow('review')
@@ -544,44 +546,122 @@ def humanize_homicides(state: State) -> RxResp:
             from_reaction(choose.humanize_action)
         ), state
     if state.homicide_action == 'manual':
-        if state.current_homicide == -1:
-            state = state._replace(articles = tuple(),
-                                    humanizing = '0')
-            return choose.homicide_to_humanize(state)
-        if not state.articles_retrieved:
-            return retrieve.articles_from_homicide(state)
-        if state.next_article >= len(state.articles):
-            state = state._replace(homicide_action = '',
+        return humanize_homicides_manual(state)
+    return humanize_homicides_auto(state)
+
+
+def humanize_homicides_manual(state: State) -> RxResp:
+    """
+    Sub-flow for manual humanizing of the homicides by group
+    Occurs when manual option is selected
+    """
+    if state.current_homicide == -1:
+        state = state._replace(articles = tuple(),
+                                humanizing = '')
+        return choose.homicide_to_humanize(state)
+    if not state.articles_retrieved:
+        return retrieve.articles_from_homicide(state)
+    if state.next_article >= len(state.articles):
+        state = state._replace(homicide_action = '',
+                            homicides_retrieved = False)
+        msg = "All articles manually humanized.\n"
+        return combine_actions(
+            action2('print_message', msg),
+            action2('wait_enter')
+        ), state
+    if state.humanizing == '0':
+        state = state._replace(homicide_action = '',
+                                articles_retrieved = False,
                                 homicides_retrieved = False)
-            msg = "All articles manually humanized.\n"
-            return combine_actions(
-                action2('print_message', msg),
-                action2('wait_enter')
-            ), state
-        if int(state.humanizing) == 0:
-            state = state._replace(humanizing_saved = False)
-            msg = (f"\nHumanize article #{state.next_article+1} for victim "
-                f"{state.homicides[state.current_homicide]['Victim']}")
-            return combine_actions(
-                action2('print_message', message=msg),
-                from_reaction(display.article),
-                from_reaction(display.article_extracts),
-                from_reaction(choose.humanize_homicide)
-            ), state
-        if not state.humanizing_saved:
-            # Manual humanizing level just selected, must save
-            state = state._replace(humanizing_saved = True)
-            return save.homicide_humanizing(state)
-        # Humanzing level saved
-        msg = f"Humanizing level saved ({state.humanizing})"
-        state = state._replace(next_article = state.next_article+1)
-        return action2('print_message', message = msg), state
-    # Automatically humanize via GPT-3
-    state = state._replace(current_homicide = state.current_homicide+1)
+        return action2('no_op'), state
+    if state.humanizing == '' or int(state.humanizing) == 0:
+        state = state._replace(humanizing_saved = False)
+        msg = (f"\nHumanize article #{state.next_article+1} for victim "
+            f"{state.homicides[state.current_homicide]['Victim']}")
+        return combine_actions(
+            action2('print_message', message=msg),
+            from_reaction(display.article),
+            from_reaction(display.article_extracts),
+            from_reaction(choose.humanize_homicide)
+        ), state
+    if not state.humanizing_saved:
+        # Manual humanizing level just selected, must save
+        state = state._replace(humanizing_saved = True)
+        return save.homicide_humanizing(state)
+    # Humanzing level saved
+    msg = f"Humanizing level saved ({state.humanizing})"
+    state = state._replace(next_article = state.next_article+1,
+                            humanizing = '')
+    return action2('print_message', message = msg), state
+
+
+def humanize_homicides_auto(state: State) -> RxResp:
+    """
+    Sub-flow for automatically humanizing homicides in a group via GPT-3
+    Occurs when auto function is selected
+    """
+    if state.current_homicide == -1:
+        # First time - start auto humanizing
+        state = state._replace(articles = tuple(),
+                                humanizing = '0',
+                                humanizing_saved = False)
+        state = state._replace(current_homicide = state.current_homicide+1)
     if state.current_homicide >= len(state.homicides):
         # Completed cycling through homicides
-        msg = "All homicides reviewed"
+        msg = "All homicides humanized automatically"
         state = state._replace(homicide_action = '')
         return action2('print_message', msg), state
-    msg = f"Victim: {state.homicides[state.current_homicide]['Victim']}"
+    if not state.articles_retrieved:
+        # Retrieve articles for this homicide
+        return retrieve.articles_from_homicide(state)
+    if (state.next_article >= len(state.articles)
+            or state.homicides[state.current_homicide]['H'] == 3):
+        # Auto humanizing completed for this homicide
+        # (either because all articles analyzed or one article is humanizing)
+        msg = "Auto-humanizing completed for "
+        msg = f"victim: {state.homicides[state.current_homicide]['Victim']}, "
+        msg += f"Number of articles: {len(state.articles)}"
+        state = state._replace(current_homicide = state.current_homicide+1,
+                                    articles = tuple(),
+                                    humanizing = '0',
+                                    humanizing_saved = False,
+                                    articles_retrieved = False)
+        return action2('print_message', message=msg), state
+    return humanize_homicides_auto_gpt3(state)
+
+
+def humanize_homicides_auto_gpt3(state: State) -> RxResp:
+    """
+    Sub-flow for automatically humanizing homicides
+    This includes the portion that calls out GPT-3
+    """
+    if not state.articles[state.next_article]['Extract']:
+        # Primary extract not yet created - create now
+        if state.refresh_article:
+            return refresh_article(state)
+        state = state._replace(pre_article_prompt = 'article',
+                                post_article_prompt = 'alsopast4',
+                                gpt3_action = 'extract',
+                                gpt3_source = 'article')
+        return gpt3_prompt.prompt_gpt(state)
+    if not state.articles[state.next_article]['SmallExtract']:
+        # Secondary "small" extract not yet created - create it now
+        if state.refresh_article:
+            return refresh_article(state)
+        state = state._replace(pre_article_prompt = 'extract',
+                                post_article_prompt = 'rewrite4',
+                                gpt3_action = 'small_extract',
+                                gpt3_source = 'extract')
+        return gpt3_prompt.prompt_gpt(state)
+    if not state.humanizing_saved:
+        msg = f"Article #{state.next_article+1} of {len(state.articles)}:"
+        msg += "\nAuto humanizing..."
+        state = state._replace(humanizing_saved = True)
+        return combine_actions(
+            action2('print_message', message=msg),
+            from_reaction(retrieve.refreshed_homicide)
+        ), state
+    msg = "Humanizing saved"
+    state = state._replace(humanizing_saved = False,
+                            next_article = state.next_article+1)
     return action2('print_message', msg), state

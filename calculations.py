@@ -287,6 +287,24 @@ def single_article_sql():
     """
 
 
+def single_article_with_extracts_sql():
+    """
+    SQL statement to return a specific article by its recordId
+        joined with topics to provide specific extracts referring
+        to a specific homicide
+    """
+    return article_type_join_sql(extract = True) + """
+        INNER JOIN topics t2
+        ON t2.RecordId = a.RecordId
+        INNER JOIN shr s
+        on t2.ShrId = s."Index"
+        WHERE t2.ShrId = ?
+        AND t2.RecordId = ?
+        GROUP BY a.RecordId
+        ORDER BY a.RecordId
+    """
+
+
 def passed_articles_sql() -> str:
     """
     SQL Statement to return articles with status 'P' (passed)
@@ -565,8 +583,8 @@ def homicides_by_group_sql() -> str:
     """
     return """
         SELECT ROW_NUMBER() OVER (ORDER BY Victim) AS k, v.*,
-            MAX(IIF(t.Human = 3,1,0)) AS H,
-            MAX(IIF(t.HumanManual = 3,1,0)) AS HM
+            MAX(IIF(t.Human = 3,3,IIF(t.Human>0,1,0))) AS H,
+            MAX(IIF(t.HumanManual = 3,3,IIF(t.HumanManual>0,1,0))) AS HM
         FROM view_shr v
         INNER JOIN topics t
         ON t.ShrId = v.Id
@@ -578,6 +596,24 @@ def homicides_by_group_sql() -> str:
             )
         GROUP BY v.Id
     """
+
+
+def homicide_refreshed_sql() -> str:
+    """
+    SQL Statement to retrieve single homicide again to refresh
+        humanizing status
+    """
+    return """
+        SELECT ROW_NUMBER() OVER (ORDER BY Victim) AS k, v.*,
+            MAX(IIF(t.Human = 3,3,IIF(t.Human>0,1,0))) AS H,
+            MAX(IIF(t.HumanManual = 3,3,IIF(t.HumanManual>0,1,0))) AS HM
+        FROM view_shr v
+        INNER JOIN topics t
+        ON t.ShrId = v.Id
+        WHERE v.Id = ?
+        GROUP BY v.Id
+    """
+
 
 
 def articles_from_homicide_sql() -> str:

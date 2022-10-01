@@ -120,7 +120,9 @@ def gpt3_extract(state: State) -> RxResp:
     sql = (calc.gpt3_extract_sql()
             if state.gpt3_action == 'extract'
             else calc.gpt3_small_extract_sql())
-    homicide = state.homicides_assigned[state.selected_homicide]
+    homicide = (state.homicides[state.current_homicide]
+                if state.main_flow == 'humanize'
+                else state.homicides_assigned[state.selected_homicide])
     article = state.articles[state.next_article]
     shr_id = homicide['Id']
     record_id = article['RecordId']

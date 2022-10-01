@@ -140,5 +140,20 @@ def refreshed_article(state: State) -> RxResp:
     state = state._replace(articles = calc.tuple_replace(
                                             state.articles,
                                             state.next_article,
+                                            row),
+                            refresh_article = False)
+    return (controller.main(state) if state.main_flow == 'humanize'
+            else controller.next_article(state))
+
+
+def refreshed_homicide(state: State) -> RxResp:
+    """
+    Reset current homicide row in state after being refreshed from database
+    Occurs after automatically getting humanizing information for an article
+    """
+    row = state.outputs[0]
+    state = state._replace(homicides = calc.tuple_replace(
+                                            state.homicides,
+                                            state.current_homicide,
                                             row))
-    return controller.next_article(state)
+    return controller.main(state)
