@@ -609,7 +609,8 @@ def humanize_homicides_auto(state: State) -> RxResp:
     if state.current_homicide >= len(state.homicides):
         # Completed cycling through homicides
         msg = "All homicides humanized automatically"
-        state = state._replace(homicide_action = '')
+        state = state._replace(homicide_action = '',
+                                homicides_retrieved = False)
         return action2('print_message', msg), state
     if not state.articles_retrieved:
         # Retrieve articles for this homicide
@@ -619,6 +620,7 @@ def humanize_homicides_auto(state: State) -> RxResp:
         # Auto humanizing completed for this homicide
         # (either because all articles analyzed or one article is humanizing)
         msg = "Auto-humanizing completed for "
+        msg += f"#{state.current_homicide+1}/{len(state.homicides)}, "
         msg += f"victim: {state.homicides[state.current_homicide]['Victim']}, "
         msg += f"Id: {state.homicides[state.current_homicide]['Id']}, "
         msg += f"Number of articles: {len(state.articles)}, "
@@ -667,16 +669,3 @@ def humanize_homicides_auto_gpt3(state: State) -> RxResp:
     # Auto humanizing complete
     state = state._replace(next_article = state.next_article+1)
     return retrieve.refreshed_homicide(state)
-    # if not state.humanizing_saved:
-    #     msg = f"Article #{state.next_article+1} of {len(state.articles)}"
-    #     msg += "Humanizing level is "
-    #     msg += f"({state.articles[state.next_article]['Human']})"
-    #     state = state._replace(humanizing_saved = True)
-    #     return combine_actions(
-    #         action2('print_message', message=msg),
-    #         from_reaction(retrieve.refreshed_homicide)
-    #     ), state
-    # msg = "Humanizing saved"
-    # state = state._replace(humanizing_saved = False,
-    #                         next_article = state.next_article+1)
-    # return action2('print_message', msg), state

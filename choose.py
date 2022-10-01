@@ -426,7 +426,7 @@ def homicide_group(state: State) -> RxResp:
     """
     Select numbered homicide group for humanizing
     """
-    msg = "Enter group number (1-2) or 0 to go back > "
+    msg = "Enter group number (1-4) or 0 to go back > "
     return action2('get_number_input', prompt=msg), state
 
 
