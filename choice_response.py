@@ -484,7 +484,7 @@ def homicide_group(state: State) -> RxResp:
     if group in '0':
         state = state._replace(main_flow = 'start')
     state = state._replace(homicide_group = group)
-    if int(group) > 4:
+    if int(group) > 5:
         state = state._replace(homicide_group = '')
     return controller.main(state)
 
