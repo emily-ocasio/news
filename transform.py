@@ -1,7 +1,7 @@
 """
 test transformers sentiment analysis
 """
-from transformers import pipeline
+from transformers.pipelines import pipeline
 
 gen = pipeline('sentiment-analysis')
 
