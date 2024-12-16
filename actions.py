@@ -11,7 +11,7 @@ from secr_apis.gpt3_key import GPT3_API_KEY
 from state import State, Action
 
 
-db = sqlite3.connect('newarticles.db')
+db: sqlite3.Connection = sqlite3.connect('newarticles.db')
 db.row_factory = sqlite3.Row
 
 
@@ -95,7 +95,7 @@ def query_db(sql, **kwargs):
     Execute query SQL statement and collect results
     """
     args = tuple(kwargs.values())
-    cur: Cursor = db.execute(sql, args)
+    cur: Cursor = db.execute(sql, args) #type: ignore
     rows = tuple(row for row in cur)
     return rows
 
@@ -208,15 +208,20 @@ def prompt_gpt3(prompt, msg, model = 'davinci'):
     """
     Prompt GPT3
     """
-    models = {'curie': 'text-curie-001', 'davinci': 'text-davinci-002'}
+    models = {'curie': 'text-curie-001', 'davinci': 'text-davinci-003',}
     openai.api_key = GPT3_API_KEY
-    response = openai.Completion.create(
+    response = openai.chat.completions.create(
         model=models[model],
-        prompt=prompt,
+        # messages=[
+        # {
+        #     'role': 'user', 'content': prompt
+        # }],
+        prompt = prompt,
         temperature=0,
         max_tokens=256,
         top_p=1,
         frequency_penalty=0,
         presence_penalty=0
-    )
+    ) #type: ignore
     return response.choices[0].text, msg
+    # return response.choices[0].message.content, msg
