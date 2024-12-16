@@ -9,7 +9,8 @@ from functools import reduce
 
 from flashtext import KeywordProcessor  # type: ignore
 from colorama import Style
-from rich.console import Console, Text
+from rich.console import Console
+from rich.text import Text
 from rich.table import Table
 
 from mass_towns import townlist

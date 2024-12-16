@@ -7,6 +7,11 @@ import controller
 import choose
 import calculations as calc
 
+class ChoiceException(Exception):
+    """
+    Exception for invalid choice
+    """
+
 
 def check_defaults(choice_reaction: Callable[[State, str], RxResp]) -> Reaction:
     """
@@ -61,7 +66,7 @@ def initial(state: State, choice) -> RxResp:
         'Z': 'humanize',
     }
     if choice not in flow_choice:
-        raise Exception("Choice not supported")
+        raise ChoiceException("Choice not supported")
     if choice == "N":
         state = state._replace(article_kind = 'new')
         return controller.new_labels(state)
@@ -120,7 +125,7 @@ def dataset(state: State, choice) -> RxResp:
         '2': '2',
     }
     if choice not in dataset_choice:
-        raise Exception("Unsupported dataset choice")
+        raise ChoiceException("Unsupported dataset choice")
     # if choice == 'P':
     #     return controller.review_passed_articles(state)
     # if choice == "T":
@@ -163,7 +168,7 @@ def match(state: State, choice) -> RxResp:
     elif choice == "N":
         matches = state.nomatches
     else:
-        raise Exception("Choice not supported")
+        raise ChoiceException("Choice not supported")
     state = state._replace(articles=matches)
     return controller.select_location(state)
 
@@ -174,7 +179,7 @@ def location(state: State, choice) -> RxResp:
     Respond to choice whether to review Mass or non-Mass articles
     """
     if choice not in 'MN':
-        raise Exception("Choice not supported")
+        raise ChoiceException("Choice not supported")
     state = state._replace(
         articles=calc.located_articles(state.articles, choice == 'M')
     )
@@ -187,7 +192,7 @@ def article_type(state: State, choice) -> RxResp:
     Respond to choice whether to review articles of good or bad type
     """
     if choice not in 'GB':
-        raise Exception("Choice not supported")
+        raise ChoiceException("Choice not supported")
     state = state._replace(
         articles=calc.filter_by_type(state.articles, choice == 'G')
     )
@@ -241,7 +246,7 @@ def years_to_assign(state: State) -> RxResp:
         begin = state.outputs[0]
         end = state.outputs[1]
     else:
-        raise Exception('Incorrect year input')
+        raise ChoiceException('Incorrect year input')
     state = state._replace(assign_begin=f"{begin}0101", assign_end=f"{end}1231")
     return choose.months_to_assign(state)
 
@@ -285,7 +290,7 @@ def years_to_reclassify(state: State) -> RxResp:
         begin = state.outputs[0]
         end = state.outputs[1]
     else:
-        raise Exception("Incorrect year input")
+        raise ChoiceException("Incorrect year input")
     state = state._replace(reclassify_begin=f"{begin}0101",
                             reclassify_end=f"{end}1231")
     return controller.reclassify_by_year(state)
@@ -338,7 +343,7 @@ def assign_choice(state: State, choice) -> RxResp:
         return controller.save_assign_status(state)
     if choice == 'T':
         return controller.choose_new_note(state)
-    raise Exception(f"Unsupported dataset choice <{choice}>")
+    raise ChoiceException(f"Unsupported dataset choice <{choice}>")
 
 
 def homicide_month(state: State) -> RxResp:
@@ -500,7 +505,7 @@ def humanize_action(state: State, choice) -> RxResp:
         'C': 'end'
     }
     if choice not in action_choice:
-        raise Exception("Choice not supported")
+        raise ChoiceException("Choice not supported")
     state = state._replace(homicide_action = action_choice[choice])
     return controller.main(state)
 
