@@ -7,6 +7,7 @@ from sqlite3 import Cursor
 from functools import wraps
 from collections.abc import Callable
 import openai
+from openai import OpenAI
 from secr_apis.gpt3_key import GPT3_API_KEY
 from state import State, Action
 
@@ -206,11 +207,11 @@ def get_month_input(prompt):
 @actiondef
 def prompt_gpt3(prompt, msg, model = 'davinci'):
     """
-    Prompt GPT3
+    Prompt GPT3 - use for older models only
     """
     models = {'curie': 'text-curie-001', 'davinci': 'text-davinci-003',}
     openai.api_key = GPT3_API_KEY
-    response = openai.chat.completions.create(
+    response = openai.completions.create(
         model=models[model],
         # messages=[
         # {
@@ -222,6 +223,51 @@ def prompt_gpt3(prompt, msg, model = 'davinci'):
         top_p=1,
         frequency_penalty=0,
         presence_penalty=0
-    ) #type: ignore
+    )
     return response.choices[0].text, msg
     # return response.choices[0].message.content, msg
+
+@actiondef
+def prompt_gpt(system, user, model = 'mini', response_type = None):
+    """
+    Prompt GPT - newer API for GPT3.5 and later models
+    When response_type is included, the beta Structured Output
+        endpoint will be used
+        response_type should be a pydantic type with expressive
+        attribute names that will be used by the model to respond
+    """
+    models = {'mini': 'gpt-4o-mini'}
+    openai.api_key = GPT3_API_KEY
+    client = OpenAI()
+    if response_type:
+        response = client.beta.chat.completions.parse(
+            model=models[model],
+            seed = 42,
+            messages=[
+            {
+                'role': 'system', 'content': system
+            },
+            {
+                'role': 'user', 'content': user
+            }],
+            temperature=0,
+            max_tokens=256,
+            response_format = response_type
+        )
+        return response.choices[0].message.parsed
+
+    response = client.chat.completions.create(
+    model=models[model],
+    seed = 42,
+    messages=[
+    {
+        'role': 'system', 'content': system
+    },
+    {
+        'role': 'user', 'content': user
+    }],
+    temperature=0,
+    max_tokens=256
+    )
+    return response.choices[0].message.content
+    
