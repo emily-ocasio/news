@@ -115,7 +115,8 @@ def increment_article(state: State) -> RxResp:
     state = state._replace(next_article=state.next_article+1)
     if (state.next_article < len(state.articles)
             and (state.article_kind == 'assign'
-            or state.articles[state.next_article]['Status'] in 'MP')):
+            or (state.articles[state.next_article]['Status'] is not None
+            and state.articles[state.next_article]['Status'] in 'MP'))):
         current_month = calc.year_month_from_article(
             state.articles[state.next_article])
         state = state._replace(homicide_month=current_month,
