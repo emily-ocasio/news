@@ -7,6 +7,8 @@ import save
 import controller
 import calculations as calc
 
+class GPTResponseException(Exception):
+    """Exception for GPT response errors"""
 
 def respond(state: State) -> RxResp:
     """
@@ -24,7 +26,7 @@ def respond(state: State) -> RxResp:
             humanizing=calc.humanizing_from_response(response, 'word'))
         reaction = save.gpt3_humanize
     else:
-        raise Exception('Unknown GPT action')
+        raise GPTResponseException('Unknown GPT action')
     return combine_actions(
         action2('print_message', msg),
         from_reaction(reaction),
