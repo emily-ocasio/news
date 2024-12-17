@@ -13,6 +13,12 @@ import calculations as calc
 
 dispatch: dict[str, Reaction] = {}
 
+class ControlException(Exception):
+    """
+    Custom exception for control flow
+    """
+
+
 def main_flow(flow: str) -> Callable[[Reaction], Reaction]:
     """
     Decorator for assigning main flow routes
@@ -22,7 +28,7 @@ def main_flow(flow: str) -> Callable[[Reaction], Reaction]:
     """
     def decorator_main(reaction: Reaction) -> Reaction:
         if flow in dispatch:
-            raise Exception(f"Main flow route {flow} duplicated")
+            raise ControlException(f"Main flow route {flow} duplicated")
         dispatch[flow] = reaction
         return reaction
     return decorator_main
@@ -33,7 +39,7 @@ def main(state: State) -> RxResp:
     Central controller that dispatches based on main application workflow
     """
     if state.main_flow not in dispatch:
-        raise Exception("Main flow route not supported")
+        raise ControlException("Main flow route not supported")
     return dispatch[state.main_flow](state)
 
 

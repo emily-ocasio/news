@@ -147,7 +147,7 @@ def label(state: State) -> RxResp:
                + (('show e[X]tra lines',) if state.remaining_lines
                   else tuple())
                )
-    allow_return = (state.article_kind in ('review', 'assign', 'reclassify'))
+    allow_return = state.article_kind in ('review', 'assign', 'reclassify')
     prompt, choices = calc.unified_prompt(prompts,
                                             allow_return=allow_return,
                                             width=state.terminal_size[0])

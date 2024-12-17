@@ -1,3 +1,4 @@
+#pylint: skip-file
 import sqlite3
 from flashtext import KeywordProcessor #type: ignore
 from mass_towns import townlist
@@ -50,7 +51,7 @@ for article in rows:
 
     print()
     print()
-    print
+    print()
 
 print(f"In Mass: {count_mass}")
 print(f"Not in Mass: {count_other}")

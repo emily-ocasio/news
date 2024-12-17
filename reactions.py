@@ -1,4 +1,6 @@
+#pylint: skip-file
 # from token import RARROW
+
 from actions import *
 from actionutil import combine_actions, action2, RxResp
 from calculations import *
