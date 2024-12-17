@@ -30,6 +30,7 @@ initial_prompts = (
     "[F]ix errors by Record Id",
     "Enter [N]ew labels",
     "[A]uto categorize by date",
+    "[S]econd filtering via GPT",
     "Assign articles to [H]omicides",
     "Determine humani[Z]ing coverage"
 )

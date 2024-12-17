@@ -314,6 +314,17 @@ def review_datasets(state: State) -> RxResp:
 #         return choose.years_to_reclassify(state)
 #     return choose.review_label(state)
 
+@main_flow('second_filter')
+def second_filter(state: State) -> RxResp:
+    """
+    Second filter for articles
+    This is selected to call GPT4 (or above) to assign a more
+    precise class to the articles filtered as Mass. homicides
+    via the first regex/NER based pass
+    """
+    
+    return action2('no-op'), state
+
 
 def retrieve_verified(state: State) -> RxResp:
     """

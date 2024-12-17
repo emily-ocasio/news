@@ -63,16 +63,15 @@ def initial(state: State, choice) -> RxResp:
         'F': 'single_review',
         'A': 'auto_categorize',
         'H': 'assign',
+        'S': 'second_filter',
         'Z': 'humanize',
     }
     if choice not in flow_choice:
         raise ChoiceException("Choice not supported")
+    # These options have not yet been migrated to the main controller flow
     if choice == "N":
         state = state._replace(article_kind = 'new')
         return controller.new_labels(state)
-    # if choice == "R":
-    #     state = state._replace(article_kind = 'review')
-    #     return controller.review_datasets(state)
     if choice == "F":
         state = state._replace(article_kind = 'review')
         return controller.edit_single_article(state)
@@ -81,6 +80,7 @@ def initial(state: State, choice) -> RxResp:
     if choice == "H":
         state = state._replace(article_kind = 'assign')
         return controller.assign_homicides(state)
+    # The remaining options are part of the main controller flow
     state = state._replace(main_flow = flow_choice[choice])
     return controller.main(state)
 
