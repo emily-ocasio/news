@@ -350,7 +350,8 @@ def filter_articles(state: State) -> RxResp:
                                 homicide_filter_status = 'begin')
         return main(state)
     else:
-        raise ControlException("Invalid filter status")
+        raise ControlException("Invalid filter status: "
+                               f"{state.homicide_filter_status}")
 
 def retrieve_verified(state: State) -> RxResp:
     """

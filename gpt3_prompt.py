@@ -207,6 +207,8 @@ system_prompts = {
     "'killing by law enforcement' "
     "(this means the killing was done by the police "
     "while responding to someone committing a crime)\n"
+    "'fictional homicide' (article mentions homicide "
+    "in a book, movie, play, etc., not in real life)\n"
     "'no homicide in article'"
 }
 

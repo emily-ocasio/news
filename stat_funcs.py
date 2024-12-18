@@ -50,7 +50,7 @@ def shr_df() -> pd.DataFrame:
                            dtype=types)  # type: ignore
     combined = combine_columns(df, ('VicRace', 'OffRace'))
     df[combined.name] = combined
-    df['OneOrLess'] = (df['AssignCount'] < 2)
+    df['OneOrLess'] = df['AssignCount'] < 2
     return df
 
 

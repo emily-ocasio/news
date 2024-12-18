@@ -1137,6 +1137,7 @@ def gpt_homicide_class_code(classification: HomicideClass) -> str:
         HomicideClass.HOMICIDE: 'M',
         HomicideClass.VEHICULAR_HOMICIDE: 'VM',
         HomicideClass.KILLED_BY_LAW_ENFORCEMENT: 'LEM',
+        HomicideClass.FICTIONAL_HOMICIDE: 'FM',
         HomicideClass.NO_HOMICIDE_IN_ARTICLE: 'N'
     }
     return codes[classification]

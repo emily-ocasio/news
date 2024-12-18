@@ -73,7 +73,10 @@ def initial(state: State, choice) -> RxResp:
         state = state._replace(article_kind = 'new')
         return controller.new_labels(state)
     if choice == "F":
-        state = state._replace(article_kind = 'review')
+        state = state._replace(article_kind = 'review',
+                               review_type = 'SINGLE',
+                               articles_retrieved = True,
+                               main_flow = 'review')
         return controller.edit_single_article(state)
     if choice == 'A':
         return controller.auto_classify(state)

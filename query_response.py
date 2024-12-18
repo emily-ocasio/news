@@ -29,7 +29,7 @@ def article_types(state: State) -> RxResp:
     After getting the article types, proceed with displaying full article
     """
     state = state._replace(current_article_types=state.outputs)
-    return controller.main(state)
+    return controller.show_article(state)
 
 
 def verified(state: State) -> RxResp:

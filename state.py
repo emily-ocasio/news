@@ -17,6 +17,7 @@ class HomicideClass(Enum):
     HOMICIDE = "homicide"
     VEHICULAR_HOMICIDE = "vehicular homicide"
     KILLED_BY_LAW_ENFORCEMENT = "killed by law enforcement"
+    FICTIONAL_HOMICIDE = "fictional homicide"
     NO_HOMICIDE_IN_ARTICLE = "no homicide in article"
 
 class HomicideClassResponse(BaseModel):
