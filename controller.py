@@ -42,7 +42,6 @@ def main(state: State) -> RxResp:
         raise ControlException("Main flow route not supported")
     return dispatch[state.main_flow](state)
 
-
 @main_flow('start')
 def start_point(state: State) -> RxResp:
     """
@@ -322,9 +321,36 @@ def second_filter(state: State) -> RxResp:
     precise class to the articles filtered as Mass. homicides
     via the first regex/NER based pass
     """
-    
-    return action2('no-op'), state
+    if state.articles_to_filter == 0:
+        return choose.articles_to_filter(state)
+    if len(state.articles) == 0:
+        state = state._replace(homicide_filter_status = 'begin')
+        return retrieve.articles_to_filter(state)
+    state = state._replace(pre_article_prompt='homicide_type',
+                           gpt3_action='classify_homicide')
+    return filter_articles(state)
 
+
+def filter_articles(state: State) -> RxResp:
+    """
+    Filter articles one by one using GPT-4
+    """
+    if state.next_article >= len(state.articles):
+        state = state._replace(main_flow='start',
+                                articles_to_filter=0, articles=tuple())
+        return main(state)
+    if state.homicide_filter_status == 'begin':
+        state = state._replace(homicide_filter_status = 'classify')
+        return gpt3_prompt.prompt_gpt4(state)
+    if state.homicide_filter_status == 'classify':
+        state = state._replace(homicide_filter_status = 'save')
+        return save.gpt_homicide_class(state)
+    if state.homicide_filter_status == 'save':
+        state = state._replace(next_article = state.next_article+1,
+                                homicide_filter_status = 'begin')
+        return main(state)
+    else:
+        raise ControlException("Invalid filter status")
 
 def retrieve_verified(state: State) -> RxResp:
     """

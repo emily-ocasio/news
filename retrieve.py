@@ -241,3 +241,12 @@ def articles_from_homicide(state: State) -> RxResp:
     sql = calc.articles_from_homicide_sql()
     shrid = state.homicides[state.current_homicide]['Id']
     return action2('query_db', sql=sql, shrid=shrid), state
+
+
+@query('articles_to_filter')
+def articles_to_filter(state: State) -> RxResp:
+    """
+    Retrieve articles to filter based on the number specified
+    """
+    sql = calc.articles_to_filter_sql()
+    return action2('query_db', sql=sql, limit=state.articles_to_filter), state

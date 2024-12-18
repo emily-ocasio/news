@@ -19,7 +19,7 @@ def many_articles(state: State) -> RxResp:
     Response to database query for multiple articles
     """
     state = state._replace(articles=state.outputs)
-    return controller.first_article(state)
+    return controller.main(state)
 
 
 def article_types(state: State) -> RxResp:
@@ -29,7 +29,7 @@ def article_types(state: State) -> RxResp:
     After getting the article types, proceed with displaying full article
     """
     state = state._replace(current_article_types=state.outputs)
-    return controller.show_article(state)
+    return controller.main(state)
 
 
 def verified(state: State) -> RxResp:
@@ -40,7 +40,7 @@ def verified(state: State) -> RxResp:
     matches, nomatches = calc.partition(articles)
     state = state._replace(articles=articles, next_article=0,
                            matches=matches, nomatches=nomatches)
-    return controller.select_match_group(state)
+    return controller.main(state)
 
 
 def all_articles(state: State) -> RxResp:
@@ -51,7 +51,7 @@ def all_articles(state: State) -> RxResp:
     TP, TN, FP, FN = calc.confusion_matrix(articles)
     state = state._replace(
         articles=articles, next_article=0, TP=TP, TN=TN, FP=FP, FN=FN)
-    return controller.show_statistics(state)
+    return controller.main(state)
 
 
 def unclassified_articles(state: State) -> RxResp:
@@ -156,4 +156,12 @@ def refreshed_homicide(state: State) -> RxResp:
                                             state.homicides,
                                             state.current_homicide,
                                             row))
+    return controller.main(state)
+
+
+def articles_to_filter(state: State) -> RxResp:
+    """
+    Response to query for articles to filter
+    """
+    state = state._replace(articles=state.outputs, next_article=0)
     return controller.main(state)

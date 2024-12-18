@@ -14,7 +14,7 @@ from rich.text import Text
 from rich.table import Table
 
 from mass_towns import townlist
-from state import Rows
+from state import Rows, HomicideClass
 
 absolute_roots = (
     'slain',
@@ -762,6 +762,28 @@ def gpt3_small_extract_sql() -> str:
         VALUES (?,?,?,?,?,?,?,?)
     """
 
+def gpt_homicide_class_sql() -> str:
+    """
+    SQL Statement to set the gpt
+        homicide class for an article
+    """
+    return """
+        UPDATE articles
+        SET gptClass = ?
+        WHERE RecordId = ?
+    """
+
+def articles_to_filter_sql() -> str:
+    """
+    SQL statement to return articles to filter based on a limit
+    Only considers articles within the dataset called 'CLASSTRAIN'
+    """
+    return """
+        SELECT * FROM articles
+        WHERE Dataset = 'CLASSTRAIN'
+        ORDER BY PubDate
+        LIMIT ?
+    """
 
 def display_article(total: int,
                     current: int,
@@ -1097,7 +1119,6 @@ def full_gpt3_prompt(pre_article: str, post_article: str,
                 '$VICTIM',victim))
     return prompt, msg
 
-
 def prompt_response(prompt: str, response: str) -> str:
     """
     Bolded text
@@ -1107,6 +1128,28 @@ def prompt_response(prompt: str, response: str) -> str:
     full.append(response, 'black bold')
     return rich_to_str(full)
 
+def gpt_homicide_class_code(classification: HomicideClass) -> str:
+    """
+    Return code for homicide class
+    This is what is saved in the database
+    """
+    codes = {
+        HomicideClass.HOMICIDE: 'M',
+        HomicideClass.VEHICULAR_HOMICIDE: 'VM',
+        HomicideClass.KILLED_BY_LAW_ENFORCEMENT: 'LEM',
+        HomicideClass.NO_HOMICIDE_IN_ARTICLE: 'N'
+    }
+    return codes[classification]
+
+def is_gpt_homicide_class_correct(gpt_code, manual_class) -> bool:
+    """
+    Determine whether GPT-3 classification matches manual classification
+    """
+    if manual_class == 'M':
+        return gpt_code == 'M'
+    if manual_class == 'N':
+        return gpt_code != 'M'
+    return True
 
 def humanizing_from_response(response: str, response_type='level') -> str:
     """

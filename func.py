@@ -18,7 +18,7 @@ def what_next(state: State):
         'start': controller.start_point,
         'choice_made': choice_response.respond,
         'query_retrieved': query_response.respond,
-        'gpt3_responded': gpt3_response.respond,
+        'gpt_responded': gpt3_response.respond,
         'classified': controller.increment_classify,
         'main': controller.main
     }

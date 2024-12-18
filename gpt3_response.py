@@ -12,8 +12,10 @@ class GPTResponseException(Exception):
 
 def respond(state: State) -> RxResp:
     """
-    Handle response from GPT-3
+    Handle response from GPT
     """
+    if state.gpt3_action == 'classify_homicide':
+        return respond_homicide_class(state)
     response, prompt = state.outputs
     msg = calc.prompt_response(prompt, response)
     state = state._replace(gpt3_prompt = prompt, gpt3_response = response,
@@ -33,4 +35,27 @@ def respond(state: State) -> RxResp:
         action2('no_op' if state.main_flow == 'humanize' else 'wait_enter'),
         from_reaction(controller.main if state.main_flow == 'humanize'
                         else controller.refresh_article)
+    ), state
+
+def respond_homicide_class(state: State) -> RxResp:
+    """
+    Handle response from GPT for homicide classification
+    """
+    response, prompt = state.outputs
+    response_text = response.classification.value
+    response_code = calc.gpt_homicide_class_code(response.classification)
+    msg = calc.prompt_response(prompt, "\n\n" + response_text)
+    manual_class = state.articles[state.next_article]['Status']
+    match = calc.is_gpt_homicide_class_correct(response_code, manual_class)
+    if not match:
+        record_id = state.articles[state.next_article]['RecordId']
+        msg += "\nGPT / Manual Class Mismatch\n" + \
+                f"Manual class: {manual_class}\n" + \
+                f"GPT class: {response_text}\n" + \
+                f"Record Id: {record_id}\n\n"
+    state = state._replace(gpt3_prompt = prompt, gpt3_response = response_code)
+    return combine_actions(
+        action2('print_message', msg),
+        action2('no_op' if match else 'wait_enter'),
+        from_reaction(controller.main)
     ), state

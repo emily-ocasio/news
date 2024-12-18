@@ -5,9 +5,25 @@ Type Definitions, including:
 """
 from collections.abc import Callable
 from typing import NamedTuple, Optional, Any
+from enum import Enum
 from sqlite3 import Row
+from pydantic import BaseModel
 
 Rows = tuple[Row,...]
+class HomicideClass(Enum):
+    """
+    Enum for homicide classification
+    """
+    HOMICIDE = "homicide"
+    VEHICULAR_HOMICIDE = "vehicular homicide"
+    KILLED_BY_LAW_ENFORCEMENT = "killed by law enforcement"
+    NO_HOMICIDE_IN_ARTICLE = "no homicide in article"
+
+class HomicideClassResponse(BaseModel):
+    """
+    Response model for homicide classification.
+    """
+    classification: HomicideClass
 
 class State(NamedTuple):
     """
@@ -74,6 +90,8 @@ class State(NamedTuple):
     outputs: Any = None
     inputargs: Any = tuple()
     inputkwargs: Any = {}
+    articles_to_filter: int = 0
+    homicide_filter_status: str = ''
 
 # An Action is a function that has State as argument,
 #   performs a side effect, and returns an updated State

@@ -456,3 +456,12 @@ def humanize_homicide(state: State) -> RxResp:
     """
     msg = "Select humanizing level (1-3) > "
     return action2('get_number_input', prompt=msg), state
+
+
+@choice('articles_to_filter')
+def articles_to_filter(state: State) -> RxResp:
+    """
+    Choose how many articles to filter
+    """
+    prompt = "Enter number of articles to filter > "
+    return action2('get_number_input', prompt=prompt), state

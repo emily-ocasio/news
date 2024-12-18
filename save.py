@@ -111,6 +111,17 @@ def gpt3_humanize(state: State) -> RxResp:
                     pre_article=pre_article, post_article=post_article,
                     prompt=prompt, response=response), state
 
+def gpt_homicide_class(state: State) -> RxResp:
+    """
+    Assign a homicide class to an article based on GPT response
+    """
+    sql = calc.gpt_homicide_class_sql()
+    article = state.articles[state.next_article]
+    record_id = article['RecordId']
+    gpt_class = state.gpt3_response
+    state = state._replace(next_event='main')
+    return action2('command_db', sql=sql, gptClass=gpt_class,
+                   record_id=record_id), state
 
 def gpt3_extract(state: State) -> RxResp:
     """

@@ -533,3 +533,15 @@ def humanize_homicide(state: State) -> RxResp:
         return controller.main(state)
     state = state._replace(humanizing = human)
     return controller.main(state)
+
+
+def articles_to_filter(state: State) -> RxResp:
+    """
+    Respond to number of articles to filter
+    """
+    choice = int(state.outputs)
+    if choice == 0:
+        state = state._replace(main_flow='start')
+    else:
+        state = state._replace(articles_to_filter=choice)
+    return controller.main(state)

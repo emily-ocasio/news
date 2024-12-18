@@ -8,7 +8,7 @@ from functools import wraps
 from collections.abc import Callable
 import openai
 from openai import OpenAI
-from secr_apis.gpt3_key import GPT3_API_KEY
+from secr_apis.gpt3_key import GPT3_API_KEY, GPT_API_KEY
 from state import State, Action
 
 
@@ -237,8 +237,7 @@ def prompt_gpt(system, user, model = 'mini', response_type = None):
         attribute names that will be used by the model to respond
     """
     models = {'mini': 'gpt-4o-mini'}
-    openai.api_key = GPT3_API_KEY
-    client = OpenAI()
+    client = OpenAI(api_key=GPT_API_KEY)
     if response_type:
         response = client.beta.chat.completions.parse(
             model=models[model],
@@ -254,7 +253,7 @@ def prompt_gpt(system, user, model = 'mini', response_type = None):
             max_tokens=256,
             response_format = response_type
         )
-        return response.choices[0].message.parsed
+        return response.choices[0].message.parsed, system
 
     response = client.chat.completions.create(
     model=models[model],
@@ -269,5 +268,4 @@ def prompt_gpt(system, user, model = 'mini', response_type = None):
     temperature=0,
     max_tokens=256
     )
-    return response.choices[0].message.content
-    
+    return response.choices[0].message.content, system
