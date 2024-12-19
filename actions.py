@@ -242,30 +242,18 @@ def prompt_gpt(system, user, model = 'mini', response_type = None):
         response = client.beta.chat.completions.parse(
             model=models[model],
             seed = 42,
-            messages=[
-            {
-                'role': 'system', 'content': system
-            },
-            {
-                'role': 'user', 'content': user
-            }],
+            messages=[ { 'role': 'system', 'content': system },
+                       { 'role': 'user', 'content': user }],
             temperature=0,
             max_tokens=256,
-            response_format = response_type
-        )
+            response_format = response_type)
         return response.choices[0].message.parsed, system
 
     response = client.chat.completions.create(
     model=models[model],
     seed = 42,
-    messages=[
-    {
-        'role': 'system', 'content': system
-    },
-    {
-        'role': 'user', 'content': user
-    }],
+    messages=[ { 'role': 'system', 'content': system },
+                { 'role': 'user', 'content': user }],
     temperature=0,
-    max_tokens=256
-    )
+    max_tokens=256)
     return response.choices[0].message.content, system

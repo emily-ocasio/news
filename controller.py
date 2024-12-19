@@ -47,9 +47,11 @@ def start_point(state: State) -> RxResp:
     """
     Initial starting point of application
     """
-    state = state._replace(article_kind = '',
+    state = state._replace(current_step = 'not_started',
+                            article_kind = '',
                             review_type = '',
                             homicide_group = '',
+                            articles = tuple(),
                             homicides = tuple())
     if len(state.user) == 0:
         return choose.username(state)
@@ -316,42 +318,47 @@ def review_datasets(state: State) -> RxResp:
 @main_flow('second_filter')
 def second_filter(state: State) -> RxResp:
     """
-    Second filter for articles
-    This is selected to call GPT4 (or above) to assign a more
-    precise class to the articles filtered as Mass. homicides
-    via the first regex/NER based pass
+    Second filter for articles using GPT-4 classification
     """
-    if state.articles_to_filter == 0:
+    last_step = state.current_step
+    if last_step == 'not_started':
+        state = state._replace(current_step = 'choose_number')
         return choose.articles_to_filter(state)
-    if len(state.articles) == 0:
-        state = state._replace(homicide_filter_status = 'begin')
+    if last_step == 'choose_number':
+        if state.articles_to_filter == 0:
+            state = state._replace(main_flow = 'start')
+            return main(state)
+        state = state._replace(current_step = 'retrieve_articles')
         return retrieve.articles_to_filter(state)
-    state = state._replace(pre_article_prompt='homicide_type',
-                           gpt3_action='classify_homicide')
+    if last_step == 'retrieve_articles':
+        state = state._replace(
+            pre_article_prompt='homicide_type',
+            gpt3_action='classify_homicide',
+            current_step = 'next_article')
+    if last_step == 'save':
+        state = state._replace(
+            next_article=state.next_article + 1,
+            current_step='next_article')
     return filter_articles(state)
-
 
 def filter_articles(state: State) -> RxResp:
     """
     Filter articles one by one using GPT-4
     """
+    last_step = state.current_step
     if state.next_article >= len(state.articles):
-        state = state._replace(main_flow='start',
-                                articles_to_filter=0, articles=tuple())
+        state = state._replace(
+            main_flow='start',
+            articles_to_filter=0)
         return main(state)
-    if state.homicide_filter_status == 'begin':
-        state = state._replace(homicide_filter_status = 'classify')
+    if last_step == 'next_article':
+        state = state._replace(current_step='classify')
         return gpt3_prompt.prompt_gpt4(state)
-    if state.homicide_filter_status == 'classify':
-        state = state._replace(homicide_filter_status = 'save')
+    if last_step == 'classify':
+        state = state._replace(current_step='save')
         return save.gpt_homicide_class(state)
-    if state.homicide_filter_status == 'save':
-        state = state._replace(next_article = state.next_article+1,
-                                homicide_filter_status = 'begin')
-        return main(state)
-    else:
-        raise ControlException("Invalid filter status: "
-                               f"{state.homicide_filter_status}")
+    raise ControlException(
+        f"Invalid current step: {state.current_step}")
 
 def retrieve_verified(state: State) -> RxResp:
     """

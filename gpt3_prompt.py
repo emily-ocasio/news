@@ -195,8 +195,8 @@ system_prompts = {
     "(2) an article that refers to a homicide that occurred "
     "outside of Massachussetts, "
     "(3) the article does not refer to a homicide. ",
-    'homicide_type': 
-    "I will provide a news article from the Boston Globe newspaper." 
+    'homicide_type':
+    "I will provide a news article from the Boston Globe newspaper."
     "The article has some words that suggest the topic is a homicide or murder,"
     "Some articles may include news about more than one incident. "
     "Please classify the article into one of the following:\n"
@@ -238,8 +238,9 @@ def prompt_gpt(state: State) -> RxResp:
                                         post_article=post_article,
                                         article=article,
                                         victim=victim if victim is not None
-                                            else 'unknown')
+                                        else 'unknown')
     return action2('prompt_gpt3', prompt=prompt, msg=msg), state
+
 
 @next_event('gpt_responded')
 def prompt_gpt4(state: State) -> RxResp:
@@ -247,9 +248,11 @@ def prompt_gpt4(state: State) -> RxResp:
     This prompt is for the second filtering of the articles
     """
     system = system_prompts[state.pre_article_prompt]
-    article = state.articles[state.next_article]['FullText']
-    user = f'Article text: """{article}"""'
+    article = state.articles[state.next_article]
 
-    return action2('prompt_gpt', system = system,
-                   user = user,
-                   response_type = HomicideClassResponse), state
+    user = f'Article Title: """{article["Title"]}"""\n' + \
+            f'Article text: """{article["FullText"]}"""'
+
+    return action2('prompt_gpt', system=system,
+                   user=user,
+                   response_type=HomicideClassResponse), state

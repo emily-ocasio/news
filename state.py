@@ -92,7 +92,7 @@ class State(NamedTuple):
     inputargs: Any = tuple()
     inputkwargs: Any = {}
     articles_to_filter: int = 0
-    homicide_filter_status: str = ''
+    current_step: str = 'not_started'
 
 # An Action is a function that has State as argument,
 #   performs a side effect, and returns an updated State
