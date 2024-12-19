@@ -62,6 +62,7 @@ def end_program(state: State) -> RxResp:
     """
     Final exit point of application
     """
+    state = state._replace(end_program=True)
     return action2('exit_program'), state
 
 

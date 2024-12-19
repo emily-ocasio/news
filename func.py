@@ -42,10 +42,9 @@ def main():
         the application state, by the functions dispatched via what_next
     """
     current_state = initialize_state(State(next_event='start'))
-    while True:
+    while not current_state.end_program:
         action, current_state = what_next(current_state)
         current_state = action(current_state)
-
 
 if __name__ == "__main__":
     main()

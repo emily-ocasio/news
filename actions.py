@@ -69,11 +69,10 @@ def clear_screen() -> None:
 @actiondef
 def exit_program():
     """
-    Exit the program after displaying goodbye message
+    Display goodbye message and prepare to exit program
     """
     print("Good Bye!! To re-start program type 'python3 func.py'")
     db.close()
-    exit()
 
 
 @actiondef

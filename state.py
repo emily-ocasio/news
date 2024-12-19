@@ -31,6 +31,7 @@ class State(NamedTuple):
     Contains all state for application
     """
     next_event: str
+    end_program: bool = False
     user: str = ''
     terminal_size: tuple[int, int] = 0, 0
     main_flow: str = 'start'
