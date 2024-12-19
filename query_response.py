@@ -29,7 +29,7 @@ def article_types(state: State) -> RxResp:
     After getting the article types, proceed with displaying full article
     """
     state = state._replace(current_article_types=state.outputs)
-    return controller.show_article(state)
+    return controller.main(state)
 
 
 def verified(state: State) -> RxResp:
@@ -116,10 +116,11 @@ def auto_assigned_articles(state: State) -> RxResp:
 def homicides_by_month(state: State) -> RxResp:
     """
     Response to query for homicides in a particular month
+    Also used to query by name or county
     """
     homicides = state.outputs
     state = state._replace(homicides=homicides)
-    return controller.homicide_table(state)
+    return controller.main(state)
 
 
 def assigned_homicides_by_article(state: State) -> RxResp:
@@ -127,7 +128,7 @@ def assigned_homicides_by_article(state: State) -> RxResp:
     Reponse to query for homicides already assigned to an article
     """
     state = state._replace(homicides_assigned = state.outputs)
-    return controller.continue_retrieving_homicides(state)
+    return controller.main(state)
 
 
 def refreshed_article(state: State) -> RxResp:

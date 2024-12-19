@@ -7,9 +7,11 @@ from collections.abc import Callable
 from typing import NamedTuple, Optional, Any
 from enum import Enum
 from sqlite3 import Row
+from immutabledict import immutabledict
 from pydantic import BaseModel
 
 Rows = tuple[Row,...]
+TextChoice = immutabledict[str, str]
 class HomicideClass(Enum):
     """
     Enum for homicide classification
@@ -66,6 +68,7 @@ class State(NamedTuple):
     article_lines: tuple = tuple()
     remaining_lines: bool = False
     current_article_types: Rows = tuple()
+    assign_choice: str = ''
     new_label: str = ''
     new_notes: str = ''
     next_article: int = 0

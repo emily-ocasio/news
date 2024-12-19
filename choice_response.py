@@ -2,7 +2,7 @@
 Reactions to actions that collect user input
 """
 from collections.abc import Callable
-from state import RxResp, State, Reaction
+from state import RxResp, State, Reaction, TextChoice
 import controller
 import choose
 import calculations as calc
@@ -26,7 +26,8 @@ def check_defaults(choice_reaction: Callable[[State, str], RxResp]) -> Reaction:
     def wrapper(state: State) -> RxResp:
         choice = state.outputs
         if choice == 'Q':
-            return controller.end_program(state)
+            state = state._replace(main_flow = 'end')
+            return controller.main(state)
         if choice == 'C':
             state = state._replace(main_flow = 'start')
             return controller.main(state)
@@ -57,7 +58,7 @@ def initial(state: State, choice) -> RxResp:
     """
     Main menu
     """
-    flow_choice = {
+    flow_choice = TextChoice({
         'N': 'new_labels',
         'R': 'review',
         'F': 'single_review',
@@ -65,7 +66,7 @@ def initial(state: State, choice) -> RxResp:
         'H': 'assign',
         'S': 'second_filter',
         'Z': 'humanize',
-    }
+    })
     if choice not in flow_choice:
         raise ChoiceException("Choice not supported")
     # These options have not yet been migrated to the main controller flow
@@ -76,7 +77,8 @@ def initial(state: State, choice) -> RxResp:
         state = state._replace(article_kind = 'review',
                                review_type = 'SINGLE',
                                articles_retrieved = True,
-                               main_flow = 'review')
+                               main_flow = 'review',
+                               current_step = 'choose_review_type')
         return controller.edit_single_article(state)
     if choice == 'A':
         return controller.auto_classify(state)
@@ -116,7 +118,7 @@ def dataset(state: State, choice) -> RxResp:
     """
     Respond to selection of desired dataset for review
     """
-    dataset_choice = {
+    dataset_choice = TextChoice({
         'P': 'PASSED',
         'T': 'TRAIN',
         'V': 'VAL',
@@ -126,7 +128,7 @@ def dataset(state: State, choice) -> RxResp:
         'A': 'CLASS',
         '1': '1',
         '2': '2',
-    }
+    })
     if choice not in dataset_choice:
         raise ChoiceException("Unsupported dataset choice")
     # if choice == 'P':
@@ -158,7 +160,7 @@ def review_label(state: State, choice) -> RxResp:
     Respond to selection of desired label
     """
     state = state._replace(review_label=choice)
-    return controller.retrieve_verified(state)
+    return controller.main(state)
 
 
 @check_defaults
@@ -301,53 +303,23 @@ def years_to_reclassify(state: State) -> RxResp:
 @check_defaults
 def assign_choice(state: State, choice) -> RxResp:
     """
-    Perform selected choice during assignment
+    User has selected choice during assignment
     """
-    if choice == 'A':
-        return choose.assigment(state)
-    if choice == 'U':
-        return choose.unassignment(state)
-    if choice == 'M':
-        return choose.humanize(state)
-    if choice == 'H':
-        return choose.homicide_month(state)
-    if choice == 'V':
-        return choose.homicide_victim(state)
-    if choice == 'Y':
-        return choose.homicide_county(state)
-    if choice == 'G':
-        state = state._replace(pre_article_prompt = 'few-shot2',
-                post_article_prompt = 'few-shot')
-        if len(state.homicides_assigned) == 1:
-            state = state._replace(selected_homicide = 0)
-            return controller.gpt3_humanize(state)
-        return choose.gpt3_humanize(state)
-    if choice == 'X':
-        state = state._replace(pre_article_prompt ='article',
-                post_article_prompt = 'alsopast4')
-        if len(state.homicides_assigned) == 1:
-            state = state._replace(selected_homicide = 0)
-            return controller.gpt3_extract(state)
-        return choose.gpt3_extract(state)
-    if choice == 'L':
-        state = state._replace(pre_article_prompt ='extract',
-                post_article_prompt ='rewrite4')
-        if len(state.homicides_assigned) == 1:
-            state = state._replace(selected_homicide = 0)
-            return controller.gpt3_small_extract(state)
-        return choose.gpt3_small_extract(state)
-    if choice == 'S':
-        return controller.increment_article(state)
-    if choice in 'NOPM':
-        state = state._replace(new_label = choice)
-        return controller.save_label(state)
-    if choice in 'ED':
-        state = state._replace(new_label = choice)
-        return controller.save_assign_status(state)
-    if choice == 'T':
-        return controller.choose_new_note(state)
-    raise ChoiceException(f"Unsupported dataset choice <{choice}>")
-
+    choices = TextChoice({
+        'A': 'assign',
+        'U': 'unassign',
+        'M': 'humanize',
+        'H': 'select_month',
+        'V': 'select_victim',
+        'Y': 'select_county',
+        'G': 'GPT_humanize',
+        'X': 'GPT_extract',
+        'L': 'GPT_small',
+        'S': 'skip',
+        'T': 'note'
+    })
+    state = state._replace(assign_choice=choices.get(choice, choice))
+    return controller.main(state)
 
 def homicide_month(state: State) -> RxResp:
     """

@@ -1,7 +1,7 @@
 """
 test transformers sentiment analysis
 """
-from transformers.pipelines import pipeline
+from transformers.pipelines import pipeline #type: ignore
 
 gen = pipeline('sentiment-analysis')
 

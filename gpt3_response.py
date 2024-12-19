@@ -56,13 +56,10 @@ def respond_homicide_class(state: State) -> RxResp:
           f"Record Id: {record_id}\n\n"
     if not match:
         msg = "\nGPT / Manual Class Mismatch\n" + msg
-    wait = not match
-    if state.next_article == len(state.articles)-1:
-        msg += '\nAll articles classified.\n\n'
-        wait = True
-    state = state._replace(gpt3_prompt=prompt, gpt3_response=response_code)
+    state = state._replace(gpt3_prompt=prompt,
+                           gpt3_response=response_code,
+                           next_event='main')
     return combine_actions(
         action2('print_message', msg),
-        action2('wait_enter' if wait else 'no_op'),
-        from_reaction(controller.main)
+        action2('wait_enter' if not match else 'no_op')
     ), state

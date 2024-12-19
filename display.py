@@ -23,6 +23,7 @@ def article(state: State) -> RxResp:
             f"\n{calc.article_notes(state.articles[state.next_article])}\n"
         )
     state = state._replace(
+        next_event = 'main',
         article_lines=lines, remaining_lines=False
         if state.article_kind == 'assign'
         else(len(lines) > state.terminal_size[1] - 12))

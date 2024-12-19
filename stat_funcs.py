@@ -66,7 +66,7 @@ def breakdown_by_value(series: pd.Series, as_pct=True,
     pct_name = f"{name}_pct"
     df[pct_name] = series.value_counts(normalize=True)
     df = df.sort_index() if sort_by_value else df
-    return df.style.format({pct_name: '{:.2%}'}) if as_pct else df
+    return df.style.format({pct_name: '{:.2%}'}) if as_pct else df #type: ignore
 
 
 def victim_race_pct(df: pd.DataFrame) -> pd.DataFrame:
@@ -101,7 +101,7 @@ def prt(styl: Styler) -> None:
     """
     Changes styler (html) display back to string for including in text doc
     """
-    print(styl.data.to_string())
+    print(styl.data.to_string()) #type: ignore
 
 
 def remove_infrequent(
