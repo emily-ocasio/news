@@ -290,45 +290,60 @@ def review_datasets(state: State) -> RxResp:
     """
     Main workflow for reviewing articles
     """
-    last_step = state.current_step
-    if last_step == 'not_started':
-        # First time entering review flow
-        state = state._replace(article_kind='review',
-                               articles_retrieved=False,
-                               current_step='choose_review_type')
-        return choose.dataset(state)
+    rxn: Reaction | None = None
+    next_step: str | None = None
+    last_step = 'retrieve_articles' if state.articles_retrieved else state.current_step
 
-    if last_step == 'choose_review_type':
-        # After selecting the type of article to review
-        if state.review_type == 'PASSED':
-            # Review previously passed articles
-            state = state._replace(current_step='retrieve_articles')
-            return retrieve.passed_articles(state)
-        state = state._replace(review_dataset=state.review_type)
-        if state.review_dataset in '12':
-            # Review assigned articles by victim
-            state = state._replace(current_step='retrieve_articles')
-            return retrieve.articles_humanizing_group(state)
-        if state.review_type == 'CLASS':
-            # Review previously auto-classified articles to reclassify
-            state = state._replace(article_kind='reclassify',
-                                   current_step='choose_years_to_reclassify')
-            return choose.years_to_reclassify(state)
-        # Contiue with selection of label to review
-        state = state._replace(current_step='choose_label')
-        return choose.review_label(state)
+    match last_step:
+        case 'not_started':
+            # First time entering review flow
+            state = state._replace(
+                article_kind='review',
+                articles_retrieved=False)
+            next_step = 'choose_review_type'
+            rxn = choose.dataset
 
-    if last_step == 'choose_label':
-        # After selecting the label to review
-        state = state._replace(current_step='retrieve_articles')
-        return retrieve.verified(state)
+        case 'choose_review_type':
+            # After selecting the type of article to review
+            if state.review_type == 'PASSED':
+                # Review previously passed articles
+                next_step = 'retrieve_articles'
+                rxn = retrieve.passed_articles
+            else:
+                state = state._replace(review_dataset=state.review_type)
+                if state.review_dataset in '12':
+                    # Review assigned articles by victim
+                    next_step = 'retrieve_articles'
+                    rxn = retrieve.articles_humanizing_group
+                elif state.review_type == 'CLASS':
+                    # Review previously auto-classified articles to reclassify
+                    state = state._replace(article_kind='reclassify')
+                    next_step = 'choose_years_to_reclassify'
+                    rxn = choose.years_to_reclassify
+                else:
+                    # Continue with selection of label to review
+                    next_step = 'choose_label'
+                    rxn = choose.review_label
 
-    if last_step == 'retrieve_articles' or state.articles_retrieved:
-        # After retrieving articles to review
-        if len(state.articles) == 0:
-            return no_articles(state)
-        state = state._replace(current_step='next_article')
-    return review_articles(state)
+        case 'choose_label':
+            # After selecting the label to review
+            next_step = 'retrieve_articles'
+            rxn = retrieve.verified
+
+        case 'retrieve_articles':
+            if len(state.articles) == 0:
+                rxn = no_articles
+            else:
+                next_step = 'next_article'
+                rxn = review_articles
+
+        case _:
+            # Default case
+            rxn = review_articles
+
+    if next_step is not None:
+        state = state._replace(current_step=next_step)
+    return rxn(state)
 
 
 def review_articles(state: State) -> RxResp:
