@@ -381,7 +381,7 @@ def review_articles(state: State) -> RxResp:
                 rxn = retrieve.assigned_homicides_by_article
             else:
                 # Article is ready for labeling - no assignment
-                next_step = 'choose_label'
+                next_step = 'choose_new_label'
                 rxn = choose.label
 
         case 'retrieve_assignments':
@@ -416,6 +416,10 @@ def review_articles(state: State) -> RxResp:
             next_step = 'save'
             rxn = save.unassignment
 
+        case 'enter_notes':
+            next_step = 'save'
+            rxn = save.notes
+
         case 'save':
             next_step = 'refresh_article'
             rxn = retrieve.refreshed_article
@@ -428,10 +432,14 @@ def review_articles(state: State) -> RxResp:
             next_step = 'save'
             rxn = save.manual_humanizing
 
-        case 'process_input':
+        case 'choose_new_label':
             # Process the user's input and save the label.
-            next_step = 'increment_article'
+            next_step = 'final_save'
             rxn = save.label
+
+        case 'final_save' if state.new_label == "M":
+            next_step = 'refresh_article'
+            rxn = refresh_article
 
         case 'final_save':
             # Move to the next article.
@@ -737,9 +745,11 @@ def assign_choice(state: State) -> RxResp:
         case 'select_month':
             step = 'refresh_article'
             reaction =  choose.homicide_month
-        case 'V':
+        case 'select_victim':
+            step = 'refresh_article'
             reaction =  choose.homicide_victim
-        case 'Y':
+        case 'select_county':
+            step = 'refresh_article'
             reaction =  choose.homicide_county
         case 'G':
             state = state._replace(pre_article_prompt = 'few-shot2',
@@ -772,13 +782,15 @@ def assign_choice(state: State) -> RxResp:
             reaction = review_articles
         case 'N' | 'O' | 'P' | 'M' as label:
             state = state._replace(new_label = label)
-            reaction = save_label
+            step = 'refresh_article' if label == 'M' else 'final_save'
+            reaction = save.label
         case 'E' | 'D' as label:
             # User selected new assigned statuses for this article
             state = state._replace(new_label = label)
             step = 'final_save'
             reaction = save.assign_status
         case 'note':
+            step = 'enter_notes'
             reaction = choose_new_note
         case choice:
             raise ControlException(f"Unsupported assign choice <{choice}>")

@@ -105,11 +105,22 @@ def new_label(state: State, choice) -> RxResp:
     """
     if choice == "X":
         return controller.show_remaining_lines(state)
-    if state.article_kind in (
-            'review', 'assign', 'reclassify') and choice == "":
-        return controller.increment_article(state)
-    state = state._replace(new_label=choice)
-    return controller.save_label(state)
+    if state.main_flow == 'review':
+        if choice == '':
+            state = state._replace(current_step = 'final_save')
+        else:
+            state = state._replace(new_label=choice)
+        return controller.main(state)
+    ## old code - needs update
+
+    exit()
+
+
+    # if state.article_kind in (
+    #         'review', 'assign', 'reclassify') and choice == "":
+    #     return controller.increment_article(state)
+    # state = state._replace(new_label=choice)
+    # return controller.save_label(state)
 
 
 @check_defaults
@@ -336,7 +347,7 @@ def homicide_victim(state: State) -> RxResp:
     Respond to desired name of victim to search for
     """
     state = state._replace(homicide_victim = state.outputs, county = '')
-    return controller.show_article(state)
+    return controller.main(state)
 
 
 def homicide_county(state: State) -> RxResp:
@@ -344,7 +355,7 @@ def homicide_county(state: State) -> RxResp:
     Respond to desired name of county to search for
     """
     state = state._replace(county = state.outputs, homicide_victim = '')
-    return controller.show_article(state)
+    return controller.main(state)
 
 
 def notes(state: State) -> RxResp:
@@ -352,10 +363,9 @@ def notes(state: State) -> RxResp:
     Respond to newly entered notes for an article by user
     Occurs during assignment
     """
-    if state.outputs == "":
-        return controller.next_article(state)
-    state = state._replace(new_notes = state.outputs)
-    return controller.save_new_notes(state)
+    if state.outputs != "":
+        state = state._replace(new_notes = state.outputs)
+    return controller.main(state)
 
 
 def assignments(state: State) -> RxResp:
