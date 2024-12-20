@@ -231,7 +231,8 @@ def article_label(row: Row) -> tuple[str, ...]:
             f"{row['PubDate'][4:6]}/{row['PubDate'][6:8]}/{row['PubDate'][0:4]}"
             "\n",
             f"Record ID = {row['RecordId']}",
-            f"Verified status = <{row['status']}>\n"
+            f"Verified status = <{row['status']}>\n",
+            f"Assignment status = <{row['assignstatus']}>\n"
             )
 
 

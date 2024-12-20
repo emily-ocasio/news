@@ -329,7 +329,7 @@ def review_datasets(state: State) -> RxResp:
             if len(state.articles) == 0:
                 rxn = no_articles
             else:
-                next_step = 'next_article'
+                next_step = 'begin_article_review'
                 rxn = review_articles
 
         case _:
@@ -348,7 +348,7 @@ def review_articles(state: State) -> RxResp:
     next_step: str | None = None
     rxn: Reaction | None = None
     match state.current_step:
-        case 'next_article':
+        case 'begin_article_review':
             # Start reviewing the next article.
             if state.next_article >= len(state.articles):
                 # All articles have been reviewed.
@@ -417,7 +417,7 @@ def review_articles(state: State) -> RxResp:
             rxn = save.unassignment
 
         case 'save':
-            next_step = 'next_article'
+            next_step = 'begin_article_review'
             rxn = retrieve.refreshed_article
 
         case 'choose_homicide_to_humanize':
@@ -433,10 +433,10 @@ def review_articles(state: State) -> RxResp:
             next_step = 'increment_article'
             rxn = save.label
 
-        case 'increment_article':
+        case 'final_save':
             # Move to the next article.
             state = state._replace(next_article=state.next_article + 1)
-            next_step = 'display_article'
+            next_step = 'begin_article_review'
             rxn = review_articles
 
         # Handle unexpected current_step values.
@@ -448,21 +448,6 @@ def review_articles(state: State) -> RxResp:
     if rxn is not None:
         return rxn(state)
 
-# def review_passed_articles(state: State) -> RxResp:
-#     """
-#     Review previously passed articles
-#     """
-#     state = state._replace(article_kind = 'review')
-#     return retrieve.passed_articles(state)
-
-
-# def select_review_label(state: State) -> RxResp:
-#     """
-#     Select desired label subset to review
-#     """
-#     if state.review_dataset == 'CLASS':
-#         return choose.years_to_reclassify(state)
-#     return choose.review_label(state)
 
 @main_flow('second_filter')
 def second_filter(state: State) -> RxResp:
@@ -485,11 +470,11 @@ def second_filter(state: State) -> RxResp:
             state = state._replace(
                 pre_article_prompt='homicide_type',
                 gpt3_action='classify_homicide')
-            next_step = 'next_article'
+            next_step = 'begin_article_filter'
         case 'save':
             state = state._replace(
                 next_article=state.next_article + 1)
-            next_step = 'next_article'
+            next_step = 'begin_article_filter'
 
     if next_step is not None:
         state = state._replace(current_step=next_step)
@@ -506,7 +491,7 @@ def filter_articles(state: State) -> RxResp:
     next_step: str | None = None
     rxn: Reaction | None = None
     match state.current_step:
-        case 'next_article':
+        case 'begin_article_filter':
             if state.next_article >= len(state.articles):
                 rxn = last_article
             else:
@@ -781,14 +766,16 @@ def assign_choice(state: State) -> RxResp:
         case 'skip':
             # Skip to the next article
             state = state._replace(next_article = state.next_article + 1,
-                                current_step = 'next_article')
+                                current_step = 'begin_article_review')
             reaction = review_articles
         case 'N' | 'O' | 'P' | 'M' as label:
             state = state._replace(new_label = label)
             reaction = save_label
         case 'E' | 'D' as label:
+            # User selected new assigned statuses for this article
             state = state._replace(new_label = label)
-            reaction = save_assign_status
+            step = 'final_save'
+            reaction = save.assign_status
         case 'T':
             reaction = choose_new_note
         case choice:

@@ -365,8 +365,8 @@ def assignments(state: State) -> RxResp:
     """
     selection = state.outputs
     if selection[0] == 0 or selection[0] > len(state.homicides):
-        # If no homicides selected, move to next article
-        state = state._replace(current_step = 'next_article')
+        # If no homicides selected, go back to assignment menu
+        state = state._replace(current_step = 'begin_article_review')
     elif len(selection) == 1:
         # If single homicides selected, ask for victim name
         state = state._replace(selected_homicides = (selection[0]-1,))
@@ -385,7 +385,7 @@ def humanize(state: State)  -> RxResp:
     """
     selection = int(state.outputs)
     if selection == 0 or selection > len(state.homicides_assigned):
-        state = state._replace(current_step = 'next_article')
+        state = state._replace(current_step = 'begin_article_review')
     else:
         state = state._replace(selected_homicide = selection-1)
     return controller.main(state)
@@ -443,7 +443,7 @@ def unassignment(state: State) -> RxResp:
     """
     selected = int(state.outputs)
     if selected == 0 or selected > len(state.homicides_assigned):
-        state = state._replace(current_step = 'next_article')
+        state = state._replace(current_step = 'begin_article_review')
     else:
         state = state._replace(selected_homicide = selected-1)
     return controller.main(state)
@@ -456,7 +456,7 @@ def manual_humanizing(state: State) -> RxResp:
     """
     human = state.outputs
     if human =='' or not 1 <= int(human) <= 3:
-        state = state._replace(current_step = 'next_article')
+        state = state._replace(current_step = 'begin_article_review')
     else:
         state = state._replace(humanizing = human)
     return controller.main(state)
