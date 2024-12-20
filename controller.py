@@ -366,7 +366,7 @@ def review_articles(state: State) -> RxResp:
                 next_step = 'retrieve_article_types'
                 rxn = retrieve.article_types
 
-        case 'retrieve_article_types':
+        case 'retrieve_article_types' | 'refresh_article':
             # Article types have been retrieved and article is ready for display
             next_step = 'display_article'
             rxn = display.article
@@ -417,7 +417,7 @@ def review_articles(state: State) -> RxResp:
             rxn = save.unassignment
 
         case 'save':
-            next_step = 'begin_article_review'
+            next_step = 'refresh_article'
             rxn = retrieve.refreshed_article
 
         case 'choose_homicide_to_humanize':
@@ -435,7 +435,8 @@ def review_articles(state: State) -> RxResp:
 
         case 'final_save':
             # Move to the next article.
-            state = state._replace(next_article=state.next_article + 1)
+            state = state._replace(next_article=state.next_article + 1,
+                                   homicide_month = '')
             next_step = 'begin_article_review'
             rxn = review_articles
 
@@ -733,7 +734,8 @@ def assign_choice(state: State) -> RxResp:
         case 'humanize':
             step = "choose_homicide_to_humanize"
             reaction = choose.humanize
-        case 'H':
+        case 'select_month':
+            step = 'refresh_article'
             reaction =  choose.homicide_month
         case 'V':
             reaction =  choose.homicide_victim
@@ -776,7 +778,7 @@ def assign_choice(state: State) -> RxResp:
             state = state._replace(new_label = label)
             step = 'final_save'
             reaction = save.assign_status
-        case 'T':
+        case 'note':
             reaction = choose_new_note
         case choice:
             raise ControlException(f"Unsupported assign choice <{choice}>")
