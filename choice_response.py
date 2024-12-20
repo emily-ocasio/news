@@ -385,9 +385,10 @@ def humanize(state: State)  -> RxResp:
     """
     selection = int(state.outputs)
     if selection == 0 or selection > len(state.homicides_assigned):
-        return controller.next_article(state)
-    state = state._replace(selected_homicide = selection-1)
-    return choose.manual_humanizing(state)
+        state = state._replace(current_step = 'next_article')
+    else:
+        state = state._replace(selected_homicide = selection-1)
+    return controller.main(state)
 
 
 def gpt3_humanize(state: State) -> RxResp:
@@ -455,9 +456,10 @@ def manual_humanizing(state: State) -> RxResp:
     """
     human = state.outputs
     if human =='' or not 1 <= int(human) <= 3:
-        return controller.next_article(state)
-    state = state._replace(humanizing = human)
-    return controller.save_manual_humanizing(state)
+        state = state._replace(current_step = 'next_article')
+    else:
+        state = state._replace(humanizing = human)
+    return controller.main(state)
 
 
 def homicide_group(state: State) -> RxResp:

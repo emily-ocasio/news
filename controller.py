@@ -405,20 +405,28 @@ def review_articles(state: State) -> RxResp:
                 rxn = choose.victim
             else:
                 # Multiple homicides selected - save assignment
-                next_step = 'save_assignment'
+                next_step = 'save'
                 rxn = save.assignments
 
         case 'choose_victim':
-            next_step = 'save_assignment'
+            next_step = 'save'
             rxn = save.assignments
 
         case 'choose_unassignment':
-            next_step = 'save_assignment'
+            next_step = 'save'
             rxn = save.unassignment
 
-        case 'save_assignment':
+        case 'save':
             next_step = 'next_article'
             rxn = retrieve.refreshed_article
+
+        case 'choose_homicide_to_humanize':
+            next_step = 'choose_manual_humanizing'
+            rxn = choose.manual_humanizing
+
+        case 'choose_manual_humanizing':
+            next_step = 'save'
+            rxn = save.manual_humanizing
 
         case 'process_input':
             # Process the user's input and save the label.
@@ -737,7 +745,8 @@ def assign_choice(state: State) -> RxResp:
         case 'unassign':
             step = "choose_unassignment"
             reaction = choose.unassignment
-        case 'M':
+        case 'humanize':
+            step = "choose_homicide_to_humanize"
             reaction = choose.humanize
         case 'H':
             reaction =  choose.homicide_month
