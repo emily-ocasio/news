@@ -261,20 +261,6 @@ def save_manual_humanizing(state: State) -> RxResp:
     ), state
 
 
-# def edit_single_article(state: State) -> RxResp:
-#     """
-#     Review label for single article
-#     """
-#     return choose.single_article(state)
-
-
-# def retrieve_single_article(state: State) -> RxResp:
-#     """
-#     Retrieve single article by Id for review
-#     """
-#     return retrieve.single_article(state)
-
-
 def refresh_article(state: State) -> RxResp:
     """
     Refresh article after change was made
@@ -410,6 +396,29 @@ def review_articles(state: State) -> RxResp:
         case 'choose_assign_option':
             # Assignment has been selected
             rxn = assign_choice
+
+        case 'choose_homicide':
+            # Homicide has been selected
+            if len(state.selected_homicides) == 1:
+                # Only one homicide selected - proceed to choose victim name
+                next_step = 'choose_victim'
+                rxn = choose.victim
+            else:
+                # Multiple homicides selected - save assignment
+                next_step = 'save_assignment'
+                rxn = save.assignments
+
+        case 'choose_victim':
+            next_step = 'save_assignment'
+            rxn = save.assignments
+
+        case 'choose_unassignment':
+            next_step = 'save_assignment'
+            rxn = save.unassignment
+
+        case 'save_assignment':
+            next_step = 'next_article'
+            rxn = retrieve.refreshed_article
 
         case 'process_input':
             # Process the user's input and save the label.
@@ -725,7 +734,8 @@ def assign_choice(state: State) -> RxResp:
         case 'assign':
             step = 'choose_homicide'
             reaction = choose.assigment
-        case 'U':
+        case 'unassign':
+            step = "choose_unassignment"
             reaction = choose.unassignment
         case 'M':
             reaction = choose.humanize

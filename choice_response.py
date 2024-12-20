@@ -365,16 +365,17 @@ def assignments(state: State) -> RxResp:
     """
     selection = state.outputs
     if selection[0] == 0 or selection[0] > len(state.homicides):
+        # If no homicides selected, move to next article
         state = state._replace(current_step = 'next_article')
-        return controller.main(state)
-    if len(selection) == 1:
+    elif len(selection) == 1:
+        # If single homicides selected, ask for victim name
         state = state._replace(selected_homicides = (selection[0]-1,))
-        return choose.victim(state)
-    state = state._replace(victim = '', selected_homicides =
-                tuple(h_ix-1 for h_ix in
-                        range(selection[0],
-                            min(selection[1]+1, len(state.homicides)+1))))
-    return controller.save_assignment(state)
+    else:
+        state = state._replace(victim = '', selected_homicides =
+                    tuple(h_ix-1 for h_ix in
+                            range(selection[0],
+                                min(selection[1]+1, len(state.homicides)+1))))
+    return controller.main(state)
 
 
 def humanize(state: State)  -> RxResp:
@@ -429,9 +430,10 @@ def victim(state: State) -> RxResp:
     Try again if name is just one letter (not a space)
     """
     if len(state.outputs) == 1 and state.outputs != ' ':
-        return choose.victim(state)
-    state = state._replace(victim = state.outputs)
-    return controller.save_assignment(state)
+        state._replace(current_step = 'choose_homicide')
+    else:
+        state = state._replace(victim = state.outputs)
+    return controller.main(state)
 
 
 def unassignment(state: State) -> RxResp:
@@ -440,9 +442,10 @@ def unassignment(state: State) -> RxResp:
     """
     selected = int(state.outputs)
     if selected == 0 or selected > len(state.homicides_assigned):
-        return controller.next_article(state)
-    state = state._replace(selected_homicide = selected-1)
-    return controller.save_unassignment(state)
+        state = state._replace(current_step = 'next_article')
+    else:
+        state = state._replace(selected_homicide = selected-1)
+    return controller.main(state)
 
 
 def manual_humanizing(state: State) -> RxResp:

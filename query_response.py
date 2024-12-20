@@ -142,8 +142,7 @@ def refreshed_article(state: State) -> RxResp:
                                             state.next_article,
                                             row),
                             refresh_article = False)
-    return (controller.main(state) if state.main_flow == 'humanize'
-            else controller.next_article(state))
+    return controller.main(state)
 
 
 def refreshed_homicide(state: State) -> RxResp:
