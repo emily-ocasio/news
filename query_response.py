@@ -68,9 +68,8 @@ def single_article(state: State) -> RxResp:
     Response to query for single article to adjust
     """
     articles = state.outputs
-    state = state._replace(
-        articles=articles, next_article=0)
-    return controller.first_article(state)
+    state = state._replace(articles=articles, next_article=0)
+    return controller.main(state)
 
 
 def unassigned_articles(state: State) -> RxResp:

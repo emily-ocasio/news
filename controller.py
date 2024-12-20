@@ -261,18 +261,18 @@ def save_manual_humanizing(state: State) -> RxResp:
     ), state
 
 
-def edit_single_article(state: State) -> RxResp:
-    """
-    Review label for single article
-    """
-    return choose.single_article(state)
+# def edit_single_article(state: State) -> RxResp:
+#     """
+#     Review label for single article
+#     """
+#     return choose.single_article(state)
 
 
-def retrieve_single_article(state: State) -> RxResp:
-    """
-    Retrieve single article by Id for review
-    """
-    return retrieve.single_article(state)
+# def retrieve_single_article(state: State) -> RxResp:
+#     """
+#     Retrieve single article by Id for review
+#     """
+#     return retrieve.single_article(state)
 
 
 def refresh_article(state: State) -> RxResp:
@@ -292,7 +292,8 @@ def review_datasets(state: State) -> RxResp:
     """
     rxn: Reaction | None = None
     next_step: str | None = None
-    last_step = 'retrieve_articles' if state.articles_retrieved else state.current_step
+    last_step = 'retrieve_articles' if state.articles_retrieved \
+        else state.current_step
 
     match last_step:
         case 'not_started':
@@ -309,6 +310,10 @@ def review_datasets(state: State) -> RxResp:
                 # Review previously passed articles
                 next_step = 'retrieve_articles'
                 rxn = retrieve.passed_articles
+            elif state.review_type == 'SINGLE':
+                # Review a single article
+                next_step = 'choose_single_article'
+                rxn = choose.single_article
             else:
                 state = state._replace(review_dataset=state.review_type)
                 if state.review_dataset in '12':
@@ -324,6 +329,10 @@ def review_datasets(state: State) -> RxResp:
                     # Continue with selection of label to review
                     next_step = 'choose_label'
                     rxn = choose.review_label
+
+        case 'choose_single_article':
+            next_step = 'retrieve_articles'
+            rxn = retrieve.single_article
 
         case 'choose_label':
             # After selecting the label to review
@@ -713,7 +722,7 @@ def assign_choice(state: State) -> RxResp:
     """
     step : str | None = None
     match state.assign_choice:
-        case 'A':
+        case 'assign':
             step = 'choose_homicide'
             reaction = choose.assigment
         case 'U':

@@ -76,10 +76,9 @@ def initial(state: State, choice) -> RxResp:
     if choice == "F":
         state = state._replace(article_kind = 'review',
                                review_type = 'SINGLE',
-                               articles_retrieved = True,
                                main_flow = 'review',
                                current_step = 'choose_review_type')
-        return controller.edit_single_article(state)
+        return controller.main(state)
     if choice == 'A':
         return controller.auto_classify(state)
     if choice == "H":
@@ -210,9 +209,10 @@ def single_article(state: State, choice) -> RxResp:
     Respond to user entry of record id of single article to review
     """
     if choice == "":
-        return choose.initial(state)
-    state = state._replace(article_id=choice)
-    return controller.retrieve_single_article(state)
+        state = state._replace(main_flow='start')
+    else:
+        state = state._replace(article_id=choice)
+    return controller.main(state)
 
 
 def dates_to_classify(state: State) -> RxResp:
@@ -365,7 +365,8 @@ def assignments(state: State) -> RxResp:
     """
     selection = state.outputs
     if selection[0] == 0 or selection[0] > len(state.homicides):
-        return controller.next_article(state)
+        state = state._replace(current_step = 'next_article')
+        return controller.main(state)
     if len(selection) == 1:
         state = state._replace(selected_homicides = (selection[0]-1,))
         return choose.victim(state)
