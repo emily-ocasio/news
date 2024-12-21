@@ -112,7 +112,7 @@ class State(NamedTuple):
     inputargs: Any = tuple()
     inputkwargs: Any = {}
     articles_to_filter: int = 0
-    current_step: str = 'not_started'
+    #current_step: str = 'not_started'
     next_step: str = 'begin'
 
 

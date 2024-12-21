@@ -109,7 +109,7 @@ def auto_assigned_articles(state: State) -> RxResp:
     """
     articles = state.outputs
     state = state._replace(articles=articles, next_article=0)
-    return controller.first_article(state)
+    return controller.main(state)
 
 
 def homicides_by_month(state: State) -> RxResp:

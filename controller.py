@@ -49,8 +49,7 @@ def start_point(state: State) -> RxResp:
     """
     Initial starting point of application
     """
-    state = state._replace(current_step='not_started',
-                            next_step = 'begin',
+    state = state._replace(next_step = 'begin',
                            article_kind='',
                            review_type='',
                            homicide_group='',
@@ -134,27 +133,9 @@ def increment_article(state: State) -> RxResp:
 @next_event('start')
 def last_article(state: State) -> RxResp:
     """
-    Process last article
+    All articles have processed = print message and go back to main menu
     """
     return action2('print_message', message="All articles processed.\n"), state
-
-
-def show_article(state: State) -> RxResp:
-    """
-    Display article contents
-    Preceeded by retrieving the article types
-    If showing article in context of homicide assignment, first
-        retrieve homicide information (assigned and available), starting
-        with the already assigned homicides
-    If article has murder (or pass) status, treat as assignment regardless
-    """
-    return combine_actions(
-        from_reaction(display.article),
-        from_reaction(retrieve.assigned_homicides_by_article
-                      if (state.article_kind == 'assign'
-                        or state.articles[state.next_article]['Status'] == 'M')
-                      else choose.label)
-    ), state
 
 
 def continue_retrieving_homicides(state: State) -> RxResp:
@@ -165,7 +146,7 @@ def continue_retrieving_homicides(state: State) -> RxResp:
     If user has selected a victim name, retrieve based on name instead
     If user has selected a county, retrieve all county homicides instead
     """
-    state = state._replace(current_step = 'retrieve_homicides')
+    state = state._replace(next_step = 'show_homicide_table')
     if len(state.homicide_victim) > 0:
         # A victim name has been selected, so retrieve existing homicides
         # based on name
@@ -279,19 +260,20 @@ def review_datasets(state: State) -> RxResp:
     """
     rxn: Reaction | None = None
     next_step: str | None = None
-    last_step = 'retrieve_articles' if state.articles_retrieved \
-        else state.current_step
+    if state.articles_retrieved:
+        state = state._replace(next_step = 'review_articles')
 
-    match last_step:
-        case 'not_started':
+    match state.next_step:
+
+        case 'begin':
             # First time entering review flow
             state = state._replace(
                 article_kind='review',
                 articles_retrieved=False)
-            next_step = 'choose_review_type'
+            next_step = 'react_to_review_type'
             rxn = choose.dataset
 
-        case 'choose_review_type':
+        case 'react_to_review_type':
             # After selecting the type of article to review
             if state.review_type == 'PASSED':
                 # Review previously passed articles
@@ -299,34 +281,38 @@ def review_datasets(state: State) -> RxResp:
                 rxn = retrieve.passed_articles
             elif state.review_type == 'SINGLE':
                 # Review a single article
-                next_step = 'choose_single_article'
+                next_step = 'retrieve_single_article'
                 rxn = choose.single_article
             else:
                 state = state._replace(review_dataset=state.review_type)
                 if state.review_dataset in '12':
                     # Review assigned articles by victim
-                    next_step = 'retrieve_articles'
+                    next_step = 'review_articles'
                     rxn = retrieve.articles_humanizing_group
                 elif state.review_type == 'CLASS':
                     # Review previously auto-classified articles to reclassify
                     state = state._replace(article_kind='reclassify')
-                    next_step = 'choose_years_to_reclassify'
+                    next_step = 'retrieve_by_year'
                     rxn = choose.years_to_reclassify
                 else:
                     # Continue with selection of label to review
-                    next_step = 'choose_label'
+                    next_step = 'retrieve_by_label'
                     rxn = choose.review_label
 
-        case 'choose_single_article':
-            next_step = 'retrieve_articles'
+        case 'retrieve_single_article':
+            next_step = 'review_articles'
             rxn = retrieve.single_article
 
-        case 'choose_label':
+        case 'retrieve_by_year':
+            next_step = 'review_articles'
+            rxn = retrieve.auto_assigned_articles_by_year
+
+        case 'retrieve_by_label':
             # After selecting the label to review
-            next_step = 'retrieve_articles'
+            next_step = 'review_articles'
             rxn = retrieve.verified
 
-        case 'retrieve_articles':
+        case 'review_articles':
             if len(state.articles) == 0:
                 rxn = no_articles
             else:
@@ -338,7 +324,7 @@ def review_datasets(state: State) -> RxResp:
             rxn = review_articles
 
     if next_step is not None:
-        state = state._replace(current_step=next_step)
+        state = state._replace(next_step=next_step)
     return rxn(state)
 
 
@@ -348,7 +334,7 @@ def review_articles(state: State) -> RxResp:
     """
     next_step: str | None = None
     rxn: Reaction | None = None
-    match state.current_step:
+    match state.next_step:
         case 'begin_article_review':
             # Start reviewing the next article.
             if state.next_article >= len(state.articles):
@@ -364,85 +350,79 @@ def review_articles(state: State) -> RxResp:
                     current_month = calc.year_month_from_article(article)
                     state = state._replace(homicide_month=current_month,
                                         homicide_victim='', county='')
-                next_step = 'retrieve_article_types'
+                next_step = 'display_article'
                 rxn = retrieve.article_types
 
-        case 'retrieve_article_types' | 'refresh_article':
-            # Article types have been retrieved and article is ready for display
-            next_step = 'display_article'
-            rxn = display.article
-
         case 'display_article':
-            # Article was displayed
+            # Article types have been retrieved and article is ready for display
             if (state.article_kind == 'assign'
                 or state.articles[state.next_article]['Status'] == 'M'):
-                # Article can be assigned
-                # Retrieve current assignments
                 next_step = 'retrieve_assignments'
-                rxn = retrieve.assigned_homicides_by_article
             else:
-                # Article is ready for labeling - no assignment
                 next_step = 'choose_new_label'
-                rxn = choose.label
+            rxn = display.article
 
         case 'retrieve_assignments':
+            # Retrieve current assignments
+            next_step = 'retrieve_homicide_table'
+            rxn = retrieve.assigned_homicides_by_article
+
+        case 'choose_new_label':
+            # Choose a label for the article
+            next_step = 'final_save'
+            rxn = choose.label
+
+        case 'retrieve_homicide_table':
             # Assignments have been retrieved
             rxn = continue_retrieving_homicides
 
-        case 'retrieve_homicides':
+        case 'show_homicide_table':
             # Potential homicidees habe been retrieved
             # Show possibiliies and choose
             rxn = homicide_table
 
-        case 'choose_assign_option':
+        case 'assign_choice':
             # Assignment has been selected
             rxn = assign_choice
 
-        case 'choose_homicide':
-            # Homicide has been selected
-            if len(state.selected_homicides) == 1:
-                # Only one homicide selected - proceed to choose victim name
-                next_step = 'choose_victim'
-                rxn = choose.victim
-            else:
-                # Multiple homicides selected - save assignment
-                next_step = 'save'
-                rxn = save.assignments
+        case 'after_assignment' if len(state.selected_homicides) == 1:
+            # Only one homicide selected - choose victim name first
+            next_step = 'save_assignment'
+            rxn = choose.victim
 
-        case 'choose_victim':
-            next_step = 'save'
+        case 'after_assignment' | 'save_assignment':
+            next_step = 'display_article'
             rxn = save.assignments
 
-        case 'choose_unassignment':
-            next_step = 'save'
+        case 'save_unassignment':
+            next_step = 'display_article'
             rxn = save.unassignment
 
-        case 'enter_notes':
-            next_step = 'save'
+        case 'save_notes':
+            next_step = 'refresh_article'
             rxn = save.notes
 
-        case 'save':
-            next_step = 'refresh_article'
-            rxn = retrieve.refreshed_article
-
-        case 'choose_homicide_to_humanize':
-            next_step = 'choose_manual_humanizing'
+        case 'choose_manual_humanizing':
+            next_step = 'save_manual_humanizing'
             rxn = choose.manual_humanizing
 
-        case 'choose_manual_humanizing':
-            next_step = 'save'
+        case 'save_manual_humanizing':
+            next_step = 'display_article'
             rxn = save.manual_humanizing
 
-        case 'choose_new_label':
+        case 'final_save':
             # Process the user's input and save the label.
-            next_step = 'final_save'
+            if state.new_label == 'M':
+                next_step = 'refresh_article'
+            else:
+                next_step = 'increment_article'
             rxn = save.label
 
-        case 'final_save' if state.new_label == "M":
-            next_step = 'refresh_article'
-            rxn = refresh_article
+        case 'refresh_article':
+            next_step = 'display_article'
+            rxn = retrieve.refreshed_article
 
-        case 'final_save':
+        case 'increment_article':
             # Move to the next article.
             state = state._replace(next_article=state.next_article + 1,
                                    homicide_month = '')
@@ -454,7 +434,7 @@ def review_articles(state: State) -> RxResp:
             raise ControlException(f"Invalid current step: {invalid}")
 
     if next_step is not None:
-        state = state._replace(current_step=next_step)
+        state = state._replace(next_step=next_step)
     if rxn is not None:
         return rxn(state)
 
@@ -505,7 +485,7 @@ def filter_articles(state: State) -> RxResp:
                 rxn = last_article
         case 'begin_article_filter':
             state = state._replace(
-                pre_article_prompt='homicide_type',
+                pre_article_prompt='homicide_type2',
                 gpt3_action='classify_homicide')
             next_step = 'check_classification'
             rxn = gpt3_prompt.prompt_gpt4
@@ -540,7 +520,7 @@ def review_filtered_mismatches(state: State) -> RxResp:
         main_flow='review',
         article_kind='review',
         next_article = 0,
-        current_step='begin_article_review')
+        next_step='begin_article_review')
     return review_articles(state)
 
 
@@ -723,7 +703,7 @@ def homicide_table(state: State) -> RxResp:
     Preceeded by retrieval of homicide tables
     Occurs while showing each article during assignment
     """
-    state = state._replace(current_step='choose_assign_option')
+    state = state._replace(next_step='assign_choice')
     return combine_actions(
         from_reaction(display.homicide_table),
         from_reaction(choose.assign_choice)
@@ -761,22 +741,22 @@ def assign_choice(state: State) -> RxResp:
     step : str | None = None
     match state.assign_choice:
         case 'assign':
-            step = 'choose_homicide'
+            step = 'after_assignment'
             reaction = choose.assigment
         case 'unassign':
-            step = "choose_unassignment"
+            step = "save_unassignment"
             reaction = choose.unassignment
         case 'humanize':
-            step = "choose_homicide_to_humanize"
+            step = "choose_manual_humanizing"
             reaction = choose.humanize
         case 'select_month':
-            step = 'refresh_article'
+            step = 'display_article'
             reaction =  choose.homicide_month
         case 'select_victim':
-            step = 'refresh_article'
+            step = 'display_article'
             reaction =  choose.homicide_victim
         case 'select_county':
-            step = 'refresh_article'
+            step = 'display_article'
             reaction =  choose.homicide_county
         case 'G':
             state = state._replace(pre_article_prompt = 'few-shot2',
@@ -804,25 +784,24 @@ def assign_choice(state: State) -> RxResp:
                 reaction = choose.gpt3_small_extract
         case 'skip':
             # Skip to the next article
-            state = state._replace(next_article = state.next_article + 1,
-                                current_step = 'begin_article_review')
+            step = 'increment_article'
             reaction = review_articles
         case 'N' | 'O' | 'P' | 'M' as label:
             state = state._replace(new_label = label)
-            step = 'refresh_article' if label == 'M' else 'final_save'
-            reaction = save.label
+            step = 'final_save'
+            reaction = review_articles
         case 'E' | 'D' as label:
             # User selected new assigned statuses for this article
             state = state._replace(new_label = label)
-            step = 'final_save'
+            step = 'increment_article'
             reaction = save.assign_status
         case 'note':
-            step = 'enter_notes'
+            step = 'save_notes'
             reaction = choose_new_note
         case choice:
             raise ControlException(f"Unsupported assign choice <{choice}>")
     if step is not None:
-        state = state._replace(current_step = step)
+        state = state._replace(next_step = step)
     return reaction(state)
 
 @main_flow('humanize')
@@ -978,3 +957,20 @@ def humanize_homicides_auto_gpt3(state: State) -> RxResp:
     # Auto humanizing complete
     state = state._replace(next_article=state.next_article+1)
     return retrieve.refreshed_homicide(state)
+
+# def show_article(state: State) -> RxResp:
+#     """
+#     Display article contents
+#     Preceeded by retrieving the article types
+#     If showing article in context of homicide assignment, first
+#         retrieve homicide information (assigned and available), starting
+#         with the already assigned homicides
+#     If article has murder (or pass) status, treat as assignment regardless
+#     """
+#     return combine_actions(
+#         from_reaction(display.article),
+#         from_reaction(retrieve.assigned_homicides_by_article
+#                       if (state.article_kind == 'assign'
+#                        or state.articles[state.next_article]['Status'] == 'M')
+#                       else choose.label)
+#     ), state

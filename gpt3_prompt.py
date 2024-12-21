@@ -196,7 +196,29 @@ system_prompts = {
     "outside of Massachussetts, "
     "(3) the article does not refer to a homicide. ",
 
-    'homicide_type':
+    'homicide_type2':
+    """
+I will provide a news article from the Boston Globe newspaper. 
+The article has some words that suggest the topic is a homicide or murder, 
+and some articles may include news about more than one incident. 
+
+Please classify the article into one of the following:
+
+- 'no homicide in article'
+- 'vehicular homicide' (vehicular homicide' (this means the death occurred 
+unintentionally during a traffic accident)
+- 'felon killed by police' (this means the killing was done 
+by the police and the victim was a criminal suspect)
+- 'fictional homicide' (article mentions homicide in a novel, movie, play, 
+TV show etc., but it did not occur in real life)
+- 'homicide' (this means at least one incident refers to a homicide, 
+not including one of the special categories above)
+
+Notes:
+*If the victim is a police officer, categorize as 'homicide'
+
+""",
+    'homicide_type': 
     "I will provide a news article from the Boston Globe newspaper."
     "The article has some words that suggest the topic is a homicide or murder,"
     "Some articles may include news about more than one incident. "
@@ -226,6 +248,7 @@ system_prompts = {
 system_types = {
     'defaullt': HomicideClassResponse,
     'homicide_type': HomicideClassResponse,
+    'homicide_type2': HomicideClassResponse,
     'location': LocationClassResponse
 }
 

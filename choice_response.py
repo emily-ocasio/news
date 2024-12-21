@@ -77,7 +77,7 @@ def initial(state: State, choice) -> RxResp:
         state = state._replace(article_kind = 'review',
                                review_type = 'SINGLE',
                                main_flow = 'review',
-                               current_step = 'choose_review_type')
+                               next_step = 'react_to_review_type')
         return controller.main(state)
     if choice == 'A':
         return controller.auto_classify(state)
@@ -107,7 +107,7 @@ def new_label(state: State, choice) -> RxResp:
         return controller.show_remaining_lines(state)
     if state.main_flow == 'review':
         if choice == '':
-            state = state._replace(current_step = 'final_save')
+            state = state._replace(next_step = 'increment_article')
         else:
             state = state._replace(new_label=choice)
         return controller.main(state)
@@ -141,25 +141,6 @@ def dataset(state: State, choice) -> RxResp:
     })
     if choice not in dataset_choice:
         raise ChoiceException("Unsupported dataset choice")
-    # if choice == 'P':
-    #     return controller.review_passed_articles(state)
-    # if choice == "T":
-    #     review_dataset = 'TRAIN'
-    # elif choice == "V":
-    #     review_dataset = 'VAL'
-    # elif choice == "L":
-    #     review_dataset = 'VAL2'
-    # elif choice == 'S':
-    #     review_dataset = 'TEST'
-    # elif choice == "E":
-    #     review_dataset = 'TEST2'
-    # elif choice == 'A':
-    #     state = state._replace(article_kind='reclassify')
-    #     review_dataset = 'CLASS'
-    # else:
-    #     raise Exception('Unsupported dataset choice')
-    # state = state._replace(review_dataset=review_dataset)
-    #return controller.select_review_label(state)
     state = state._replace(review_type = dataset_choice[choice])
     return controller.main(state)
 
@@ -376,7 +357,7 @@ def assignments(state: State) -> RxResp:
     selection = state.outputs
     if selection[0] == 0 or selection[0] > len(state.homicides):
         # If no homicides selected, go back to assignment menu
-        state = state._replace(current_step = 'refresh_article')
+        state = state._replace(next_step = 'display_article')
     elif len(selection) == 1:
         # If single homicides selected, ask for victim name
         state = state._replace(selected_homicides = (selection[0]-1,))
@@ -395,7 +376,7 @@ def humanize(state: State)  -> RxResp:
     """
     selection = int(state.outputs)
     if selection == 0 or selection > len(state.homicides_assigned):
-        state = state._replace(current_step = 'refresh_article')
+        state = state._replace(next_step = 'display_article')
     else:
         state = state._replace(selected_homicide = selection-1)
     return controller.main(state)
@@ -441,7 +422,7 @@ def victim(state: State) -> RxResp:
     Try again if name is just one letter (not a space)
     """
     if len(state.outputs) == 1 and state.outputs != ' ':
-        state._replace(current_step = 'choose_homicide')
+        state._replace(next_step = 'homicide_table')
     else:
         state = state._replace(victim = state.outputs)
     return controller.main(state)
@@ -453,7 +434,7 @@ def unassignment(state: State) -> RxResp:
     """
     selected = int(state.outputs)
     if selected == 0 or selected > len(state.homicides_assigned):
-        state = state._replace(current_step = 'refresh_article')
+        state = state._replace(next_step = 'display_article')
     else:
         state = state._replace(selected_homicide = selected-1)
     return controller.main(state)
@@ -466,7 +447,7 @@ def manual_humanizing(state: State) -> RxResp:
     """
     human = state.outputs
     if human =='' or not 1 <= int(human) <= 3:
-        state = state._replace(current_step = 'refresh_article')
+        state = state._replace(next_step = 'display_article')
     else:
         state = state._replace(humanizing = human)
     return controller.main(state)
