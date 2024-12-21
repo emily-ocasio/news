@@ -232,6 +232,8 @@ def article_label(row: Row) -> tuple[str, ...]:
             "\n",
             f"Record ID = {row['RecordId']}",
             f"Verified status = <{row['status']}>\n",
+            f"GPT Class = {row['GPTClass']}\n" 
+                if row['GPTClass'] is not None else "",
             f"Assignment status = <{row['assignstatus']}>\n"
             )
 
@@ -572,6 +574,13 @@ def is_gpt_location_class_correct(gpt_code, manual_class) -> bool:
     if manual_class == 'M':
         return gpt_code == 'M'
     return gpt_code != 'M'
+
+def gpt_manual_mismatch(row: Row) -> bool:
+    """
+    Determine whether GPT-3 classification mismatches manual classification
+    """
+    gclass = 'N' if row['GPTClass'] in ['VM','LEM','FM'] else row['GPTClass']
+    return row['Status'] != gclass
 
 def humanizing_from_response(response: str, response_type='level') -> str:
     """

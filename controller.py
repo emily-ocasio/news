@@ -495,7 +495,14 @@ def filter_articles(state: State) -> RxResp:
     match state.next_step:
         case 'begin_article_filter' \
             if state.next_article >= len(state.articles):
-            rxn = last_article
+            if len(state.articles) > 0:
+                # All articles have been filtered, now retrieve them again
+                # and then review the mismatches
+                next_step = 'review_filtered_mismatches'
+                rxn = review_filtered_mismatches
+            else:
+                # No articles to filter
+                rxn = last_article
         case 'begin_article_filter':
             state = state._replace(
                 pre_article_prompt='homicide_type',
@@ -509,14 +516,32 @@ def filter_articles(state: State) -> RxResp:
             next_step = 'save'
             rxn = gpt3_prompt.prompt_gpt4
         case 'check_classification' | 'save':
-            next_step = 'next_article'
+            next_step = 'refresh_article'
             rxn = save.gpt_homicide_class
+        case 'refresh_article':
+            # refresh article after classification so it can be reviewed later
+            next_step = 'next_article'
+            rxn = retrieve.refreshed_article
         case invalid:
             raise ControlException(f"Invalid current step: {invalid}")
     if next_step is not None:
         state = state._replace(next_step=next_step)
     if rxn is not None:
         return rxn(state)
+
+
+def review_filtered_mismatches(state: State) -> RxResp:
+    """
+    Review filtered articles with mismatches
+    Only include the articles that are not matched between GPT-4 and manual
+    """
+    state = state._replace(
+        articles=tuple(filter(calc.gpt_manual_mismatch, state.articles)),
+        main_flow='review',
+        article_kind='review',
+        next_article = 0,
+        current_step='begin_article_review')
+    return review_articles(state)
 
 
 def retrieve_verified(state: State) -> RxResp:

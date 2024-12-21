@@ -65,8 +65,8 @@ def respond_homicide_class(state: State) -> RxResp:
                            gpt3_response=response_code,
                            next_event='main')
     return combine_actions(
-        action2('print_message', msg),
-        action2('wait_enter' if not match else 'no_op')
+        action2('print_message', msg)
+        #action2('wait_enter' if not match else 'no_op')
     ), state
 
 def respond_location_class(state: State) -> RxResp:
@@ -89,6 +89,6 @@ def respond_location_class(state: State) -> RxResp:
                            gpt3_response=response_code,
                            next_event='main')
     return combine_actions(
-        action2('print_message', msg),
-        action2('wait_enter' if not match else 'no_op')
+        action2('print_message', msg)
+        #action2('wait_enter' if not match else 'no_op')
     ), state
