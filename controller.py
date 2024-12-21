@@ -50,6 +50,7 @@ def start_point(state: State) -> RxResp:
     Initial starting point of application
     """
     state = state._replace(current_step='not_started',
+                            next_step = 'begin',
                            article_kind='',
                            review_type='',
                            homicide_group='',
@@ -465,28 +466,20 @@ def second_filter(state: State) -> RxResp:
     """
     next_step: str | None = None
     rxn : Reaction | None = None
-    match state.current_step:
-        case 'not_started':
-            next_step = 'choose_number'
-            rxn = choose.articles_to_filter
-        case 'choose_number':
-            # if state.articles_to_filter == 0:
-            #     state = state._replace(main_flow='start')
-            #     return main(state)
+    match state.next_step:
+        case 'begin':
             next_step = 'retrieve_articles'
-            rxn = retrieve.articles_to_filter
+            rxn = choose.articles_to_filter
         case 'retrieve_articles':
-            state = state._replace(
-                pre_article_prompt='homicide_type',
-                gpt3_action='classify_homicide')
             next_step = 'begin_article_filter'
-        case 'save':
+            rxn = retrieve.articles_to_filter
+        case 'next_article':
             state = state._replace(
                 next_article=state.next_article + 1)
             next_step = 'begin_article_filter'
 
     if next_step is not None:
-        state = state._replace(current_step=next_step)
+        state = state._replace(next_step=next_step)
     if rxn is not None:
         return rxn(state)
 
@@ -499,20 +492,29 @@ def filter_articles(state: State) -> RxResp:
     """
     next_step: str | None = None
     rxn: Reaction | None = None
-    match state.current_step:
-        case 'begin_article_filter':
+    match state.next_step:
+        case 'begin_article_filter' \
             if state.next_article >= len(state.articles):
-                rxn = last_article
-            else:
-                next_step = 'classify'
-                rxn = gpt3_prompt.prompt_gpt4
-        case 'classify':
+            rxn = last_article
+        case 'begin_article_filter':
+            state = state._replace(
+                pre_article_prompt='homicide_type',
+                gpt3_action='classify_homicide')
+            next_step = 'check_classification'
+            rxn = gpt3_prompt.prompt_gpt4
+        case 'check_classification' if state.gpt3_response == 'M':
+            state = state._replace(
+                pre_article_prompt='location',
+                gpt3_action='classify_location')
             next_step = 'save'
+            rxn = gpt3_prompt.prompt_gpt4
+        case 'check_classification' | 'save':
+            next_step = 'next_article'
             rxn = save.gpt_homicide_class
         case invalid:
             raise ControlException(f"Invalid current step: {invalid}")
     if next_step is not None:
-        state = state._replace(current_step=next_step)
+        state = state._replace(next_step=next_step)
     if rxn is not None:
         return rxn(state)
 

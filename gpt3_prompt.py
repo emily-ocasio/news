@@ -2,7 +2,7 @@
 Reactions to prompt GPT3 language model
 """
 
-from state import RxResp, State, HomicideClassResponse
+from state import RxResp, State, HomicideClassResponse, LocationClassResponse
 from actionutil import action2, next_event
 import calculations as calc
 
@@ -195,6 +195,7 @@ system_prompts = {
     "(2) an article that refers to a homicide that occurred "
     "outside of Massachussetts, "
     "(3) the article does not refer to a homicide. ",
+
     'homicide_type':
     "I will provide a news article from the Boston Globe newspaper."
     "The article has some words that suggest the topic is a homicide or murder,"
@@ -209,7 +210,23 @@ system_prompts = {
     "while responding to someone committing a crime)\n"
     "'fictional homicide' (article mentions homicide "
     "in a book, movie, play, etc., not in real life)\n"
-    "'no homicide in article'"
+    "'no homicide in article'",
+
+    'location': "I will provide an article from the Boston Globe newspaper "
+    "that refers to one (or more) homicides. "
+    "I am only interested in homicides that occurred in the "
+    "state of Massachusetts, so determine whether at least one of the "
+    "homicides in the article occurred in Massachusetts.  "
+    "Respond with either:\n"
+    '"No homicides in Massachussetts"\n'
+    "or\n"
+    '"Homicide(s) in Massachussetts"\n'
+}
+
+system_types = {
+    'defaullt': HomicideClassResponse,
+    'homicide_type': HomicideClassResponse,
+    'location': LocationClassResponse
 }
 
 
@@ -255,4 +272,4 @@ def prompt_gpt4(state: State) -> RxResp:
 
     return action2('prompt_gpt', system=system,
                    user=user,
-                   response_type=HomicideClassResponse), state
+                   response_type=system_types[state.pre_article_prompt]), state

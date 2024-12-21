@@ -68,6 +68,28 @@ CREATE TABLE IF NOT EXISTS assigned (
     FOREIGN KEY(ShrId) REFERENCES shr("index")
 );
 
+CREATE TABLE IF NOT EXISTS stories (
+    RecordId INTEGER NOT NULL,
+    StoryNum INTEGER NOT NULL,
+    Classification TEXT,
+    Summary TEXT,
+    PRIMARY KEY (RecordId, StoryNum),
+    FOREIGN KEY (RecordId) REFERENCES articles(RecordId)
+);
+
+CREATE TRIGGER IF NOT EXISTS increment_story_num
+AFTER INSERT ON stories
+FOR EACH ROW
+BEGIN
+    UPDATE stories
+    SET StoryNum = (
+        SELECT COALESCE(MAX(StoryNum), 0) + 1
+        FROM stories
+        WHERE RecordId = NEW.RecordId
+    )
+    WHERE rowid = NEW.rowid;
+END;
+
 CREATE INDEX IF NOT EXISTS attempts 
     ON gptAttempts(ShrId, RecordId, PostArticle, PreArticle);
 

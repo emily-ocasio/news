@@ -22,11 +22,27 @@ class HomicideClass(Enum):
     FICTIONAL_HOMICIDE = "fictional homicide"
     NO_HOMICIDE_IN_ARTICLE = "no homicide in article"
 
+
+class LocationClass(Enum):
+    """
+    Enum for location classification"""
+    NOT_IN_MASSACHUSETTS = "no homicide in Massachusetts"
+    IN_MASSACHUSETTS = "homicide(s) in Massachusetts"
+
+
+class LocationClassResponse(BaseModel):
+    """
+    Response model for location classification
+    """
+    classification: LocationClass
+
+
 class HomicideClassResponse(BaseModel):
     """
     Response model for homicide classification.
     """
     classification: HomicideClass
+
 
 class State(NamedTuple):
     """
@@ -97,15 +113,19 @@ class State(NamedTuple):
     inputkwargs: Any = {}
     articles_to_filter: int = 0
     current_step: str = 'not_started'
+    next_step: str = 'begin'
+
 
 # An Action is a function that has State as argument,
 #   performs a side effect, and returns an updated State
 Action = Callable[[State], State]
 
+
 # The response of a reaction (RxResp) is a tuple,
 #   which includes the next Action to take, and the updated State
 #RxResp = Tuple[Callable[...,State], State]
 RxResp = tuple[Action, State]
+
 
 # A reaction (no side effects) takes a State
 #   and returns a RxResp (see above)

@@ -14,7 +14,7 @@ from rich.text import Text
 from rich.table import Table
 
 from mass_towns import townlist
-from state import Rows, HomicideClass
+from state import Rows, HomicideClass, LocationClass
 
 absolute_roots = (
     'slain',
@@ -544,15 +544,34 @@ def gpt_homicide_class_code(classification: HomicideClass) -> str:
     }
     return codes[classification]
 
+
+def gpt_location_class_code(classification: LocationClass) -> str:
+    """
+    Return code for location class
+    This is what is saved in the database
+    """
+    codes = {
+        LocationClass.IN_MASSACHUSETTS: 'M',
+        LocationClass.NOT_IN_MASSACHUSETTS: 'O'
+    }
+    return codes[classification]
+
+
 def is_gpt_homicide_class_correct(gpt_code, manual_class) -> bool:
     """
     Determine whether GPT-3 classification matches manual classification
     """
-    if manual_class == 'M':
-        return gpt_code == 'M'
     if manual_class == 'N':
         return gpt_code != 'M'
     return True
+
+def is_gpt_location_class_correct(gpt_code, manual_class) -> bool:
+    """
+    Determine whether GPT-3 location matches manual classification
+    """
+    if manual_class == 'M':
+        return gpt_code == 'M'
+    return gpt_code != 'M'
 
 def humanizing_from_response(response: str, response_type='level') -> str:
     """
