@@ -402,6 +402,9 @@ def review_articles(state: State) -> RxResp:
             next_step = 'refresh_article'
             rxn = save.notes
 
+        case next_step if next_step.startswith('gpt_filter'):
+            rxn = filter_articles
+
         case 'choose_manual_humanizing':
             next_step = 'save_manual_humanizing'
             rxn = choose.manual_humanizing
@@ -451,64 +454,72 @@ def second_filter(state: State) -> RxResp:
             next_step = 'retrieve_articles'
             rxn = choose.articles_to_filter
         case 'retrieve_articles':
-            next_step = 'begin_article_filter'
+            next_step = 'gpt_filter_begin'
             rxn = retrieve.articles_to_filter
         case 'next_article':
             state = state._replace(
                 next_article=state.next_article + 1)
-            next_step = 'begin_article_filter'
-
-    if next_step is not None:
-        state = state._replace(next_step=next_step)
-    if rxn is not None:
-        return rxn(state)
-
-    return filter_articles(state)
-
-
-def filter_articles(state: State) -> RxResp:
-    """
-    Filter articles one by one using GPT-4
-    """
-    next_step: str | None = None
-    rxn: Reaction | None = None
-    match state.next_step:
-        case 'begin_article_filter' \
-            if state.next_article >= len(state.articles):
-            if len(state.articles) > 0:
-                # All articles have been filtered, now retrieve them again
-                # and then review the mismatches
-                next_step = 'review_filtered_mismatches'
-                rxn = review_filtered_mismatches
-            else:
-                # No articles to filter
-                rxn = last_article
-        case 'begin_article_filter':
-            state = state._replace(
-                pre_article_prompt='homicide_type2',
-                gpt3_action='classify_homicide')
-            next_step = 'check_classification'
-            rxn = gpt3_prompt.prompt_gpt4
-        case 'check_classification' if state.gpt3_response == 'M':
-            state = state._replace(
-                pre_article_prompt='location',
-                gpt3_action='classify_location')
-            next_step = 'save'
-            rxn = gpt3_prompt.prompt_gpt4
-        case 'check_classification' | 'save':
-            next_step = 'refresh_article'
-            rxn = save.gpt_homicide_class
+            next_step = 'gpt_filter_begin'
+            rxn = filter_articles
+        case step if step.startswith('gpt_filter'):
+            rxn = filter_articles
         case 'refresh_article':
             # refresh article after classification so it can be reviewed later
             next_step = 'next_article'
             rxn = retrieve.refreshed_article
         case invalid:
             raise ControlException(f"Invalid current step: {invalid}")
+
     if next_step is not None:
         state = state._replace(next_step=next_step)
     if rxn is not None:
         return rxn(state)
 
+
+def filter_articles(state: State) -> RxResp:
+    """
+    Filter articles one by one using GPT-4
+    Can be called from second_filter or review main flows
+    """
+    next_step: str | None = None
+    rxn: Reaction | None = None
+    match state.next_step:
+        case 'gpt_filter_begin' \
+            if state.next_article >= len(state.articles):
+            # Only invoked by second_filter main flow
+            # No more articles to filter
+            if len(state.articles) > 0:
+                # All articles have been filtered, now retrieve them again
+                # and then review the mismatches
+                next_step = 'review_filtered_mismatches'
+                rxn = review_filtered_mismatches
+            else:
+                # No articles to filter in the first place
+                rxn = last_article
+        case 'gpt_filter_begin' | 'gpt_filter_classify':
+            state = state._replace(
+                pre_article_prompt='homicide_type2',
+                gpt3_action='classify_homicide')
+            next_step = 'gpt_filter_check'
+            rxn = gpt3_prompt.prompt_gpt4
+        case 'gpt_filter_check' if state.gpt3_response == 'M':
+            # Check location first because it's classified as homicide
+            state = state._replace(
+                pre_article_prompt='location',
+                gpt3_action='classify_location')
+            next_step = 'gpt_filter_save'
+            rxn = gpt3_prompt.prompt_gpt4
+        case 'gpt_filter_check' | 'gpt_filter_save':
+            # Either no need for location, or location was already determined
+            # Return to the 'refrsh_article' step of the corresponding flow
+            next_step = 'refresh_article'
+            rxn = save.gpt_homicide_class
+        case invalid:
+            raise ControlException(f"Invalid current step: {invalid}")
+    if next_step is not None:
+        state = state._replace(next_step=next_step)
+    if rxn is not None:
+        return rxn(state)
 
 def review_filtered_mismatches(state: State) -> RxResp:
     """
@@ -749,6 +760,10 @@ def assign_choice(state: State) -> RxResp:
         case 'humanize':
             step = "choose_manual_humanizing"
             reaction = choose.humanize
+        case 'filter':
+            # placeholder - this needs to call the gpt filtering steps
+            step = 'gpt_filter_classify'
+            reaction = filter_articles
         case 'select_month':
             step = 'display_article'
             reaction =  choose.homicide_month

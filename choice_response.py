@@ -301,6 +301,7 @@ def assign_choice(state: State, choice) -> RxResp:
         'A': 'assign',
         'U': 'unassign',
         'M': 'humanize',
+        'F': 'filter',
         'H': 'select_month',
         'V': 'select_victim',
         'Y': 'select_county',
