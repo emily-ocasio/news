@@ -3,6 +3,7 @@ Pure functions with no side effects
 """
 import re
 from sqlite3 import Row
+from datetime import datetime
 from collections.abc import Iterable
 from typing import Optional, Union
 from functools import reduce
@@ -14,7 +15,7 @@ from rich.text import Text
 from rich.table import Table
 
 from mass_towns import townlist
-from state import Rows, HomicideClass, LocationClass
+from state import Rows, HomicideClass, LocationClass, ArticleAnalysisResponse
 
 absolute_roots = (
     'slain',
@@ -196,6 +197,12 @@ def display_article(total: int,
     """
     counter = article_counter(current, total)
     label = article_label(row)
+    if row['gptVictimJson'] is not None:
+        victims = display_gpt_victims(row['gptVictimJson'])
+        victim_info =  tuple(
+            f"\nVictim extract from GPT:\n{victims}".splitlines())
+    else:
+        victim_info = tuple("")
     # lines = wrap_lines(
     #     color_text_matches(color_mass_locations(row['FullText']))
     # )
@@ -203,11 +210,18 @@ def display_article(total: int,
     limit = limit_lines - 12
     art_types = article_types(types)
     return ("\n".join(counter
-                      + label
+                      + label + victim_info
                       + art_types
                       + (lines[:limit] if limit_lines > 0 else lines))
             + '\n', lines)
 
+
+def display_gpt_victims(json: str) -> str:
+    """
+    Display GPT-3 generated victim list
+    """
+    victims = ArticleAnalysisResponse.model_validate_json(json)
+    return victims.model_dump_json(indent = 4)
 
 def display_remaining_lines(lines, limit_lines=0) -> str:
     """
@@ -624,3 +638,10 @@ def remove_quotes(text: str) -> str:
     Also replace any additional double quotes with single quotes
     """
     return text.lstrip('\n"').rstrip('\n"').replace('"', "'")
+
+def format_date(date_str):
+    """
+    Convert date string to readable format
+    """
+    date_obj = datetime.strptime(date_str, '%Y%m%d')
+    return date_obj.strftime('%B %d, %Y')

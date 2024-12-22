@@ -227,7 +227,8 @@ def prompt_gpt3(prompt, msg, model = 'davinci'):
     # return response.choices[0].message.content, msg
 
 @actiondef
-def prompt_gpt(system, user, model = 'mini', response_type = None):
+def prompt_gpt(system, user, model = 'mini', max_tokens = 256,
+               response_type = None):
     """
     Prompt GPT - newer API for GPT3.5 and later models
     When response_type is included, the beta Structured Output
@@ -235,7 +236,7 @@ def prompt_gpt(system, user, model = 'mini', response_type = None):
         response_type should be a pydantic type with expressive
         attribute names that will be used by the model to respond
     """
-    models = {'mini': 'gpt-4o-mini'}
+    models = {'mini': 'gpt-4o-mini', '4o': 'gpt-4o'}
     client = OpenAI(api_key=GPT_API_KEY)
     if response_type:
         response = client.beta.chat.completions.parse(
@@ -244,7 +245,7 @@ def prompt_gpt(system, user, model = 'mini', response_type = None):
             messages=[ { 'role': 'system', 'content': system },
                        { 'role': 'user', 'content': user }],
             temperature=0,
-            max_tokens=256,
+            max_tokens=max_tokens,
             response_format = response_type)
         return response.choices[0].message.parsed, system
 

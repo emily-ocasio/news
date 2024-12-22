@@ -123,6 +123,17 @@ def gpt_homicide_class(state: State) -> RxResp:
     return action2('command_db', sql=sql, gptClass=gpt_class,
                    record_id=record_id), state
 
+def gpt_victims(state: State) -> RxResp:
+    """
+    Save the extracted victims from an article
+    """
+    sql = calc.gpt_victims_sql()
+    article = state.articles[state.next_article]
+    record_id = article['RecordId']
+    victims = state.gpt3_response
+    return action2('command_db', sql=sql, victims=victims,
+                   record_id=record_id), state
+
 def gpt3_extract(state: State) -> RxResp:
     """
     Save extract of the article corresponding to the

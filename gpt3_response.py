@@ -21,6 +21,8 @@ def respond(state: State) -> RxResp:
             return respond_homicide_class(state)
         case 'classify_location':
             return respond_location_class(state)
+        case 'victims':
+            return respond_victims(state)
     response, prompt = state.outputs
     msg = calc.prompt_response(prompt, response)
     state = state._replace(gpt3_prompt=prompt, gpt3_response=response,
@@ -91,4 +93,20 @@ def respond_location_class(state: State) -> RxResp:
     return combine_actions(
         action2('print_message', msg)
         #action2('wait_enter' if not match else 'no_op')
+    ), state
+
+
+def respond_victims(state: State) -> RxResp:
+    """
+    Handle response from GPT for victim extraction
+    """
+    response, prompt = state.outputs
+    response_text = response.model_dump_json()
+    msg = calc.display_gpt_victims(response_text)
+    state = state._replace(gpt3_prompt=prompt,
+                           gpt3_response=response_text,
+                           next_event='main')
+    return combine_actions(
+        action2('print_message', msg),
+        action2('wait_enter')
     ), state

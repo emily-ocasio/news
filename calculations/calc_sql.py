@@ -588,6 +588,16 @@ def gpt_homicide_class_sql() -> str:
         WHERE RecordId = ?
     """
 
+def gpt_victims_sql() -> str:
+    """
+    SQL Statement to set the gpt json text for the victims extract
+    """
+    return """
+        UPDATE articles
+        SET gptVictimJson = ?
+        WHERE RecordId = ?
+    """
+
 def articles_to_filter_sql() -> str:
     """
     SQL statement to return articles to filter based on a limit

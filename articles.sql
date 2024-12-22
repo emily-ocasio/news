@@ -7,7 +7,16 @@ CREATE TABLE IF NOT EXISTS articles (
     Page TEXT,
     Pagination TEXT,
     FullText TEXT,
-    Abstract TEXT 
+    Abstract TEXT,
+    Status TEXT,
+    Dataset TEXT,
+    AutoClass TEXT,
+    ManualClass TEXT,
+    Notes TEXT,
+    AssignStatus TEXT,
+    LastUpdated TEXT,
+    gptClass TEXT,
+    gptVictimJson TEXT
 );
 
 CREATE TABLE IF NOT EXISTS authors (

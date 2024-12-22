@@ -1,8 +1,11 @@
+# pylint: disable=line-too-long
 """
 Reactions to prompt GPT3 language model
 """
 
-from state import RxResp, State, HomicideClassResponse, LocationClassResponse
+from state import RxResp, State, HomicideClassResponse,\
+    LocationClassResponse, ArticleAnalysisResponse
+
 from actionutil import action2, next_event
 import calculations as calc
 
@@ -218,6 +221,41 @@ Notes:
 *If the victim is a police officer, categorize as 'homicide'
 
 """,
+
+    'victims':
+"""
+You are a helpful and detail-oriented research assistant.
+
+Your job is to extract detailed information about homicide victims and offenders from a Boston Globe news article, providing structured data for each victim mentioned.
+
+Given an article with the date, title, and text, extract and organize information as outlined below.
+
+# Steps
+
+1. **Identify and Extract Victim Information:**
+   - Locate each homicide victim mentioned in the article.
+   - Determine the following information for each victim:
+     - Name (if mentioned in the article)
+     - Age (if mentioned in the article)
+     - Sex (can be mentioned directly or inferred from other information in the article)
+     - Race
+     - Year/month/day of the victim's death (estimate if not exact)
+     - All parts of the article text (fix spellings) that include anything related to the victim's homicide. Every detail in the article related to that victim shouuld be included in the extract.
+
+2. **Repeat Process:**
+   - Repeat these steps for each victim mentioned in the article.
+
+* Notes:
+
+- Multiple victims should be represented as separate objects within the JSON array.
+- If any information cannot be determined from the article, indicate it with "unknown" in the JSON.
+- Pay attention to the context to correctly associate all elements to each victim.
+- Only include victims that have been killed
+- Every detail included in the article about each homocide and the respective victims whould be included in the quoted text
+
+""",
+
+
     'homicide_type': 
     "I will provide a news article from the Boston Globe newspaper."
     "The article has some words that suggest the topic is a homicide or murder,"
@@ -249,7 +287,8 @@ system_types = {
     'defaullt': HomicideClassResponse,
     'homicide_type': HomicideClassResponse,
     'homicide_type2': HomicideClassResponse,
-    'location': LocationClassResponse
+    'location': LocationClassResponse,
+    'victims': ArticleAnalysisResponse
 }
 
 
@@ -290,9 +329,16 @@ def prompt_gpt4(state: State) -> RxResp:
     system = system_prompts[state.pre_article_prompt]
     article = state.articles[state.next_article]
 
-    user = f'Article Title: """{article["Title"]}"""\n' + \
-            f'Article text: """{article["FullText"]}"""'
+    if state.pre_article_prompt == 'victims':
+        datetext = calc.format_date(article['PubDate'])
+        user = f'Article Date: "{datetext}"\n'
+    else:
+        user = ''
+
+    user += f'Article Title: """{article["Title"]}"""\n' + \
+            f'Article Text: """{article["FullText"]}"""'
 
     return action2('prompt_gpt', system=system,
-                   user=user,
+                   user=user, model = state.gpt_model,
+                   max_tokens = state.gpt_max_tokens,
                    response_type=system_types[state.pre_article_prompt]), state

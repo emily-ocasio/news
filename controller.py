@@ -402,6 +402,10 @@ def review_articles(state: State) -> RxResp:
             next_step = 'refresh_article'
             rxn = save.notes
 
+        case 'save_victims':
+            next_step = 'refresh_article'
+            rxn = save.gpt_victims
+
         case next_step if next_step.startswith('gpt_filter'):
             rxn = filter_articles
 
@@ -497,7 +501,7 @@ def filter_articles(state: State) -> RxResp:
                 # No articles to filter in the first place
                 rxn = last_article
         case 'gpt_filter_begin' | 'gpt_filter_classify':
-            state = state._replace(
+            state = state._replace(gpt_model = 'mini', gpt_max_tokens = 256,
                 pre_article_prompt='homicide_type2',
                 gpt3_action='classify_homicide')
             next_step = 'gpt_filter_check'
@@ -761,9 +765,14 @@ def assign_choice(state: State) -> RxResp:
             step = "choose_manual_humanizing"
             reaction = choose.humanize
         case 'filter':
-            # placeholder - this needs to call the gpt filtering steps
             step = 'gpt_filter_classify'
             reaction = filter_articles
+        case 'victim_extract':
+            step = 'save_victims'
+            state = state._replace(gpt_model='4o', gpt_max_tokens=16000,
+                                   pre_article_prompt='victims',
+                                   gpt3_action='victims')
+            reaction = gpt3_prompt.prompt_gpt4
         case 'select_month':
             step = 'display_article'
             reaction =  choose.homicide_month

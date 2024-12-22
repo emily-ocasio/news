@@ -4,15 +4,15 @@ Type Definitions, including:
     and for type hinting Action, Reaction, RxResp
 """
 from collections.abc import Callable
-from typing import NamedTuple, Optional, Any
+from typing import NamedTuple, Optional, Any, List
 from enum import Enum
 from sqlite3 import Row
 from immutabledict import immutabledict
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 Rows = tuple[Row,...]
 TextChoice = immutabledict[str, str]
-class HomicideClass(Enum):
+class HomicideClass(str, Enum):
     """
     Enum for homicide classification
     """
@@ -23,12 +23,58 @@ class HomicideClass(Enum):
     NO_HOMICIDE_IN_ARTICLE = "no homicide in article"
 
 
-class LocationClass(Enum):
+class LocationClass(str, Enum):
     """
-    Enum for location classification"""
+    Enum for location classification
+    """
     NOT_IN_MASSACHUSETTS = "no homicide in Massachusetts"
     IN_MASSACHUSETTS = "homicide(s) in Massachusetts"
 
+
+class Relationship(str, Enum):
+    """
+    Relationship between the victim and the offender
+    From the point of view of the victim
+    """
+    ACQUAINTANCE = "acquaintance"
+    SON = "son"
+    DAUGHTER = "daughter"
+    HUSBAND = "husband"
+    STRANGER = "stranger"
+    WIFE = "wife"
+    BROTHER = "brother"
+    SISTER = "sister"
+    OTHER_FAMILY = "other family"
+    GIRLFRIEND = "girlfriend"
+    BOYFRIEND = "boyfriend"
+    NEIGHBOR = "neighbor"
+    STEPFATHER = "stepfather"
+    STEPMOTHER = "stepmother"
+    STEPSON = "stepson"
+    FRIEND = "friend"
+    OTHER_KNOWN_TO_VICTIM = "other known to victim"
+    MOTHER = "mother"
+    FATHER = "father"
+    IN_LAW = "in-law"
+    EMPLOYEE = "employee"
+    HOMOSEXUAL_RELATIONSHIP = "homosexual relationship"
+
+
+class Sex(str, Enum):
+    """ Enum for sex """
+    MALE = "male"
+    FEMALE = "female"
+    UNKNOWN = "unknown"
+
+class VictimInfo(BaseModel):
+    """
+    Model for victim information
+    """
+    victim_name: str | None = Field(description = "Name of victim")
+    victim_age: int | None = Field(description = "Age of victim")
+    victim_sex: Sex | None = Field(description = "Sex of victim")
+    victim_race: str | None = Field(description = "Race of victim")
+    victim_location: str | None = Field(description = "Location of victim")
 
 class LocationClassResponse(BaseModel):
     """
@@ -43,6 +89,30 @@ class HomicideClassResponse(BaseModel):
     """
     classification: HomicideClass
 
+
+class Victim(BaseModel):
+    """
+    Model for victim information
+    """
+    victim_name: str | None = Field(description = "Name of victim")
+    victim_age: int | None = Field(description = "Age of victim")
+    victim_sex: Sex | None = Field(description = "Sex of victim")
+    date_of_death: str = Field(
+        description="Approximaate date that victim was found dead (YYYY-MM-DD)"
+        "- answer 'unknown' if article does not mention date")
+    victim_details: str = Field(
+        description = "All the text in the article that refers to this "
+            "victim, including background on the victim, circumstances of "
+            "the crime, and any investigation or trial. "
+            "Include every detail mentioned in the article about the victim.")
+
+class ArticleAnalysisResponse(BaseModel):
+    """
+    Response model for extracting information about victims
+    """
+    homicide_victims: List[Victim] = Field(
+            description="List of homicide victims in the article. "
+                "Only include dead victims.")
 
 class State(NamedTuple):
     """
@@ -97,6 +167,8 @@ class State(NamedTuple):
     assign_end: str = '1984-12'
     gpt3_action: str = 'humanize'
     gpt3_source: str = 'article'
+    gpt_model: str = 'mini'
+    gpt_max_tokens: int = 256
     pre_article_prompt: str = 'reporter'
     post_article_prompt: str = '3L_not3'
     humanizing: str = ''

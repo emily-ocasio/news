@@ -85,6 +85,7 @@ assign_prompts = (
     "Hu[M]anize victim by number",
     "Send to [G]PT-3 for humanizing",
     "Apply GPT Second [F]ilter",
+    "GPT Ext[R]action of victim details",
     "E[X]tract victim details for GPT-3 use",
     "Create sma[L]ler extract",
     "Change [H]omicide month to display",
