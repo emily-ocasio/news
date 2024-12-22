@@ -68,23 +68,38 @@ CREATE TABLE IF NOT EXISTS assigned (
     FOREIGN KEY(ShrId) REFERENCES shr("index")
 );
 
-CREATE TABLE IF NOT EXISTS stories (
+CREATE TABLE IF NOT EXISTS gptVictims (
     RecordId INTEGER NOT NULL,
-    StoryNum INTEGER NOT NULL,
-    Classification TEXT,
-    Summary TEXT,
-    PRIMARY KEY (RecordId, StoryNum),
+    VictimNum INTEGER NOT NULL,
+    VicName TEXT,
+    VicAge INTEGER,
+    VicSex TEXT,
+    VicRace TEXT,
+    VicEthnic TEXT,
+    OffName TEXT,
+    OffAge INTEGER,
+    OffSex TEXT,
+    OffRace TEXT,
+    OffEthnic TEXT,
+    OffCount INTEGER,
+    Relationship TEXT,
+    Circumstance TEXT,
+    Date TEXT,
+    Extract TEXT,
+    County TEXT,
+    City TEXT,
+    PRIMARY KEY (RecordId, VictimNum),
     FOREIGN KEY (RecordId) REFERENCES articles(RecordId)
 );
 
-CREATE TRIGGER IF NOT EXISTS increment_story_num
-AFTER INSERT ON stories
+CREATE TRIGGER IF NOT EXISTS increment_victim_num
+AFTER INSERT ON gptVictims
 FOR EACH ROW
 BEGIN
-    UPDATE stories
-    SET StoryNum = (
+    UPDATE gptVictims
+    SET VictimNum = (
         SELECT COALESCE(MAX(StoryNum), 0) + 1
-        FROM stories
+        FROM gptVictims
         WHERE RecordId = NEW.RecordId
     )
     WHERE rowid = NEW.rowid;
