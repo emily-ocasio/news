@@ -31,6 +31,26 @@ class LocationClass(str, Enum):
     IN_MASSACHUSETTS = "homicide(s) in Massachusetts"
 
 
+class County(str, Enum):
+    """
+    Enum for county where the crime occurred
+    """
+    BARNSTABLE = "Barnstable"
+    BERKSHIRE = "Berkshire"
+    BRISTOL = "Bristol"
+    DUKES = "Dukes"
+    ESSEX = "Essex"
+    FRANKLIN = "Franklin"
+    HAMPDEN = "Hampden"
+    HAMPSHIRE = "Hampshire"
+    MIDDLESEX = "Middlesex"
+    NANTUCKET = "Nantucket"
+    NORFOLK = "Norfolk"
+    PLYMOUTH = "Plymouth"
+    SUFFOLK = "Suffolk"
+    WORCESTER = "Worcester"
+    NOT_IN_MASSACHUSETTS = "not in Massachusetts"
+
 class Relationship(str, Enum):
     """
     Relationship between the victim and the offender
@@ -66,15 +86,47 @@ class Sex(str, Enum):
     FEMALE = "female"
     UNKNOWN = "unknown"
 
-class VictimInfo(BaseModel):
+class Weapon(str, Enum):
+    """ Enum for weapon """
+    SHOTGUN = "shotgun"
+    RIFLE = "rifle"
+    HANDGUN = "handgun, pistol, revolver, etc"
+    FIREARM = "other firearm"
+    KNIFE = "knife or cutting instrument"
+    BLUNT_OBJECT = "blunt object - hammer, club, etc"
+    BEATING = "personal weapon, including beating"
+    FIRE = "fire, arson"
+    STRANGULATION = "strangulation or hanging"
+    ASPHYXIATION = "asphyxiation"
+    DRUGS = "sleeping pills or other drugs"
+    EXPLOSIVES = "explosives"
+    DROWNING = "drowning"
+    OTHER = "other"
+    UNKNOWN = "unknown"
+
+
+class Circumstance(str, Enum):
     """
-    Model for victim information
+    Enum for circumstances of the crime
     """
-    victim_name: str | None = Field(description = "Name of victim")
-    victim_age: int | None = Field(description = "Age of victim")
-    victim_sex: Sex | None = Field(description = "Sex of victim")
-    victim_race: str | None = Field(description = "Race of victim")
-    victim_location: str | None = Field(description = "Location of victim")
+    NO_KILLING = "victim is not dead may be in critical condition"
+    ARSON = "arson"
+    VEHICULAR_HOMICIDE = "vehicular homicide"
+    FELON_KILLED_BY_POLICE = "death of felon at hands of police"
+    INSTITUTIONAL_KILLING = \
+        "killing within an institution such as jail or mental hospital"
+    BURGLARY = "burglary"
+    ROBBERY = "robbery"
+    BRAWL = "brawl"
+    RAPE = "rape or other sex offense"
+    ARGUMENT = "argument"
+    GANG_KILLING = "gang-related killing"
+    LOVERS_TRIANGLE = "lover's triangle"
+    CHILD_KILLED_BY_BABYSITTER = "child killed by babysitter"
+    NEGLIGENCE = "negligence"
+    OTHER = "all other"
+    UNDETERMINED = "undetermined"
+
 
 class LocationClassResponse(BaseModel):
     """
@@ -97,9 +149,22 @@ class Victim(BaseModel):
     victim_name: str | None = Field(description = "Name of victim")
     victim_age: int | None = Field(description = "Age of victim")
     victim_sex: Sex | None = Field(description = "Sex of victim")
-    date_of_death: str = Field(
-        description="Approximaate date that victim was found dead (YYYY-MM-DD)"
-        "- answer 'unknown' if article does not mention date")
+    suspect_count: int | None = Field(description = "Number of suspects")
+    suspect_age: int | None = Field(description = "Age of main suspect")
+    suspect_sex: Sex | None = Field(description = "Sex of main suspect")
+    date_of_death: str | None = Field(
+        description="Approximate date that victim was found dead (YYYY-MM-DD)")
+    weapon: Weapon | None = Field(
+        description = "Type of weapon used to kill victim")
+    relationship: Relationship | None = Field(
+        description="The victim's relationship to the killer")
+    circumstance: Circumstance | None = Field(
+        description="Circumstances of the crime")
+    county: County = Field(
+        description="County where the homicide occurred (infer from other "
+            "details if not explicitly stated). Boston is in Suffolk county.")
+    town: str | None = Field(
+        description="Town or city where the homicide occurred")
     victim_details: str = Field(
         description = "All the text in the article that refers to this "
             "victim, including background on the victim, circumstances of "

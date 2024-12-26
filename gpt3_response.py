@@ -49,7 +49,7 @@ def respond_homicide_class(state: State) -> RxResp:
     """
     Handle response from GPT for homicide classification
     """
-    response, prompt = state.outputs
+    response, prompt, tokens = state.outputs
     response_text = response.classification.value
     response_code = calc.gpt_homicide_class_code(response.classification)
     msg = calc.prompt_response(prompt, "\n\n" + response_text)
@@ -63,6 +63,7 @@ def respond_homicide_class(state: State) -> RxResp:
         msg = "Initial GPT homicide class M, checking location...\n\n"
     if not match:
         msg = "\nGPT / Manual Class Mismatch\n" + msg
+    msg += f"\nTokens used: {tokens}\n"
     state = state._replace(gpt3_prompt=prompt,
                            gpt3_response=response_code,
                            next_event='main')
@@ -75,7 +76,7 @@ def respond_location_class(state: State) -> RxResp:
     """
     Handle response from GPT for location classification
     """
-    response, prompt = state.outputs
+    response, prompt, tokens = state.outputs
     response_text = response.classification.value
     response_code = calc.gpt_location_class_code(response.classification)
     msg = calc.prompt_response(prompt, "\n\n" + response_text)
@@ -87,6 +88,7 @@ def respond_location_class(state: State) -> RxResp:
             f"Record Id: {record_id}\n\n"
     if not match:
         msg = "\nGPT / Manual Class Mismatch\n" + msg
+    msg += f"\nTokens used: {tokens}\n"
     state = state._replace(gpt3_prompt=prompt,
                            gpt3_response=response_code,
                            next_event='main')
@@ -100,9 +102,10 @@ def respond_victims(state: State) -> RxResp:
     """
     Handle response from GPT for victim extraction
     """
-    response, prompt = state.outputs
+    response, prompt, tokens = state.outputs
     response_text = response.model_dump_json()
     msg = calc.display_gpt_victims(response_text)
+    msg += f"\nTokens used: {tokens}\n"
     state = state._replace(gpt3_prompt=prompt,
                            gpt3_response=response_text,
                            next_event='main')

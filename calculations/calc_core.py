@@ -4,6 +4,8 @@ Pure functions with no side effects
 import re
 from sqlite3 import Row
 from datetime import datetime
+# from pprint import pformat
+import json
 from collections.abc import Iterable
 from typing import Optional, Union
 from functools import reduce
@@ -15,7 +17,8 @@ from rich.text import Text
 from rich.table import Table
 
 from mass_towns import townlist
-from state import Rows, HomicideClass, LocationClass, ArticleAnalysisResponse
+from state import Rows, HomicideClass, LocationClass
+# from state import ArticleAnalysisResponse
 
 absolute_roots = (
     'slain',
@@ -216,12 +219,14 @@ def display_article(total: int,
             + '\n', lines)
 
 
-def display_gpt_victims(json: str) -> str:
+def display_gpt_victims(json_str: str) -> str:
     """
     Display GPT-3 generated victim list
     """
-    victims = ArticleAnalysisResponse.model_validate_json(json)
-    return victims.model_dump_json(indent = 4)
+    victims = json.dumps(json.loads(json_str), indent = 2)
+    # ArticleAnalysisResponse.model_validate_json(json)
+    # return victims.model_dump_json(indent = 4)
+    return victims
 
 def display_remaining_lines(lines, limit_lines=0) -> str:
     """

@@ -225,9 +225,7 @@ Notes:
     'victims':
 """
 You are a helpful and detail-oriented research assistant.
-
 Your job is to extract detailed information about homicide victims and offenders from a Boston Globe news article, providing structured data for each victim mentioned.
-
 Given an article with the date, title, and text, extract and organize information as outlined below.
 
 # Steps
@@ -236,16 +234,22 @@ Given an article with the date, title, and text, extract and organize informatio
    - Locate each homicide victim mentioned in the article.
    - Determine the following information for each victim:
      - Name (if mentioned in the article)
-     - Age (if mentioned in the article)
+     - Age (if mentioned in the article or estimated if person was a juvenile)
      - Sex (can be mentioned directly or inferred from other information in the article)
-     - Race
+     - Suspect count
+     - Suspect age
+     - Suspect sex
      - Year/month/day of the victim's death (estimate if not exact)
+     - Type of weapon used
+     - Relationship of the victim to the suspect
+     - Circumstance of the homicide
+     - County and town where the homicide occurred
      - All parts of the article text (fix spellings) that include anything related to the victim's homicide. Every detail in the article related to that victim shouuld be included in the extract.
 
 2. **Repeat Process:**
    - Repeat these steps for each victim mentioned in the article.
 
-* Notes:
+# Notes:
 
 - Multiple victims should be represented as separate objects within the JSON array.
 - If any information cannot be determined from the article, indicate it with "unknown" in the JSON.

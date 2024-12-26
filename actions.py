@@ -8,6 +8,8 @@ from functools import wraps
 from collections.abc import Callable
 import openai
 from openai import OpenAI
+from openai.types.chat import ChatCompletionMessageParam
+# from openai.chat.beta import ParsedChatCompletion
 from secr_apis.gpt3_key import GPT3_API_KEY, GPT_API_KEY
 from state import State, Action
 
@@ -228,7 +230,7 @@ def prompt_gpt3(prompt, msg, model = 'davinci'):
 
 @actiondef
 def prompt_gpt(system, user, model = 'mini', max_tokens = 256,
-               response_type = None):
+               response_type = None) -> tuple:
     """
     Prompt GPT - newer API for GPT3.5 and later models
     When response_type is included, the beta Structured Output
@@ -238,22 +240,29 @@ def prompt_gpt(system, user, model = 'mini', max_tokens = 256,
     """
     models = {'mini': 'gpt-4o-mini', '4o': 'gpt-4o'}
     client = OpenAI(api_key=GPT_API_KEY)
-    if response_type:
-        response = client.beta.chat.completions.parse(
+    messages: list[ChatCompletionMessageParam] = [
+        { 'role': 'system', 'content': system },
+        { 'role': 'user', 'content': user }
+    ]
+    if response_type is not None:
+        response_parse = client.beta.chat.completions.parse(
             model=models[model],
             seed = 42,
-            messages=[ { 'role': 'system', 'content': system },
-                       { 'role': 'user', 'content': user }],
+            messages=messages,
             temperature=0,
             max_tokens=max_tokens,
             response_format = response_type)
-        return response.choices[0].message.parsed, system
+        gpt_response = response_parse.choices[0].message.parsed
+        usage = response_parse.usage
+    else:
+        response = client.chat.completions.create(
+        model=models[model],
+        seed = 42,
+        messages=messages,
+        temperature=0,
+        max_tokens=max_tokens)
+        gpt_response = response.choices[0].message.content
+        usage = response.usage
 
-    response = client.chat.completions.create(
-    model=models[model],
-    seed = 42,
-    messages=[ { 'role': 'system', 'content': system },
-                { 'role': 'user', 'content': user }],
-    temperature=0,
-    max_tokens=256)
-    return response.choices[0].message.content, system
+    total_tokens = 0 if usage is None else usage.total_tokens
+    return gpt_response, system, total_tokens
