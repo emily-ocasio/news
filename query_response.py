@@ -60,7 +60,7 @@ def unclassified_articles(state: State) -> RxResp:
     """
     articles = state.outputs
     state = state._replace(articles=articles, next_article=0)
-    return controller.classify_articles(state)
+    return controller.main(state)
 
 
 def single_article(state: State) -> RxResp:

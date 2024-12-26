@@ -79,8 +79,8 @@ def initial(state: State, choice) -> RxResp:
                                main_flow = 'review',
                                next_step = 'react_to_review_type')
         return controller.main(state)
-    if choice == 'A':
-        return controller.auto_classify(state)
+    # if choice == 'A':
+    #     return controller.auto_classify(state)
     if choice == "H":
         state = state._replace(article_kind = 'assign')
         return controller.assign_homicides(state)
@@ -212,9 +212,10 @@ def dates_to_classify(state: State) -> RxResp:
     Respond to number of days to auto-classify
     """
     if state.outputs == 0:
-        return choose.initial(state)
+        state = state._replace(main_flow='start')
+        return controller.main(state)
     state = state._replace(dates_to_classify=state.outputs)
-    return controller.classify_by_date(state)
+    return controller.main(state)
 
 
 def dates_to_assign(state: State) -> RxResp:

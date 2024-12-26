@@ -2,7 +2,7 @@
 Functions that save data to database
 """
 from itertools import chain
-from actionutil import combine_actions, action2, next_event
+from actionutil import combine_actions, action2
 from state import RxResp, State
 import calculations as calc
 
@@ -162,7 +162,6 @@ def gpt3_extract(state: State) -> RxResp:
                     prompt=prompt, response=response), state
 
 
-@next_event('classified')
 def classification(state: State) -> RxResp:
     """
     Save automatic classification

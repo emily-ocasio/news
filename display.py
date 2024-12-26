@@ -95,9 +95,14 @@ def type_count(state: State) -> RxResp:
 def classify_progress(state: State) -> RxResp:
     """
     Display how many left to be classified
+    Only display at the beginning or in 100 intervals
     """
-    msg = f"Number of articles: {len(state.articles)}"
-    return action2('print_message', message=msg), state
+    total = len(state.articles)
+    left = len(state.articles) - state.next_article
+    if left == total or left % 100 == 0:
+        msg = f"Articles left to classify: {left} out of {total}"
+        return action2('print_message', message=msg), state
+    return action2('no_op'), state
 
 
 def statistics(state: State) -> RxResp:

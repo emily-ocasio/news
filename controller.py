@@ -539,6 +539,42 @@ def review_filtered_mismatches(state: State) -> RxResp:
     return review_articles(state)
 
 
+@main_flow('auto_classify')
+def auto_classify_articles(state: State) -> RxResp:
+    """
+    Automatically classify articles
+    """
+    next_step: str | None = None
+    rxn: Reaction | None = None
+    match state.next_step:
+        case 'begin':
+            next_step = 'retrieve_articles'
+            rxn = choose.dates_to_classify
+        case 'retrieve_articles':
+            next_step = 'classify_articles'
+            rxn = retrieve.to_auto_classify
+        case 'classify_articles' if len(state.articles) == 0:
+            rxn = no_articles
+        case 'classify_articles' if state.next_article >= len(state.articles):
+            next_step = 'all_classified'
+            rxn = save.dates_cleanup
+        case 'classify_articles':
+            next_step = 'next_article'
+            rxn = save.classification
+        case 'next_article':
+            state = state._replace(next_article = state.next_article + 1)
+            next_step = 'classify_articles'
+            rxn = auto_classify_articles
+        case 'all_classified':
+            rxn = all_classified
+        case invalid:
+            raise ControlException(f"Invalid current step: {invalid}")
+
+    if next_step is not None:
+        state = state._replace(next_step=next_step)
+    if rxn is not None:
+        return rxn(state)
+
 def retrieve_verified(state: State) -> RxResp:
     """
     Retrieve label/verified articles for review
@@ -601,58 +637,56 @@ def select_article_type(state: State) -> RxResp:
     ), state
 
 
-def auto_classify(state: State) -> RxResp:
-    """
-    Automatically classify articles
-    """
-    return choose.dates_to_classify(state)
+# def auto_classify(state: State) -> RxResp:
+#     """
+#     Automatically classify articles
+#     """
+#     return choose.dates_to_classify(state)
 
 
-def classify_by_date(state: State) -> RxResp:
-    """
-    Retrieved articles to auto-classify by date
-    """
-    return retrieve.to_auto_classify(state)
+# def classify_by_date(state: State) -> RxResp:
+#     """
+#     Retrieved articles to auto-classify by date
+#     """
+#     return retrieve.to_auto_classify(state)
 
 
-def classify_articles(state: State) -> RxResp:
-    """
-    Begin classifying articles
-    """
-    if len(state.articles) == 0:
-        return no_articles(state)
-    return combine_actions(
-        from_reaction(display.classify_progress),
-        from_reaction(classify_next),
-    ), state
+# def classify_articles(state: State) -> RxResp:
+#     """
+#     Begin classifying articles
+#     """
+#     if len(state.articles) == 0:
+#         return no_articles(state)
+#     return combine_actions(
+#         from_reaction(display.classify_progress),
+#         from_reaction(classify_next),
+#     ), state
 
 
-def classify_next(state: State) -> RxResp:
-    """
-    Classify next article on list
-    """
-    if state.next_article >= len(state.articles):
-        return all_classified(state)
-    return save.classification(state)
+# def classify_next(state: State) -> RxResp:
+#     """
+#     Classify next article on list
+#     """
+#     if state.next_article >= len(state.articles):
+#         return all_classified(state)
+#     return save.classification(state)
 
 
-def increment_classify(state: State) -> RxResp:
-    """
-    Increment pointer to classify
-    """
-    state = state._replace(next_article=state.next_article+1)
-    return classify_next(state)
+# def increment_classify(state: State) -> RxResp:
+#     """
+#     Increment pointer to classify
+#     """
+#     state = state._replace(next_article=state.next_article+1)
+#     return classify_next(state)
 
 
 @next_event('start')
 def all_classified(state: State) -> RxResp:
     """
-    Clean up dates database and notify user
-        all articles in list have been classified
+    After all articles have been auto-classified, 
+        notify user
     """
-    return combine_actions(
-        from_reaction(save.dates_cleanup),
-        action2('print_message', message="All articles classified.")), state
+    return action2('print_message', message="All articles classified."), state
 
 
 def assign_homicides(state: State) -> RxResp:
