@@ -15,6 +15,8 @@ from state import State, Action
 
 
 db: sqlite3.Connection = sqlite3.connect('newarticles.db')
+db.enable_load_extension(True)
+db.load_extension('./uuid.dylib')
 db.row_factory = sqlite3.Row
 
 

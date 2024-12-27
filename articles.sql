@@ -16,7 +16,8 @@ CREATE TABLE IF NOT EXISTS articles (
     AssignStatus TEXT,
     LastUpdated TEXT,
     gptClass TEXT,
-    gptVictimJson TEXT
+    gptVictimJson TEXT,
+    Guid TEXT
 );
 
 CREATE TABLE IF NOT EXISTS authors (

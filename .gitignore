@@ -15,3 +15,5 @@ test1/test.txt
 SHR65_23.csv
 articles_1999.csv
 calculations/other_papers.ipynb
+uuid.c
+uuid.dylib
