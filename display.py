@@ -1,7 +1,7 @@
 """
 Reactions that display information
 """
-from actionutil import combine_actions, action2
+from actionutil import combine_actions, action2, next_event
 from state import RxResp, State
 import calculations as calc
 
@@ -92,6 +92,7 @@ def type_count(state: State) -> RxResp:
     return action2('print_message', message=msg), state
 
 
+@next_event('main')
 def classify_progress(state: State) -> RxResp:
     """
     Display how many left to be classified

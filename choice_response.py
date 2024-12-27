@@ -62,7 +62,7 @@ def initial(state: State, choice) -> RxResp:
         'N': 'new_labels',
         'R': 'review',
         'F': 'single_review',
-        'A': 'auto_categorize',
+        'A': 'auto_classify',
         'H': 'assign',
         'S': 'second_filter',
         'Z': 'humanize',

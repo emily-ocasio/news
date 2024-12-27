@@ -40,7 +40,8 @@ def main(state: State) -> RxResp:
     Central controller that dispatches based on main application workflow
     """
     if state.main_flow not in dispatch:
-        raise ControlException("Main flow route not supported")
+        raise ControlException(
+            f"Main flow route {state.main_flow} not supported")
     return dispatch[state.main_flow](state)
 
 
@@ -559,6 +560,9 @@ def auto_classify_articles(state: State) -> RxResp:
             next_step = 'all_classified'
             rxn = save.dates_cleanup
         case 'classify_articles':
+            next_step = 'save_classification'
+            rxn = display.classify_progress
+        case 'save_classification':
             next_step = 'next_article'
             rxn = save.classification
         case 'next_article':

@@ -144,6 +144,7 @@ def articles_to_classify_sql():
             ORDER BY Priority
             LIMIT ?
         )
+        AND a.Dataset = "NOCLASS_WP"
         AND a.AutoClass IS NULL
         GROUP BY a.RecordId
     """
@@ -266,7 +267,7 @@ def classify_sql():
     return """
         UPDATE articles
         SET AutoClass = ?,
-        Dataset = "CLASS"
+        Dataset = "CLASS_WP"
         WHERE RecordId = ?
     """
 
@@ -326,13 +327,13 @@ def cleanup_sql() -> str:
             SELECT DISTINCT PubDate
             FROM articles
             INDEXED BY Dataset
-            WHERE Dataset = "CLASS"
+            WHERE Dataset = "CLASS_WP"
             AND Pubdate NOT IN 
             (
                 SELECT DISTINCT PubDate
                 FROM articles
                 INDEXED BY Dataset
-                WHERE Dataset != "CLASS"
+                WHERE Dataset == "NOCLASS_WP"
             )
         )
         UPDATE dates
