@@ -17,8 +17,9 @@ def article(state: State) -> RxResp:
                                           limit_lines=0
                                           if state.article_kind == 'assign'
                                           else state.terminal_size[1])
-    if (state.article_kind == 'assign'
-            or state.articles[state.next_article]['Status'] in 'MP'):
+    status = state.articles[state.next_article]['Status']
+    status = '' if status is None else status
+    if (state.article_kind == 'assign' or status in 'MP'):
         display += (
             f"\n{calc.article_notes(state.articles[state.next_article])}\n"
         )

@@ -510,7 +510,7 @@ def filter_articles(state: State) -> RxResp:
         case 'gpt_filter_check' if state.gpt3_response == 'M':
             # Check location first because it's classified as homicide
             state = state._replace(
-                pre_article_prompt='location',
+                pre_article_prompt='locationDC',
                 gpt3_action='classify_location')
             next_step = 'gpt_filter_save'
             rxn = gpt3_prompt.prompt_gpt4

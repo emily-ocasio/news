@@ -30,6 +30,12 @@ class LocationClass(str, Enum):
     NOT_IN_MASSACHUSETTS = "no homicide in Massachusetts"
     IN_MASSACHUSETTS = "homicide(s) in Massachusetts"
 
+class LocationClassDC(str, Enum):
+    """
+    Enum for location classification for DC
+    """
+    NOT_IN_DC = "not in Washington, DC"
+    IN_DC = "in Washington, DC"
 
 class County(str, Enum):
     """
@@ -134,6 +140,12 @@ class LocationClassResponse(BaseModel):
     """
     classification: LocationClass
 
+
+class LocationClassDCResponse(BaseModel):
+    """
+    Response model for location classification for DC
+    """
+    classification: LocationClassDC
 
 class HomicideClassResponse(BaseModel):
     """

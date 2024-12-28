@@ -17,7 +17,7 @@ from rich.text import Text
 from rich.table import Table
 
 from mass_towns import townlist
-from state import Rows, HomicideClass, LocationClass
+from state import Rows, HomicideClass, LocationClassDC
 # from state import ArticleAnalysisResponse
 
 absolute_roots = (
@@ -566,14 +566,16 @@ def gpt_homicide_class_code(classification: HomicideClass) -> str:
     return codes[classification]
 
 
-def gpt_location_class_code(classification: LocationClass) -> str:
+def gpt_location_class_code(classification: LocationClassDC) -> str:
     """
     Return code for location class
     This is what is saved in the database
     """
     codes = {
-        LocationClass.IN_MASSACHUSETTS: 'M',
-        LocationClass.NOT_IN_MASSACHUSETTS: 'O'
+        # LocationClass.IN_MASSACHUSETTS: 'M',
+        # LocationClass.NOT_IN_MASSACHUSETTS: 'O'
+        LocationClassDC.IN_DC: 'M',
+        LocationClassDC.NOT_IN_DC: 'O'
     }
     return codes[classification]
 

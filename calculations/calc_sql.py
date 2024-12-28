@@ -606,7 +606,8 @@ def articles_to_filter_sql() -> str:
     """
     return """
         SELECT * FROM articles
-        WHERE Dataset = 'CLASSTRAIN'
+        WHERE Dataset = 'CLASS_WP'
+        AND AutoClass = 'M'
         AND gptClass IS NULL
         ORDER BY PubDate
         LIMIT ?

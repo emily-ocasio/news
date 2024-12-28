@@ -4,7 +4,7 @@ Reactions to prompt GPT3 language model
 """
 
 from state import RxResp, State, HomicideClassResponse,\
-    LocationClassResponse, ArticleAnalysisResponse
+    LocationClassResponse, LocationClassDCResponse, ArticleAnalysisResponse
 
 from actionutil import action2, next_event
 import calculations as calc
@@ -284,7 +284,17 @@ Given an article with the date, title, and text, extract and organize informatio
     "Respond with either:\n"
     '"No homicides in Massachussetts"\n'
     "or\n"
-    '"Homicide(s) in Massachussetts"\n'
+    '"Homicide(s) in Massachussetts"\n',
+
+    'locationDC': "I will provide an article from the Washington Post "
+    "newspaper that refers to one (or more) homicides. "
+    "I am only interested in homicides that occurred in "
+    "Washington, District of Columbia, so determine whether at least one of "
+    "the homicides in the article occurred in Washington, DC.  "
+    "Respond with either:\n"
+    '"No homicides in Washington, DC"\n'
+    "or\n"
+    '"Homicide(s) in Washington, DC"\n'
 }
 
 system_types = {
@@ -292,6 +302,7 @@ system_types = {
     'homicide_type': HomicideClassResponse,
     'homicide_type2': HomicideClassResponse,
     'location': LocationClassResponse,
+    'locationDC': LocationClassDCResponse,
     'victims': ArticleAnalysisResponse
 }
 
