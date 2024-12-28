@@ -605,6 +605,18 @@ def location_code(publication_code: int) -> str:
         case invalid:
             raise LocationException(f"Invalid publication code: {invalid}")
 
+
+def location_clause(publication_code: int) -> str:
+    """Return a location name based on the paper"""
+    match publication_code:
+        case 105359:
+            return "County != 'District of Columbia'"
+        case 2:
+            return "County = 'District of Columbia'"
+        case invalid:
+            raise LocationException(f"Invalid publication code: {invalid}")
+
+
 def is_gpt_homicide_class_correct(gpt_code, manual_class) -> bool:
     """
     Determine whether GPT-3 classification matches manual classification

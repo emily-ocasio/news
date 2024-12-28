@@ -252,11 +252,11 @@ Given an article with the date, title, and text, extract and organize informatio
 
 # Notes:
 
-- Multiple victims should be represented as separate objects within the JSON array.
-- If any information cannot be determined from the article, indicate it with "unknown" in the JSON.
+- Multiple victims should be represented as separate elements in the list.
+- If any information cannot be determined from the article, indicate it with "unknown."
 - Pay attention to the context to correctly associate all elements to each victim.
 - Only include victims that have been killed
-- Every detail included in the article about each homocide and the respective victims whould be included in the quoted text
+- Every detail included in the article about each homicide and the respective victims whould be included in the quoted text
 
 """,
 
@@ -277,7 +277,7 @@ Given an article with the date, title, and text, extract and organize informatio
      - Suspect count
      - Suspect age
      - Suspect sex
-     - Year/month/day of the victim's death (estimate if not exact)
+     - Year/month/day of the victim's death (if not explicitly provided, determine or estimate it based on the date of the article)
      - Type of weapon used
      - Relationship of the victim to the suspect
      - Circumstance of the homicide
@@ -289,11 +289,12 @@ Given an article with the date, title, and text, extract and organize informatio
 
 # Notes:
 
-- Multiple victims should be represented as separate objects within the JSON array.
-- If any information cannot be determined from the article, indicate it with "unknown" in the JSON.
+- Multiple victims should be represented as separate elements in the list.
+- If any information cannot be determined from the article, indicate it with "unknown."
 - Pay attention to the context to correctly associate all elements to each victim.
 - Only include victims that have been killed
-- Every detail included in the article about each homocide and the respective victims whould be included in the quoted text
+- Every detail included in the article about each homicide and the respective victims whould be included in the quoted text
+- If the only reference to the date was something like "last Tuesday" then use the date of the article to come up with a close estimate of the date of the homicide.
 
 """,
 
@@ -382,7 +383,7 @@ def prompt_gpt4(state: State) -> RxResp:
     system = system_prompts[state.pre_article_prompt]
     article = state.articles[state.next_article]
 
-    if state.pre_article_prompt == 'victims':
+    if state.pre_article_prompt in ('victims', 'victimsDC'):
         datetext = calc.format_date(article['PubDate'])
         user = f'Article Date: "{datetext}"\n'
     else:

@@ -63,6 +63,7 @@ dataset_prompts = (
     "Review previously [P]assed articles",
     "Review Assigned Group [1]",
     "Review Assigned Group [2]",
+    "Review from [W]ashington Post",
     "[C]ontinue without reviewing"
 )
 

@@ -342,14 +342,15 @@ def cleanup_sql() -> str:
     """
 
 
-def homicides_by_month_sql() -> str:
+def homicides_by_month_sql(clause: str) -> str:
     """
     SQL Statement to retrieve homicides based on year-month
     """
-    return """
+    return f"""
         SELECT ROW_NUMBER() OVER (ORDER BY Agency, Inc) AS n, *
         FROM view_shr
         WHERE YearMonth = ?
+        AND {clause}
     """
 
 

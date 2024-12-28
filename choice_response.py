@@ -136,6 +136,7 @@ def dataset(state: State, choice) -> RxResp:
         'S': 'TEST',
         'E': 'TEST2',
         'A': 'CLASS',
+        'W': 'CLASS_WP',
         '1': '1',
         '2': '2',
     })

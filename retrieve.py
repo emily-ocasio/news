@@ -187,7 +187,9 @@ def homicides_by_month(state: State) -> RxResp:
     """
     Retrieve homicides for a specific month
     """
-    sql = calc.homicides_by_month_sql()
+    article = state.articles[state.next_article]
+    location = calc.location_clause(article['Publication'])
+    sql = calc.homicides_by_month_sql(location)
     month = state.homicide_month
     return action2('query_db', sql=sql, month=month), state
 
