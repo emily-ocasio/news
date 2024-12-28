@@ -807,8 +807,10 @@ def assign_choice(state: State) -> RxResp:
             reaction = filter_articles
         case 'victim_extract':
             step = 'save_victims'
+            article = state.articles[state.next_article]
+            prompt = calc.victim_extract_prompt_type(article)
             state = state._replace(gpt_model='4o', gpt_max_tokens=16000,
-                                   pre_article_prompt='victims',
+                                   pre_article_prompt=prompt,
                                    gpt3_action='victims')
             reaction = gpt3_prompt.prompt_gpt4
         case 'select_month':

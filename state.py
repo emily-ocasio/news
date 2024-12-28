@@ -23,14 +23,14 @@ class HomicideClass(str, Enum):
     NO_HOMICIDE_IN_ARTICLE = "no homicide in article"
 
 
-class LocationClass(str, Enum):
+class LocationClass(Enum):
     """
     Enum for location classification
     """
     NOT_IN_MASSACHUSETTS = "no homicide in Massachusetts"
     IN_MASSACHUSETTS = "homicide(s) in Massachusetts"
 
-class LocationClassDC(str, Enum):
+class LocationClassDC(Enum):
     """
     Enum for location classification for DC
     """
@@ -154,9 +154,9 @@ class HomicideClassResponse(BaseModel):
     classification: HomicideClass
 
 
-class Victim(BaseModel):
+class VictimBase(BaseModel):
     """
-    Model for victim information
+    Base model for victim information
     """
     victim_name: str | None = Field(description = "Name of victim")
     victim_age: int | None = Field(description = "Age of victim")
@@ -172,24 +172,46 @@ class Victim(BaseModel):
         description="The victim's relationship to the killer")
     circumstance: Circumstance | None = Field(
         description="Circumstances of the crime")
-    county: County = Field(
-        description="County where the homicide occurred (infer from other "
-            "details if not explicitly stated). Boston is in Suffolk county.")
-    town: str | None = Field(
-        description="Town or city where the homicide occurred")
     victim_details: str = Field(
         description = "All the text in the article that refers to this "
             "victim, including background on the victim, circumstances of "
             "the crime, and any investigation or trial. "
             "Include every detail mentioned in the article about the victim.")
 
+
+class VictimDC(VictimBase):
+    """
+    Model for Victim information in Washington, DC
+    """
+    location: LocationClassDC = Field(
+        description="Location of the homicide")
+
+
+class Victim(VictimBase):
+    """Model for Victim information in Massachusetts"""
+    county: County = Field(
+        description="County where the homicide occurred (infer from other "
+            "details if not explicitly stated). Boston is in Suffolk county.")
+    town: str | None = Field(
+        description="Town or city where the homicide occurred")
+
 class ArticleAnalysisResponse(BaseModel):
     """
     Response model for extracting information about victims
     """
     homicide_victims: List[Victim] = Field(
-            description="List of homicide victims in the article. "
+            description="Information for each homicide victim in the article. "
                 "Only include dead victims.")
+
+
+class ArticleAnalysisDCResponse(BaseModel):
+    """
+    Response model for extracting information about victims
+    """
+    homicide_victims: List[VictimDC] = Field(
+            description="Information for each homicide victim in the article. "
+                "Only include dead victims.")
+
 
 class State(NamedTuple):
     """

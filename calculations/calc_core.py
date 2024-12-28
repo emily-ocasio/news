@@ -17,8 +17,13 @@ from rich.text import Text
 from rich.table import Table
 
 from mass_towns import townlist
-from state import Rows, HomicideClass, LocationClassDC
-# from state import ArticleAnalysisResponse
+from state import Rows, HomicideClass, LocationClassDC, LocationClass
+
+class LocationException(Exception):
+    """
+    Exception for location errors
+    """
+
 
 absolute_roots = (
     'slain',
@@ -566,19 +571,39 @@ def gpt_homicide_class_code(classification: HomicideClass) -> str:
     return codes[classification]
 
 
-def gpt_location_class_code(classification: LocationClassDC) -> str:
+def gpt_location_class_code(
+        classification: LocationClassDC | LocationClass)-> str:
     """
     Return code for location class
     This is what is saved in the database
     """
     codes = {
-        # LocationClass.IN_MASSACHUSETTS: 'M',
-        # LocationClass.NOT_IN_MASSACHUSETTS: 'O'
+        LocationClass.IN_MASSACHUSETTS: 'M',
+        LocationClass.NOT_IN_MASSACHUSETTS: 'O',
         LocationClassDC.IN_DC: 'M',
         LocationClassDC.NOT_IN_DC: 'O'
     }
     return codes[classification]
 
+
+def victim_extract_prompt_type(row: Row) -> str:
+    """
+    Return the victim extract type based on newspaper location
+    """
+    if location_code(row['Publication']) == 'DC':
+        return "victimsDC"
+    return "victims"
+
+
+def location_code(publication_code: int) -> str:
+    """Return a location code based on the paper"""
+    match publication_code:
+        case 105359:
+            return 'M'
+        case 2:
+            return 'DC'
+        case invalid:
+            raise LocationException(f"Invalid publication code: {invalid}")
 
 def is_gpt_homicide_class_correct(gpt_code, manual_class) -> bool:
     """
