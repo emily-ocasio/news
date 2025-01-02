@@ -19,6 +19,7 @@ from rich.table import Table
 from mass_towns import townlist
 from state import Rows, HomicideClass, LocationClassDC, LocationClass
 
+
 class LocationException(Exception):
     """
     Exception for location errors
@@ -130,7 +131,6 @@ single_word_regex = re.compile(
 
 town_regex = re.compile(any_word_regex_string(townlist), re.IGNORECASE)
 
-
 def high_word(word: str, color=Style.BRIGHT) -> str:
     """
     Changes word or phrase to show as bold in terminal
@@ -141,6 +141,18 @@ def high_word(word: str, color=Style.BRIGHT) -> str:
 kp = KeywordProcessor()
 for keyword in townlist:
     kp.add_keyword(keyword, high_word(keyword))
+
+# Define Washington DC-related keywords
+dc_keywords = tuple([
+    'washington', 'district', 'DC', 'D.C', 'NW', 'NE', 'SE', 'SW',
+    'northwest', 'northeast', 'southeast', 'southwest', 'capitol hill'
+])
+dc_regex = re.compile(any_word_regex_string(dc_keywords), re.IGNORECASE)
+
+# Create a KeywordProcessor for DC keywords
+kp_dc = KeywordProcessor()
+for keyword in dc_keywords:
+    kp_dc.add_keyword(keyword, high_word(keyword))
 
 
 def in_mass(gpe):
@@ -157,10 +169,24 @@ def is_in_mass(gpe):
     return len(in_mass(gpe)) > 0
 
 
-def unified_prompt(prompts: tuple[str,...],
-                    add_quit: bool = True,
-                    allow_return: bool = False,
-                    width: int = 150) -> tuple[str, tuple]:
+def in_dc(gpe):
+    """
+    Returns list of matched Washington DC locations
+    """
+    return kp_dc.extract_keywords(gpe)
+
+
+def is_in_dc(gpe):
+    """
+    True if there is at least one Washington DC location in text
+    """
+    return len(in_dc(gpe)) > 0
+
+
+def unified_prompt(prompts: tuple[str, ...],
+                   add_quit: bool = True,
+                   allow_return: bool = False,
+                   width: int = 150) -> tuple[str, tuple]:
     """
     Creates a single prompt including individual choices,
         also adds an option to quit
@@ -173,21 +199,21 @@ def unified_prompt(prompts: tuple[str,...],
     """
     regex = r'\[(\w)\]'
     prompt_list = (prompts
-                + (("[Q]uit",) if add_quit else tuple())
-                + (("<Return> to continue",) if allow_return else tuple())
-    )
+                   + (("[Q]uit",) if add_quit else tuple())
+                   + (("<Return> to continue",) if allow_return else tuple())
+                   )
     full_prompt = ("Select option: "
                    + ", ".join(prompt_list)
                    + " > "
-    )
+                   )
     if len(full_prompt) > width:
         max_len = max(len(prompt) for prompt in prompt_list) + 4
         columns = (width - 5) // max_len
         full_prompt = ('Select option:\n'
-            + '\n'.join(4*' '+ ''.join(prompt.ljust(max_len)
-                                    for prompt in prompt_list[i:i+columns])
-                        for i in range(0, len(prompt_list), columns))
-            + "\n> ")
+                       + '\n'.join(4*' ' + ''.join(prompt.ljust(max_len)
+                                        for prompt in prompt_list[i:i+columns])
+                                   for i in range(0, len(prompt_list), columns))
+                       + "\n> ")
     return full_prompt, tuple(re.findall(regex, full_prompt))
     # return (full_prompt if len(full_prompt) < width
     #         else full_prompt.replace(', ', '\n    ')
@@ -207,14 +233,14 @@ def display_article(total: int,
     label = article_label(row)
     if row['gptVictimJson'] is not None:
         victims = display_gpt_victims(row['gptVictimJson'])
-        victim_info =  tuple(
+        victim_info = tuple(
             f"\nVictim extract from GPT:\n{victims}".splitlines())
     else:
         victim_info = tuple("")
     # lines = wrap_lines(
     #     color_text_matches(color_mass_locations(row['FullText']))
     # )
-    lines = tuple(rich_text(row['FullText']).splitlines())
+    lines = tuple(rich_text(row['FullText'], row['Publication']).splitlines())
     limit = limit_lines - 12
     art_types = article_types(types)
     return ("\n".join(counter
@@ -228,10 +254,11 @@ def display_gpt_victims(json_str: str) -> str:
     """
     Display GPT-3 generated victim list
     """
-    victims = json.dumps(json.loads(json_str), indent = 2)
+    victims = json.dumps(json.loads(json_str), indent=2)
     # ArticleAnalysisResponse.model_validate_json(json)
     # return victims.model_dump_json(indent = 4)
     return victims
+
 
 def display_remaining_lines(lines, limit_lines=0) -> str:
     """
@@ -251,13 +278,13 @@ def article_label(row: Row) -> tuple[str, ...]:
     """
     Returns label wtih article metadata
     """
-    return (f"Title: {rich_text(row['Title'])}    Date: "
+    return (f"Title: {rich_text(row['Title'], row['Publication'])}    Date: "
             f"{row['PubDate'][4:6]}/{row['PubDate'][6:8]}/{row['PubDate'][0:4]}"
             "\n",
             f"Record ID = {row['RecordId']}",
             f"Verified status = <{row['status']}>\n",
-            f"GPT Class = {row['GPTClass']}\n" 
-                if row['GPTClass'] is not None else "",
+            f"GPT Class = {row['GPTClass']}\n"
+            if row['GPTClass'] is not None else "",
             f"Assignment status = <{row['assignstatus']}>\n"
             )
 
@@ -309,7 +336,7 @@ def filter_text(document: Optional[str]) -> bool:
     return test_all_filters(document)
 
 
-def rich_text(document: Optional[str]) -> str:
+def rich_text(document: Optional[str], publication_code: int) -> str:
     """
     Apply rich text formatting
     Includes the following:
@@ -322,11 +349,14 @@ def rich_text(document: Optional[str]) -> str:
     text = Text(document)
     text.highlight_regex(absolute_regex, 'red bold')  # type: ignore
     text.highlight_regex(conditional_death_regex, 'red bold')  # type: ignore
-    text.highlight_regex(town_regex, 'blue bold')  # type: ignore
+    if location_code(publication_code) == 'DC':
+        text.highlight_regex(dc_regex, 'blue bold')  # type: ignore
+    else:
+        text.highlight_regex(town_regex, 'blue bold')  # type: ignore
     return rich_to_str(text)
 
 
-def rich_to_str(text: Union[Text, Table, str], end = '\n') -> str:
+def rich_to_str(text: Union[Text, Table, str], end='\n') -> str:
     """
     Returns directly printable string corresponding to a text
     Applies style formatting and word wrapping automatically
@@ -416,8 +446,15 @@ def classify(row: Row) -> str:
     """
     if not is_good_type(row) or not filter_row(row):
         return 'N'
-    if not is_in_mass(row['FullText']):
-        return 'O'
+    publication_code = row['Publication']
+    source_code = location_code(publication_code)
+    if source_code == 'DC':
+        if not is_in_dc(row['FullText']):
+            return 'O'
+    else:
+        if not is_in_mass(row['FullText']):
+            return 'O'
+
     return 'M'
 
 
@@ -502,7 +539,7 @@ def homicide_table(rows: Rows) -> str:
     Return formatted table of homicide info
     Exclude Extract as a column
     """
-    table = Table(row_styles=['','bold on grey85'])
+    table = Table(row_styles=['', 'bold on grey85'])
     for col in rows[0].keys():
         if 'Extract' not in col:
             table.add_column(col)
@@ -511,12 +548,12 @@ def homicide_table(rows: Rows) -> str:
         small = row_get(row, 'SmallExtract')
         exclude = (extract, small)
         elements = tuple(str(element) for element in row
-                                        if element not in exclude)
+                         if element not in exclude)
         table.add_row(*elements)  # type: ignore
     return rich_to_str(table)
 
 
-def row_get(row: Row, key: str, default = '%%%%%%',):
+def row_get(row: Row, key: str, default='%%%%%%',):
     """
     Simulate dictionary get method for Row objects
     Returns value of the column 'key' or default if column not in row
@@ -534,18 +571,19 @@ def tuple_replace(tup: tuple, index: int, value) -> tuple:
 
 
 def full_gpt3_prompt(pre_article: str, post_article: str,
-                        article: str, victim: str) -> tuple[str,str]:
+                     article: str, victim: str) -> tuple[str, str]:
     """
     Prepare a GPT-3 prompt
     Returns GPT-3 prompt and human readable prompt without the full article
     """
     text = remove_quotes(article)
     prompt = f"{pre_article}\"{text}\"{post_article}".replace(
-                '$VICTIM', victim)
+        '$VICTIM', victim)
     msg = (f"Prompt for humanization of victim {victim}:\n"
-                f"{pre_article}<ARTICLE>{post_article}".replace(
-                '$VICTIM',victim))
+           f"{pre_article}<ARTICLE>{post_article}".replace(
+               '$VICTIM', victim))
     return prompt, msg
+
 
 def prompt_response(prompt: str, response: str) -> str:
     """
@@ -555,6 +593,7 @@ def prompt_response(prompt: str, response: str) -> str:
     full.append(prompt)
     full.append(response, 'black bold')
     return rich_to_str(full)
+
 
 def gpt_homicide_class_code(classification: HomicideClass) -> str:
     """
@@ -572,7 +611,7 @@ def gpt_homicide_class_code(classification: HomicideClass) -> str:
 
 
 def gpt_location_class_code(
-        classification: LocationClassDC | LocationClass)-> str:
+        classification: LocationClassDC | LocationClass) -> str:
     """
     Return code for location class
     This is what is saved in the database
@@ -625,6 +664,7 @@ def is_gpt_homicide_class_correct(gpt_code, manual_class) -> bool:
         return gpt_code != 'M'
     return True
 
+
 def is_gpt_location_class_correct(gpt_code, manual_class) -> bool:
     """
     Determine whether GPT-3 location matches manual classification
@@ -633,12 +673,14 @@ def is_gpt_location_class_correct(gpt_code, manual_class) -> bool:
         return gpt_code == 'M'
     return gpt_code != 'M'
 
+
 def gpt_manual_mismatch(row: Row) -> bool:
     """
     Determine whether GPT-3 classification mismatches manual classification
     """
-    gclass = 'N' if row['GPTClass'] in ['VM','LEM','FM'] else row['GPTClass']
+    gclass = 'N' if row['GPTClass'] in ['VM', 'LEM', 'FM'] else row['GPTClass']
     return row['Status'] != gclass
+
 
 def humanizing_from_response(response: str, response_type='level') -> str:
     """
@@ -673,7 +715,7 @@ def homicide_extract(homicide: Row) -> str:
     extract = rich_to_str(homicide['Extract'])
     small_extract = rich_to_str(homicide['SmallExtract'])
     return (f"Extract for {victim}:\n{extract}\n\n"
-                f"Small extract for {victim}:\n{small_extract}\n")
+            f"Small extract for {victim}:\n{small_extract}\n")
 
 
 def remove_quotes(text: str) -> str:
@@ -682,6 +724,7 @@ def remove_quotes(text: str) -> str:
     Also replace any additional double quotes with single quotes
     """
     return text.lstrip('\n"').rstrip('\n"').replace('"', "'")
+
 
 def format_date(date_str):
     """

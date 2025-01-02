@@ -138,9 +138,14 @@ def articles_to_classify_sql():
     """
     return article_type_join_sql() + """
         WHERE PubDate IN (
-            SELECT PubDate
+            SELECT PubDate p2
             FROM dates
             WHERE Complete = 0
+            AND p2 IN (
+                SELECT DISTINCT PubDate p3
+                FROM articles
+                WHERE Dataset = "NOCLASS_WP"
+                )
             ORDER BY Priority
             LIMIT ?
         )
