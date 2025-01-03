@@ -66,9 +66,10 @@ def initial(state: State, choice) -> RxResp:
         'H': 'assign',
         'S': 'second_filter',
         'Z': 'humanize',
+        'V': 'extract_victims',
     })
     if choice not in flow_choice:
-        raise ChoiceException("Choice not supported")
+        raise ChoiceException(f"Choice <{choice}> not supported")
     # These options have not yet been migrated to the main controller flow
     if choice == "N":
         state = state._replace(article_kind = 'new')

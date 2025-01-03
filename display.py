@@ -145,3 +145,16 @@ def homicides(state: State) -> RxResp:
     """
     msg = calc.homicide_table(state.homicides)
     return action2('print_message', message=msg), state
+
+@next_event('start')
+def candidate_victims(state: State) -> RxResp:
+    """
+    Display candidate victims with their record IDs and victim names.
+    """
+    victims = state.victims
+    msg = "\n".join(
+        f"Record {item.record_id} - Victim: {item.victim.victim_name}"
+        for item in victims
+    )
+    state = state._replace(main_flow='initial')
+    return action2('print_message', message=msg), state

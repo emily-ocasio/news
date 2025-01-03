@@ -172,3 +172,11 @@ def articles_by_victim(state: State) -> RxResp:
     """
     state = state._replace(articles=state.outputs, next_article=0)
     return controller.main(state)
+
+
+def articles_for_victim_extraction(state: State) -> RxResp:
+    """
+    Response to database query for articles for victim extraction
+    """
+    state = state._replace(articles=state.outputs)
+    return controller.main(state)

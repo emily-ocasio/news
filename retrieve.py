@@ -3,7 +3,7 @@ Reactions that culminate in databse query actions retrieving information
 """
 import functools
 from collections.abc import Callable
-from actionutil import action2
+from actionutil import action2, combine_actions
 from state import RxResp, Reaction, State
 import calculations as calc
 
@@ -261,3 +261,16 @@ def articles_by_victim(state: State) -> RxResp:
     """
     sql = calc.articles_by_victim_sql()
     return action2('query_db', sql=sql, victim_id=state.victim), state
+
+
+@query('articles_for_victim_extraction')
+def retrieve_articles_by_dataset(state: State) -> RxResp:
+    """
+    Retrieve articles for a given dataset
+    """
+    sql = calc.articles_by_dataset_sql()
+    dataset = state.review_dataset
+    return combine_actions(action2('query_db', sql=sql, dataset=dataset),
+                           action2('print_message',
+                                    "Articles retrieved...\n")), state
+    # return action2('query_db', sql=sql, dataset=dataset), state

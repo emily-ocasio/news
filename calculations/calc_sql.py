@@ -56,6 +56,7 @@ def article_type_join_sql(index: str = "", extract: bool = False) -> str:
     """
     Initial portion of SQL statement joining articles with types
         and aggregating via binary encoding all the possible types
+    NOTE: Requires GROUP BY a.RecordId after WHERE clause to work
     """
     indexed_sql = "" if not index else f"INDEXED BY {index}"
     extract_sql = ("" if not extract
@@ -628,4 +629,16 @@ def articles_by_victim_sql() -> str:
         WHERE top.ShrId = ?
         GROUP BY a.RecordId
         ORDER BY a.PubDate, a.RecordId
+    """
+
+def articles_by_dataset_sql() -> str:
+    """
+    SQL statement to return articles for a given dataset
+    Only for victim extraction
+    Not for review or display so types are not joined
+    """
+    return """
+        SELECT * FROM articles a
+        WHERE a.Dataset = ?
+        ORDER BY a.PubDate
     """

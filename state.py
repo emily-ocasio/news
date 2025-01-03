@@ -10,8 +10,10 @@ from sqlite3 import Row
 from immutabledict import immutabledict
 from pydantic import BaseModel, Field
 
-Rows = tuple[Row,...]
+Rows = tuple[Row, ...]
 TextChoice = immutabledict[str, str]
+
+
 class HomicideClass(str, Enum):
     """
     Enum for homicide classification
@@ -30,12 +32,14 @@ class LocationClass(Enum):
     NOT_IN_MASSACHUSETTS = "no homicide in Massachusetts"
     IN_MASSACHUSETTS = "homicide(s) in Massachusetts"
 
+
 class LocationClassDC(Enum):
     """
     Enum for location classification for DC
     """
     NOT_IN_DC = "not in Washington, DC"
     IN_DC = "in Washington, DC"
+
 
 class County(str, Enum):
     """
@@ -56,6 +60,7 @@ class County(str, Enum):
     SUFFOLK = "Suffolk"
     WORCESTER = "Worcester"
     NOT_IN_MASSACHUSETTS = "not in Massachusetts"
+
 
 class Relationship(str, Enum):
     """
@@ -91,6 +96,7 @@ class Sex(str, Enum):
     MALE = "male"
     FEMALE = "female"
     UNKNOWN = "unknown"
+
 
 class Weapon(str, Enum):
     """ Enum for weapon """
@@ -147,6 +153,7 @@ class LocationClassDCResponse(BaseModel):
     """
     classification: LocationClassDC
 
+
 class HomicideClassResponse(BaseModel):
     """
     Response model for homicide classification.
@@ -158,25 +165,34 @@ class VictimBase(BaseModel):
     """
     Base model for victim information
     """
-    victim_name: str | None = Field(description = "Name of victim")
-    victim_age: int | None = Field(description = "Age of victim")
-    victim_sex: Sex | None = Field(description = "Sex of victim")
-    suspect_count: int | None = Field(description = "Number of suspects")
-    suspect_age: int | None = Field(description = "Age of main suspect")
-    suspect_sex: Sex | None = Field(description = "Sex of main suspect")
+    victim_name: str | None = Field(description="Name of victim")
+    victim_age: int | None = Field(description="Age of victim")
+    victim_sex: Sex | None = Field(description="Sex of victim")
+    victim_count: int | None = Field(
+        description="Number of victims murdered in the same incident",
+        default=None)
+    suspect_count: int | None = Field(description="Number of suspects",
+        default=None)
+    suspect_age: int | None = Field(description="Age of main suspect",
+                                    default=None)
+    suspect_sex: Sex | None = Field(description="Sex of main suspect",
+                                    default=None)
     date_of_death: str | None = Field(
         description="Approximate date that victim was found dead (YYYY-MM-DD)")
     weapon: Weapon | None = Field(
-        description = "Type of weapon used to kill victim")
+        description="Type of weapon used to kill victim",
+        default=None)
     relationship: Relationship | None = Field(
-        description="The victim's relationship to the killer")
+        description="The victim's relationship to the killer",
+        default=None)
     circumstance: Circumstance | None = Field(
-        description="Circumstances of the crime")
+        description="Circumstances of the crime",
+        default=None)
     victim_details: str = Field(
-        description = "All the text in the article that refers to this "
-            "victim, including background on the victim, circumstances of "
-            "the crime, and any investigation or trial. "
-            "Include every detail mentioned in the article about the victim.")
+        description="All the text in the article that refers to this "
+        "victim, including background on the victim, circumstances of "
+        "the crime, and any investigation or trial. "
+        "Include every detail mentioned in the article about the victim.")
 
 
 class VictimDC(VictimBase):
@@ -191,17 +207,18 @@ class Victim(VictimBase):
     """Model for Victim information in Massachusetts"""
     county: County = Field(
         description="County where the homicide occurred (infer from other "
-            "details if not explicitly stated). Boston is in Suffolk county.")
+        "details if not explicitly stated). Boston is in Suffolk county.")
     town: str | None = Field(
         description="Town or city where the homicide occurred")
+
 
 class ArticleAnalysisResponse(BaseModel):
     """
     Response model for extracting information about victims
     """
     homicide_victims: List[Victim] = Field(
-            description="Information for each homicide victim in the article. "
-                "Only include dead victims.")
+        description="Information for each homicide victim in the article. "
+        "Only include dead victims.")
 
 
 class ArticleAnalysisDCResponse(BaseModel):
@@ -209,8 +226,40 @@ class ArticleAnalysisDCResponse(BaseModel):
     Response model for extracting information about victims
     """
     homicide_victims: List[VictimDC] = Field(
-            description="Information for each homicide victim in the article. "
-                "Only include dead victims.")
+        description="Information for each homicide victim in the article. "
+        "Only include dead victims.")
+
+
+class GenericVictim(VictimBase):
+    """
+    Generic model for Victim information
+    """
+    location: LocationClass | None = Field(
+        description="Location of the homicide",
+        default=None)
+    county: County | None = Field(
+        description="County where the homicide occurred (optional)",
+        default=None)
+    town: str | None = Field(
+        description="Town or city where the homicide occurred (optional)",
+        default=None)
+
+
+class GenericArticleAnalysisResponse(BaseModel):
+    """
+    Generic response model for extracting information about victims
+    """
+    homicide_victims: List[GenericVictim] = Field(
+        description="Information for each homicide victim in the article. "
+        "Only include dead victims.")
+
+
+class ArticleGenericVictimItem(NamedTuple):
+    """
+    Represents a potential victim extracted from an article
+    """
+    record_id: int
+    victim: GenericVictim
 
 
 class State(NamedTuple):
@@ -238,7 +287,7 @@ class State(NamedTuple):
     homicides_assigned: Rows = tuple()
     homicide_group: str = ''
     selected_homicide: int = 0
-    selected_homicides: tuple[int,...] = tuple()
+    selected_homicides: tuple[int, ...] = tuple()
     victim: str = ''
     county: str = ''
     FP: Rows = tuple()
@@ -283,8 +332,9 @@ class State(NamedTuple):
     inputargs: Any = tuple()
     inputkwargs: Any = {}
     articles_to_filter: int = 0
-    #current_step: str = 'not_started'
+    # current_step: str = 'not_started'
     next_step: str = 'begin'
+    victims: tuple[ArticleGenericVictimItem, ...] = tuple()
 
 
 # An Action is a function that has State as argument,
@@ -294,7 +344,7 @@ Action = Callable[[State], State]
 
 # The response of a reaction (RxResp) is a tuple,
 #   which includes the next Action to take, and the updated State
-#RxResp = Tuple[Callable[...,State], State]
+# RxResp = Tuple[Callable[...,State], State]
 RxResp = tuple[Action, State]
 
 

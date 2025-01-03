@@ -32,7 +32,8 @@ initial_prompts = (
     "[A]uto categorize by date",
     "[S]econd filtering via GPT",
     "Assign articles to [H]omicides",
-    "Determine humani[Z]ing coverage"
+    "Determine humani[Z]ing coverage",
+    "Candidate [V]ictim list"
 )
 
 label_prompts = (

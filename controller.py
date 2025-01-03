@@ -985,3 +985,31 @@ def humanize_homicides_auto_gpt3(state: State) -> RxResp:
     # Auto humanizing complete
     state = state._replace(next_article=state.next_article+1)
     return retrieve.refreshed_homicide(state)
+
+
+@main_flow('extract_victims')
+def extract_victims(state: State) -> RxResp:
+    """
+    Flow for extracting victim information from articles.
+    """
+    next_step: str | None = None
+    rxn: Reaction | None = None
+    match state.next_step:
+        case 'begin':
+            next_step = 'retrieve_articles'
+            rxn = choose.dataset
+        case 'retrieve_articles':
+            next_step = 'extract_victims'
+            state = state._replace(review_dataset=state.review_type)
+            rxn = retrieve.retrieve_articles_by_dataset
+        case 'extract_victims':
+            valid_victims = calc.gather_valid_generic_victims(state.articles)
+            state = state._replace(victims=valid_victims)
+            rxn = display.candidate_victims
+        case invalid:
+            raise ControlException(f"Invalid current step: {invalid}")
+
+    if next_step is not None:
+        state = state._replace(next_step=next_step)
+    if rxn is not None:
+        return rxn(state)

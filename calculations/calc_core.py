@@ -17,7 +17,8 @@ from rich.text import Text
 from rich.table import Table
 
 from mass_towns import townlist
-from state import Rows, HomicideClass, LocationClassDC, LocationClass
+from state import Rows, HomicideClass, LocationClassDC, LocationClass,\
+    ArticleGenericVictimItem, GenericArticleAnalysisResponse
 
 
 class LocationException(Exception):
@@ -732,3 +733,27 @@ def format_date(date_str):
     """
     date_obj = datetime.strptime(date_str, '%Y%m%d')
     return date_obj.strftime('%B %d, %Y')
+
+
+def gather_valid_generic_victims(
+        rows: tuple[Row, ...]) -> tuple[ArticleGenericVictimItem, ...]:
+    """
+    Extract all potential victims from a set of articles
+    """
+    results = []
+    for row in rows:
+        if row['gptVictimJson'] is not None:
+            parsed = GenericArticleAnalysisResponse.model_validate_json(
+                row['gptVictimJson'], strict=False)
+            for v in parsed.homicide_victims:
+                if v.date_of_death and v.date_of_death[:4].isdigit():
+                    if int(v.date_of_death[:4]) <= 1976:
+                        continue
+                if v.location is not None:
+                    if v.location == LocationClassDC.NOT_IN_DC:
+                        continue
+                elif v.county is not None \
+                    and v.county == "NOT_IN_MASSACHUSETTS":
+                    continue
+                results.append(ArticleGenericVictimItem(row['RecordId'], v))
+    return tuple(results)

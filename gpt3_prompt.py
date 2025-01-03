@@ -237,6 +237,7 @@ Given an article with the date, title, and text, extract and organize informatio
      - Name (if mentioned in the article)
      - Age (if mentioned in the article or estimated if person was a juvenile)
      - Sex (can be mentioned directly or inferred from other information in the article)
+     - Victim count
      - Suspect count
      - Suspect age
      - Suspect sex
@@ -274,6 +275,7 @@ Given an article with the date, title, and text, extract and organize informatio
      - Name (if mentioned in the article)
      - Age (if mentioned in the article or estimated if person was a juvenile)
      - Sex (can be mentioned directly or inferred from other information in the article)
+     - Victim count
      - Suspect count
      - Suspect age
      - Suspect sex
