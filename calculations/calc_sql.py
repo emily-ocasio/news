@@ -618,3 +618,14 @@ def articles_to_filter_sql() -> str:
         ORDER BY PubDate
         LIMIT ?
     """
+
+def articles_by_victim_sql() -> str:
+    """
+    SQL statement to return articles by victim id
+    """
+    return article_type_join_sql() + """
+        INNER JOIN topics top ON a.RecordId = top.RecordId
+        WHERE top.ShrId = ?
+        GROUP BY a.RecordId
+        ORDER BY a.PubDate, a.RecordId
+    """

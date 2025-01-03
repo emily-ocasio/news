@@ -139,6 +139,7 @@ def dataset(state: State, choice) -> RxResp:
         'W': 'CLASS_WP',
         '1': '1',
         '2': '2',
+        'I': 'VICTIM_ID'  # Updated review type for victim id
     })
     if choice not in dataset_choice:
         raise ChoiceException("Unsupported dataset choice")
@@ -520,4 +521,11 @@ def articles_to_filter(state: State) -> RxResp:
         state = state._replace(main_flow='start')
     else:
         state = state._replace(articles_to_filter=choice)
+    return controller.main(state)
+
+def victim_id(state: State) -> RxResp:
+    """
+    Respond to user entering victim id to review all articles
+    """
+    state = state._replace(victim=state.outputs)
     return controller.main(state)

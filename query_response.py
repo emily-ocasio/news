@@ -164,3 +164,11 @@ def articles_to_filter(state: State) -> RxResp:
     """
     state = state._replace(articles=state.outputs, next_article=0)
     return controller.main(state)
+
+
+def articles_by_victim(state: State) -> RxResp:
+    """
+    Response to query for articles by victim id
+    """
+    state = state._replace(articles=state.outputs, next_article=0)
+    return controller.main(state)

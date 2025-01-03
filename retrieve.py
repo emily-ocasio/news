@@ -252,3 +252,12 @@ def articles_to_filter(state: State) -> RxResp:
     """
     sql = calc.articles_to_filter_sql()
     return action2('query_db', sql=sql, limit=state.articles_to_filter), state
+
+
+@query('articles_by_victim')
+def articles_by_victim(state: State) -> RxResp:
+    """
+    Retrieve articles by victim id
+    """
+    sql = calc.articles_by_victim_sql()
+    return action2('query_db', sql=sql, victim_id=state.victim), state

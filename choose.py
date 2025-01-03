@@ -64,6 +64,7 @@ dataset_prompts = (
     "Review Assigned Group [1]",
     "Review Assigned Group [2]",
     "Review from [W]ashington Post",
+    "Review all articles by Victim [I]d",  # Updated option here
     "[C]ontinue without reviewing"
 )
 
@@ -468,3 +469,12 @@ def articles_to_filter(state: State) -> RxResp:
     """
     prompt = "Enter number of articles to filter > "
     return action2('get_number_input', prompt=prompt), state
+
+
+@choice('victim_id')
+def victim_id(state: State) -> RxResp:
+    """
+    Ask for victim id to review all articles
+    """
+    msg = "Enter victim id to review all articles > "
+    return action2('get_text_input', prompt=msg), state

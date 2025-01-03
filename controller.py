@@ -284,6 +284,10 @@ def review_datasets(state: State) -> RxResp:
                 # Review a single article
                 next_step = 'retrieve_single_article'
                 rxn = choose.single_article
+            elif state.review_type == 'VICTIM_ID':
+                # Review articles by victim id
+                next_step = 'retrieve_by_victim_id'
+                rxn = choose.victim_id
             else:
                 state = state._replace(review_dataset=state.review_type)
                 if state.review_dataset in '12':
@@ -312,6 +316,10 @@ def review_datasets(state: State) -> RxResp:
             # After selecting the label to review
             next_step = 'review_articles'
             rxn = retrieve.verified
+
+        case 'retrieve_by_victim_id':
+            next_step = 'review_articles'
+            rxn = retrieve.articles_by_victim
 
         case 'review_articles':
             if len(state.articles) == 0:
@@ -1038,3 +1046,13 @@ def humanize_homicides_auto_gpt3(state: State) -> RxResp:
 #                        or state.articles[state.next_article]['Status'] == 'M')
 #                       else choose.label)
 #     ), state
+
+@main_flow('review_by_victim')
+def review_by_victim(state: State) -> RxResp:
+    """
+    Main workflow for reviewing articles by victim id
+    """
+    if state.victim == '':
+        # First time - ask for victim id
+        return choose.victim_id(state)
+    return retrieve.articles_by_victim(state)
