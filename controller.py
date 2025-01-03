@@ -648,50 +648,6 @@ def select_article_type(state: State) -> RxResp:
         from_reaction(choose.article_type)
     ), state
 
-
-# def auto_classify(state: State) -> RxResp:
-#     """
-#     Automatically classify articles
-#     """
-#     return choose.dates_to_classify(state)
-
-
-# def classify_by_date(state: State) -> RxResp:
-#     """
-#     Retrieved articles to auto-classify by date
-#     """
-#     return retrieve.to_auto_classify(state)
-
-
-# def classify_articles(state: State) -> RxResp:
-#     """
-#     Begin classifying articles
-#     """
-#     if len(state.articles) == 0:
-#         return no_articles(state)
-#     return combine_actions(
-#         from_reaction(display.classify_progress),
-#         from_reaction(classify_next),
-#     ), state
-
-
-# def classify_next(state: State) -> RxResp:
-#     """
-#     Classify next article on list
-#     """
-#     if state.next_article >= len(state.articles):
-#         return all_classified(state)
-#     return save.classification(state)
-
-
-# def increment_classify(state: State) -> RxResp:
-#     """
-#     Increment pointer to classify
-#     """
-#     state = state._replace(next_article=state.next_article+1)
-#     return classify_next(state)
-
-
 @next_event('start')
 def all_classified(state: State) -> RxResp:
     """
@@ -1029,30 +985,3 @@ def humanize_homicides_auto_gpt3(state: State) -> RxResp:
     # Auto humanizing complete
     state = state._replace(next_article=state.next_article+1)
     return retrieve.refreshed_homicide(state)
-
-# def show_article(state: State) -> RxResp:
-#     """
-#     Display article contents
-#     Preceeded by retrieving the article types
-#     If showing article in context of homicide assignment, first
-#         retrieve homicide information (assigned and available), starting
-#         with the already assigned homicides
-#     If article has murder (or pass) status, treat as assignment regardless
-#     """
-#     return combine_actions(
-#         from_reaction(display.article),
-#         from_reaction(retrieve.assigned_homicides_by_article
-#                       if (state.article_kind == 'assign'
-#                        or state.articles[state.next_article]['Status'] == 'M')
-#                       else choose.label)
-#     ), state
-
-@main_flow('review_by_victim')
-def review_by_victim(state: State) -> RxResp:
-    """
-    Main workflow for reviewing articles by victim id
-    """
-    if state.victim == '':
-        # First time - ask for victim id
-        return choose.victim_id(state)
-    return retrieve.articles_by_victim(state)
