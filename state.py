@@ -73,6 +73,8 @@ class Relationship(str, Enum):
     HUSBAND = "husband"
     STRANGER = "stranger"
     WIFE = "wife"
+    EX_WIFE = "ex-wife"
+    EX_HUSBAND = "ex-husband"
     BROTHER = "brother"
     SISTER = "sister"
     OTHER_FAMILY = "other family"
@@ -173,7 +175,8 @@ class VictimBase(BaseModel):
         default=None)
     suspect_count: int | None = Field(description="Number of suspects",
         default=None)
-    suspect_age: int | None = Field(description="Age of main suspect",
+    suspect_age: int | None = Field(description="Age of main suspect at "
+                                    "the time of the crime",
                                     default=None)
     suspect_sex: Sex | None = Field(description="Sex of main suspect",
                                     default=None)
