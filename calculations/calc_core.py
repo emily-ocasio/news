@@ -120,11 +120,11 @@ conditional_regex = re.compile(any_root_regex_string(conditional_roots),
                                re.IGNORECASE)
 death_regex = re.compile(any_root_regex_string(death_roots), re.IGNORECASE)
 
-conditional_string = distance_match_regex_string(
+CONDITIONAL_STRING = distance_match_regex_string(
     any_root_regex_string(conditional_roots),
     any_root_regex_string(death_roots)
 )
-conditional_death_regex = re.compile(conditional_string, re.IGNORECASE)
+conditional_death_regex = re.compile(CONDITIONAL_STRING, re.IGNORECASE)
 
 single_word_regex = re.compile(
     r"(\S+)", re.IGNORECASE
