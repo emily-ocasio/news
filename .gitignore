@@ -7,6 +7,7 @@ apcs.py
 shr_mass.pkl
 secr_apis/
 .vscode/
+.cursor/
 .DS_Store
 Ocasio.Emily.SummaryPhrase.docx
 Ocasio.Emily.VoiceMemo.docx
@@ -18,5 +19,5 @@ calculations/other_papers.ipynb
 uuid.c
 uuid.dylib
 newsources.ipynb
-
+code_analyzer.py
 .codegpt
