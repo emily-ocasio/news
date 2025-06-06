@@ -75,7 +75,7 @@ def exit_program():
     """
     Display goodbye message and prepare to exit program
     """
-    print("Good Bye!! To re-start program type 'python3 app.py'")
+    print("Good Bye!! To re-start program type 'python3 articles.py'")
     db.close()
 
 
@@ -240,7 +240,7 @@ def prompt_gpt(system, user, model = 'mini', max_tokens = 256,
         response_type should be a pydantic type with expressive
         attribute names that will be used by the model to respond
     """
-    models = {'mini': 'gpt-4o-mini', '4o': 'gpt-4o'}
+    models = {'mini': 'gpt-4o-mini', '4o': 'gpt-4'}
     client = OpenAI(api_key=GPT_API_KEY)
     messages: list[ChatCompletionMessageParam] = [
         { 'role': 'system', 'content': system },
