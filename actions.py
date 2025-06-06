@@ -75,7 +75,7 @@ def exit_program():
     """
     Display goodbye message and prepare to exit program
     """
-    print("Good Bye!! To re-start program type 'python3 func.py'")
+    print("Good Bye!! To re-start program type 'python3 app.py'")
     db.close()
 
 
