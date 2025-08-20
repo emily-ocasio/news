@@ -1,0 +1,251 @@
+# copilot-instructions.md
+
+## 1. Project Overview
+
+This project is a command-line tool for managing, analyzing, and interacting with news articles and crime data, with support for user prompts, database operations, and integration with OpenAI GPT models. The main entry point is `articles.py`.
+
+---
+
+## 2. Architecture and Main Components
+
+### 2.1 Entry Point: `articles.py`
+- This is the main script that starts the application.
+- It initializes the program, loads the main menu, and manages the main event loop.
+- All user interactions and program flow originate here.
+
+### 2.2 Actions: `actions.py`
+- Contains all side-effect-producing functions, decorated with `@actiondef`.
+- Actions include user prompts, database queries, screen clearing, and GPT API calls.
+- Each action receives a `State` object and may update it with outputs.
+
+### 2.3 State Management: `state.py`
+- Defines the `State` and `Action` types.
+- `State` is an immutable object (likely a namedtuple or dataclass) that holds the current state of the application, including user input, outputs, and other context.
+- `Action` is a callable that takes a `State` and returns a new `State`.
+
+### 2.4 Database
+- Uses SQLite (`newarticles.db`) for persistent storage.
+- Database schema and setup scripts are in `.sql` files.
+- The database connection is established at the top of `actions.py` and shared by all actions.
+
+### 2.5 External APIs
+- Integrates with OpenAI GPT models for text generation and analysis.
+- API keys are loaded from `secr_apis/gpt3_key.py`.
+
+### 2.6 Utilities and Helpers
+- Additional modules (e.g., `actionutil.py`, `display.py`, `func.py`) provide supporting functions and abstractions.
+
+---
+
+## 3. Coding Conventions
+
+- **Actions**:  
+  - All side-effect functions must be decorated with `@actiondef`.
+  - Actions should take a `State` object and return a new `State` (or update its `outputs` attribute).
+  - Use docstrings to describe the purpose and behavior of each action.
+
+- **State**:  
+  - Treat `State` as immutable; always return a new state when making changes.
+  - Use `_replace()` to update fields in the state.
+
+- **Database**:  
+  - Use the shared `db` connection in `actions.py`.
+  - Use parameterized queries to avoid SQL injection.
+  - Use `query_db` for SELECT statements and `command_db` for INSERT/UPDATE/DELETE.
+
+- **User Input**:  
+  - Use provided input actions (`get_user_input`, `get_text_input`, etc.) for all user prompts.
+  - Validate and sanitize user input as needed.
+
+- **External APIs**:  
+  - Use `prompt_gpt3` for legacy GPT-3 models and `prompt_gpt` for GPT-3.5/4+.
+  - API keys must not be hardcoded; always import from the secrets module.
+
+---
+
+## 4. Adding or Modifying Actions
+
+- Define a new function in `actions.py` and decorate it with `@actiondef`.
+- The function should accept parameters as needed, but always be compatible with the `State`-based calling convention.
+- Update the main menu or event loop in `articles.py` to call the new action as appropriate.
+
+---
+
+## 5. Database Schema
+
+- The main database is `newarticles.db`.
+- Schema changes should be made via `.sql` scripts and documented.
+- Use migrations or initialization scripts to set up new tables or fields.
+
+---
+
+## 6. Extending the Program
+
+- To add new features, create new actions and update the main flow in `articles.py`.
+- For new types of user input, add helper functions in `actions.py` or a utility module.
+- For new database operations, use or extend `query_db` and `command_db`.
+
+---
+
+## 7. Testing and Debugging
+
+- Use print statements or logging for debugging actions.
+- Test new actions in isolation before integrating into the main flow.
+- Ensure database changes are committed and connections are closed on exit.
+
+---
+
+## 8. Security and Secrets
+
+- API keys and secrets must be stored in the `secr_apis` directory and never hardcoded.
+- Do not commit secrets to version control.
+
+---
+
+## 9. Example: Adding a New Action
+
+```python
+@actiondef
+def greet_user(name: str):
+    """
+    Greets the user by name.
+    """
+    print(f"Hello, {name}!")
+```
+- Add a menu option in `articles.py` to call `greet_user`.
+
+---
+
+## 10. File/Module Responsibilities
+
+| File/Module         | Responsibility                                      |
+|---------------------|-----------------------------------------------------|
+| articles.py         | Main entry point, user interaction, event loop      |
+| actions.py          | All side-effect actions, user input, DB, GPT, etc.  |
+| state.py            | State and Action definitions                        |
+| secr_apis/          | API keys and secrets                                |
+| *.sql               | Database schema and queries                         |
+| actionutil.py, etc. | Utilities and helpers                               |
+
+---
+
+## 11. How to Use This File with Copilot Agent
+
+- This file (`copilot-instructions.md`) should be kept up to date with the latest architectural and coding conventions for the project.
+- When using Copilot or Copilot Chat, reference this file for:
+  - Project structure and file responsibilities
+  - Coding conventions and best practices
+  - How to add, modify, or refactor actions and features
+  - Security and database guidelines
+- If you use Copilot Chat, you can explicitly tell it to "follow the instructions in copilot-instructions.md" for future changes.
+- For best results, keep this file in the project root so Copilot can find and use it as context.
+
+---
+
+## 12. Main Loop, State Transitions, and Control Flow
+
+### Main Loop and State-Driven Flow
+
+The main loop in `articles.py` is the core of the program’s control flow. It operates as follows:
+
+1. **Initialization**: The program starts by creating an initial `State` object (using `initialize_state(State(next_event='start'))`).
+2. **Event Loop**: The loop continues until `current_state.end_program` is `True`. In each iteration:
+   - It calls `what_next(current_state)`, which returns a tuple: `(action, new_state)`.
+   - The `action` (a function) is then called with the `current_state`, producing a new state (and possibly side effects).
+
+Pseudocode:
+```python
+while not current_state.end_program:
+    action, current_state = what_next(current_state)
+    current_state = action(current_state)
+```
+
+#### State and Actions
+- **State**: The `State` object is an immutable snapshot of the entire application’s context at a given moment. It contains all relevant data, including what event should happen next (`next_event`), user info, database results, and more.
+- **Action**: An `Action` is a function that takes a `State`, performs side effects (like I/O or DB access), and returns a new `State`. Actions are responsible for all operations that interact with the outside world.
+
+### The Role of `what_next`
+- **Purpose**: `what_next` is an event dispatcher. It examines the `next_event` attribute of the current `State` and determines which controller or handler function should process the state next.
+- **How it works**: It uses a dictionary (`dispatch`) mapping event names (strings) to functions (controllers or responders). It returns the result of calling the appropriate function for the current event.
+- **Result**: The function called by `what_next` (a controller or responder) returns a tuple: `(action, new_state)`. The main loop then executes the `action` on the `new_state`.
+
+### Controllers
+- **Definition**: Controllers are pure functions (no side effects) that implement the application’s flow logic. They decide, based on the current state, what should happen next.
+- **Responsibilities**:
+  - Analyze the current state.
+  - Decide which action should be performed next.
+  - Prepare and return the next action function and an updated state.
+- **Example**: `controller.start_point(state)` might decide to prompt the user for input, so it returns a tuple: `(get_user_input_action, updated_state)`
+
+### Reaction and RxResp Types
+Defined in `state.py`:
+- **Reaction**: `Reaction = Callable[[State], RxResp]` — A `Reaction` is a pure function that takes a `State` and returns an `RxResp`. It does not perform side effects itself.
+- **RxResp**: `RxResp = tuple[Action, State]` — An `RxResp` (Reaction Response) is a tuple containing:
+  - An `Action` (a function that will perform side effects and further update the state)
+  - An updated `State` (the result of the pure logic in the controller/reaction)
+
+### Summary
+- The main loop alternates between pure logic (controllers/reactions) and side-effectful actions.
+- `what_next` dispatches to the correct controller/reaction based on the state’s `next_event`.
+- Controllers/reactions return an `RxResp`: the next action to perform and the next state.
+- Actions perform side effects and return a new state.
+- This architecture cleanly separates pure logic from side effects, making the program easier to reason about and extend.
+
+---
+
+### Workflow Orchestration and Multi-Pass Main Loop
+
+The application's workflows are orchestrated through repeated passes of the main loop, with each pass representing a single, focused side-effect action. This design enables complex, interactive workflows to be built from simple, composable steps. Here’s how it works:
+
+#### Multi-Pass Workflow Example
+- **First pass:** Displays a menu or prompt to the user (side effect: output to terminal).
+- **Second pass:** Captures user input (side effect: input from terminal).
+- **Third pass:** Based on input, may display a further prompt or menu (side effect: output).
+- **Fourth pass:** Captures further input (side effect: input).
+- **Fifth pass:** Triggers a database query (side effect: DB access).
+- **Sixth pass:** Displays the results of the query (side effect: output).
+- ...and so on, with each pass handling one main side effect.
+
+This approach allows for clear separation of concerns, easy debugging, and flexible extension of workflows.
+
+#### Role of Controllers
+- Controllers are pure functions that analyze the current state and determine the next step in the workflow.
+- They do not perform side effects themselves, but instead return an `RxResp` (a tuple of the next action to perform and the updated state).
+- Controllers orchestrate the flow by chaining together pure functions and actions, guiding the application through each step of the workflow.
+
+#### Types of Pure Functions Used by Controllers
+Controllers rely on a variety of pure functions, each with a specific role in the workflow:
+
+- **Prompt/Choice Functions (`choose.py`):**
+  - Define and present menus or prompts to the user.
+  - Use decorators (e.g., `@choice`) to set up the next event and expected input.
+  - Return an action to display the prompt and capture user input.
+
+- **Display Functions (`display.py`):**
+  - Format and present data or summaries to the user.
+  - Prepare messages or tables for output, but do not perform the output themselves.
+  - Return an action to actually display the information.
+
+- **Choice Response Functions (`choice_response.py`):**
+  - Handle and validate user input.
+  - Update the state based on the user's choice.
+  - May trigger further prompts, data retrieval, or workflow transitions.
+
+- **Query Response Functions (`query_response.py`):**
+  - Handle the results of database queries.
+  - Update the state with new data (e.g., articles, homicides).
+  - Decide the next step, such as displaying data or prompting for further action.
+
+- **Query Functions (`retrieve.py`):**
+  - Prepare and initiate database queries based on the current state.
+  - Use decorators (e.g., `@query`) to set up the next event and query type.
+  - Return an action to execute the query and update the state with results.
+
+- **Save/Update Functions (`save.py`):**
+  - Prepare and initiate database updates or saves.
+  - Return an action to perform the save and update the state as needed.
+
+#### Summary
+- Each pass through the main loop is responsible for a single side effect, making workflows predictable and modular.
+- Controllers and pure functions coordinate the flow, while actions perform the actual side effects.
+- This architecture enables complex, interactive workflows to be built from simple, testable components, and makes it easy to extend or modify the application's behavior.
