@@ -9,6 +9,7 @@
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, TypeVar
 
+from .dispatch import GetLine, PutLine
 from .either import Either, Left, Right
 from .functor import Functor
 A = TypeVar("A")
@@ -45,17 +46,6 @@ class Rethrow:
     res: Either
 
 
-@dataclass(frozen=True)
-class PutLine:
-    """Base I/O: output a line."""
-    s: str
-
-
-@dataclass(frozen=True)
-class GetLine:
-    """Base I/O: input a line with prompt."""
-    prompt: str
-
 # Private control-flow sentinel for non-local exit of Throw/Rethrow(Left)
 
 
@@ -89,13 +79,20 @@ class Run[A](Functor[A]):
         """
         return self.map(f)
 
+    def __rshift__(self, f: Callable[[A], "Run[B]"]) -> "Run[B]":
+        """
+        Enables using the >> operator for chaining computations
+        over the Run.
+        """
+        return self._bind(f)
+
     def map(self, f: Callable[[A], B]) -> "Run[B]":
         """
         Functor map: transforms the result of the computation using function f.
         """
         return Run(lambda self_run: f(self._step(self_run)), self._perform)  # pylint: disable=no-member
 
-    def bind(self, f: Callable[[A], "Run[B]"]) -> "Run[B]":
+    def _bind(self, f: Callable[[A], "Run[B]"]) -> "Run[B]":
         """
         Monad bind: chains computations by passing the result to function f,
           which returns a new Run.

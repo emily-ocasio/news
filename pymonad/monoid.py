@@ -2,6 +2,7 @@
 # (c) Copyright 2014, 2020 by Jason DeLaat.
 # Licensed under BSD 3-clause licence.
 # --------------------------------------------------------
+# pylint:disable=W2301
 """Monoid Implementation.
 
 A monoid is an algebraic structure consisting of a set of objects, S,
@@ -107,4 +108,3 @@ def mconcat[M: Monoid](monoid_list: Iterable[M]) -> M:
     for value in it:
         result = result.append(value)
     return result
-
