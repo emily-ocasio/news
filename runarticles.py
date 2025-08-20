@@ -5,7 +5,7 @@ Monadic version
 from pymonad import Run, run_reader, run_state, run_base_effect, run_except, \
     REAL_DISPATCH, put_line, get_line, set_, view
 
-from appstate import AppState, user_name_lens
+from appstate import AppState, user_name
 
 def main_menu() -> Run[None]:
     """
@@ -14,10 +14,10 @@ def main_menu() -> Run[None]:
     return \
         put_line("" \
             "Welcome to the Homicide Article Analysis System") >> (lambda _: \
-        get_line("Please enter your name") >> (lambda user_name: \
-        set_(user_name_lens, user_name) >> (lambda _: \
-        view(user_name_lens) >> (lambda name: \
-        put_line(f"Hello, {user_name}! Let's get started.")
+        get_line("Please enter your name") >> (lambda name: \
+        set_(user_name, name) >> (lambda _: \
+        view(user_name) >> (lambda user: \
+        put_line(f"Hello, {user}! Let's get started.")
         ))))
 def main():
     """

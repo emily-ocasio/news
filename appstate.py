@@ -1,9 +1,9 @@
 """
 Defines monadic state at the top level.
 """
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
-from pymonad import Lens
+from pymonad import Lens, lens
 
 @dataclass(frozen=True)
 class AppState:
@@ -12,7 +12,4 @@ class AppState:
     """
     user_name: str = ""
 
-user_name_lens = Lens[AppState, str](
-    get=lambda s: s.user_name,
-    set=lambda s, v: replace(s, user_name=v)
-)
+user_name: Lens[AppState, str] = lens("user_name")

@@ -6,7 +6,7 @@ from .curry import curry2, curry3, return_type, curryN
 from .dispatch import PutLine, GetLine, REAL_DISPATCH
 from .either import Either, Left, Right
 from .functor import Functor, map #pylint: disable=redefined-builtin
-from .lens import Lens, view, set_, over, modify
+from .lens import Lens, view, set_, over, modify, lens
 from .maybe import Maybe, Just, Nothing, fromMaybe
 from .monad import Kleisli, Monad, ap, comp, composeKleisli, wal
 from .monoid import Monoid

@@ -2,7 +2,7 @@
 Code to define lenses for accessing and modifying monadic state.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Callable, TypeVar
 
 from .run import Run, get, put
@@ -46,3 +46,12 @@ def modify(f: Callable[[S], S]) -> "Run[None]":
     Modify state as a whole using a function
     """
     return get() >> (lambda s: put(f(s)))
+
+def lens(field_name: str) -> Lens:
+    """
+    Create a lens for accessing a specific field in AppState.
+    """
+    return Lens(
+        get=lambda s: getattr(s, field_name),
+        set=lambda s, v: replace(s, **{field_name: v})
+    )
