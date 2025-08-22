@@ -12,8 +12,11 @@ from typing import Any, Callable, Dict, TypeVar
 from .dispatch import GetLine, PutLine
 from .either import Either, Left, Right
 from .functor import Functor
+from .monad import ap
+
 A = TypeVar("A")
 B = TypeVar("B")
+C = TypeVar("C")
 E = TypeVar("E")
 
 
@@ -86,11 +89,32 @@ class Run[A](Functor[A]):
         """
         return self._bind(f)
 
+    def __mul__(self: "Run[Callable[[B], C]]", other: "Run[B]") -> "Run[C]":
+        """
+        Enables using the * operator for applying a function
+        in the Run to a value in the Run.
+        """
+        return self._apply(other)
+
+    def __xor__(self, other: "Run[B]") -> "Run[B]":
+        """
+        Enables using the ^ operator for applying a function
+        in the Run to a value in the Run.
+        """
+        return self.apply_second(other)
+
     def map(self, f: Callable[[A], B]) -> "Run[B]":
         """
         Functor map: transforms the result of the computation using function f.
         """
         return Run(lambda self_run: f(self._step(self_run)), self._perform)  # pylint: disable=no-member
+
+    def _apply(self: "Run[Callable[[B], C]]", other: "Run[B]") -> "Run[C]":
+        """
+        Applies a function in the context of the
+        Run monad to a value in the context.
+        """
+        return ap(self, other, Run)
 
     def _bind(self, f: Callable[[A], "Run[B]"]) -> "Run[B]":
         """
@@ -99,6 +123,13 @@ class Run[A](Functor[A]):
         """
         return Run(lambda self_run: f(self._step(self_run))._step(self_run),
                    self._perform)
+
+    def apply_second(self, other: "Run[B]") -> "Run[B]":
+        """
+        Applies the second Run to the first Run,
+        discarding the result of the first Run.
+        """
+        return self >> (lambda _: other)
 
 def _unhandled(intent: Any, *_: Any) -> Any:
     raise RuntimeError(f"Unhandled intent: {type(intent).__name__}")

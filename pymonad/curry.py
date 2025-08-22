@@ -1,3 +1,6 @@
+"""
+Curry utilities for transforming functions.
+"""
 from functools import wraps
 from typing import Callable, Type, TypeVar, get_type_hints
 
@@ -19,7 +22,7 @@ def curry3(f):
     """Curry a ternary function into three unary functions."""
     return lambda a: lambda b: lambda c: f(a, b, c)
 
-def curryN(f):
+def curry_n(f):
     """Curry any function f of N arguments into a chain of unary functions."""
     @wraps(f)
     def curried(*args):

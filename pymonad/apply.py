@@ -1,18 +1,17 @@
 """This module provides the Apply abstract type class."""
-from abc import ABC, abstractmethod
-from typing import Callable, TypeVar, overload
+# from typing import Callable, TypeVar
 
-from .maybe import Just, Nothing
-from .either import Left, Right
-from .semigroup import Semigroup
-from .string import String
-from .tuple import Tuple
-A = TypeVar('A')
-B = TypeVar('B')
-C = TypeVar('C')
-L = TypeVar('L')
-R = TypeVar('R')
-S = TypeVar('S', bound=Semigroup)
+# from .maybe import Just, Nothing
+# from .either import Left, Right
+# from .semigroup import Semigroup
+# from .string import String
+# from .tuple import Tuple
+# A = TypeVar('A')
+# B = TypeVar('B')
+# C = TypeVar('C')
+# L = TypeVar('L')
+# R = TypeVar('R')
+# S = TypeVar('S', bound=Semigroup)
 
 # class ApplyL(Functor[A], Protocol[S, A]):
 #     """
@@ -57,40 +56,40 @@ S = TypeVar('S', bound=Semigroup)
 # def apply(f: Apply[F, Callable[[A], B]], a: Apply[F, A]) -> Apply[F, B]: ...
 
 
-def apply(f, other):
-    return f * other
+# def apply(f, other):
+#     return f * other
 
-j1 = Just(2)
-f: Callable[[int], int] = lambda x: x + 1
+# j1 = Just(2)
+# f: Callable[[int], int] = lambda x: x + 1
 
-j2 = Just(f)
-n = Nothing
-j3 = j2 * j1
-jn = j2 * n
-e2 = Right(f)
-e1 = Right(2)
+# j2 = Just(f)
+# n = Nothing
+# j3 = j2 * j1
+# jn = j2 * n
+# e2 = Right(f)
+# e1 = Right(2)
 
-e3 = e2 * e1
-el = Left("error")
-e4 = e2 * el
-e5 = el * e1
-e6 = el * e2
-e7 = apply(e2, e1)
-e8 = apply(el, e1)
+# e3 = e2 * e1
+# el = Left("error")
+# e4 = e2 * el
+# e5 = el * e1
+# e6 = el * e2
+# e7 = apply(e2, e1)
+# e8 = apply(el, e1)
 
-t1 = Tuple(String("asd"), 2)
-t2 = Tuple(String("qwe"), f)
+# t1 = Tuple(String("asd"), 2)
+# t2 = Tuple(String("qwe"), f)
 
-t3 = t2 * t1
-t4 = apply(t2, t1)
+# t3 = t2 * t1
+# t4 = apply(t2, t1)
 
-t5 = f & t1
-t6 = Tuple(String("xyz"), 4)
+# t5 = f & t1
+# t6 = Tuple(String("xyz"), 4)
 
 
-at1 = Tuple(String("abc"), 2)
-at2 = Tuple(String("xyz"), f)
-at3 = at2 * at1
+# at1 = Tuple(String("abc"), 2)
+# at2 = Tuple(String("xyz"), f)
+# at3 = at2 * at1
 
 
 

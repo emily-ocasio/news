@@ -3,22 +3,25 @@ Main entry point for the application
 Monadic version
 """
 from pymonad import Run, run_reader, run_state, run_base_effect, run_except, \
-    REAL_DISPATCH, put_line, get_line, set_, view
+    REAL_DISPATCH, put_line, view
 
 from appstate import AppState, user_name
+from get_username import get_username
 
 def main_menu() -> Run[None]:
     """
     Display the main menu.
     """
     return \
+        get_username() ^ \
+        view(user_name) >> (lambda user2: \
         put_line("" \
-            "Welcome to the Homicide Article Analysis System") >> (lambda _: \
-        get_line("Please enter your name") >> (lambda name: \
-        set_(user_name, name) >> (lambda _: \
-        view(user_name) >> (lambda user: \
-        put_line(f"Hello, {user}! Let's get started.")
-        ))))
+            "Welcome to the Homicide Article Analysis System") ^ \
+        get_username() ^ \
+        view(user_name)>> (lambda user: \
+        put_line(f"Hello, {user}! Let's get started. {user2}.")
+        ))
+
 def main():
     """
     Main program that binds the intents and runs the Run monads.
