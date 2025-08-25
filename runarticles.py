@@ -13,14 +13,12 @@ def main_menu() -> Run[None]:
     Display the main menu.
     """
     return \
-        get_username() ^ \
-        view(user_name) >> (lambda user2: \
         put_line("" \
             "Welcome to the Homicide Article Analysis System") ^ \
         get_username() ^ \
         view(user_name)>> (lambda user: \
-        put_line(f"Hello, {user}! Let's get started. {user2}.")
-        ))
+        put_line(f"Hello, {user}! Let's get started. ")
+        )
 
 def main():
     """

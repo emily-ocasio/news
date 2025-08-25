@@ -1,7 +1,8 @@
 """ Implements purescript-like Array type in Python."""
+# pylint: disable=W0212
 from dataclasses import dataclass
 from functools import reduce
-from typing import Callable, Self, TypeVar, Type
+from typing import Callable, TypeVar, Type
 
 from .applicative import Applicative
 from .curry import curry2
@@ -15,6 +16,9 @@ F = TypeVar('F', bound=Applicative)
 
 @dataclass(frozen=True)
 class Array[A](Functor[A], Monoid):
+    """
+    Represents an immutable array.
+    """
     a: tuple[A, ...]
 
     def __iter__(self):
@@ -28,8 +32,14 @@ class Array[A](Functor[A], Monoid):
         """
         return self.alt(other)
 
+    def __len__(self):
+        return len(self.a)
+
+    def __getitem__(self, index: int) -> A:
+        return self.a[index]
+
     def append(self: "Array[A]", other: "Array[A]") -> "Array[A]":
-        return Array(self.a + other.a) 
+        return Array(self.a + other.a)
 
     def alt(self: "Array[A]", other: "Array[A]") -> "Array[A]":
         """
@@ -57,7 +67,7 @@ class Array[A](Functor[A], Monoid):
     def mempty(cls) -> "Array":
         """Returns an empty Array."""
         return Array(())
-    
+
     @classmethod
     def empty(cls) -> "Array":
         """Implementation of Plus typeclass for Array."""
@@ -70,7 +80,8 @@ class Array[A](Functor[A], Monoid):
     def map(self, f: Callable[[A], B]) -> 'Array[B]':
         return Array(tuple(map(f, self.a)))
 
-    def __mul__(self: "Array[Callable[[B], C]]", other: "Array[B]") -> 'Array[C]':
+    def __mul__(self: "Array[Callable[[B], C]]", other: "Array[B]") \
+        -> 'Array[C]':
         """Overrides the * operator for use as apply."""
         return self._apply(other)
 
@@ -78,7 +89,8 @@ class Array[A](Functor[A], Monoid):
         """Concatenates an array of arrays into a single array."""
         return sum(self, Array.mempty())
 
-    def _apply(self: "Array[Callable[[B], C]]", other: "Array[B]") -> 'Array[C]':
+    def _apply(self: "Array[Callable[[B], C]]", other: "Array[B]") \
+        -> 'Array[C]':
         """
         Applies a function wrapped in the Array to a value wrapped in Array.
         Creates a new Array which is a cartesian product of the arrays
@@ -126,25 +138,33 @@ class Array[A](Functor[A], Monoid):
         """
         return reduce(lambda x, y: x.append(f(y)), self.a, m_cls.mempty())
 
-    def traverse(self, f: Callable[[A], Applicative[B]]) -> Applicative["Array[B]"]:
+    def traverse(self, f: Callable[[A], Applicative[B]]) \
+        -> Applicative["Array[B]"]:
         """
-        Traverses the Array, applying an applicative context function to each element.
+        Traverses the Array, applying an applicative context 
+        function to each element.
         Returns the combined result as an Array within the applicative context.
         """
         if not self.a:
             raise ValueError("Cannot traverse an empty Array.")
 
         # Start with the rightmost element
+        # lifts an Applicative [B] into an Array of 1
         pure: "Callable[[B], Array[B]]" = \
-            lambda b: self.__class__.cons(b, self.__class__.mempty()) # lifts an Applicative [B] into an Array of 1
-        acc0 = f(self.a[-1]).map(pure)  # Applicative[Array[B]] with only the last element
+            lambda b: self.__class__.cons(b, self.__class__.mempty())
+        # Applicative[Array[B]] with only the last element
+        acc0 = f(self.a[-1]).map(pure)
 
         # Array of all the elements except the last
         rest = self.make(self.a[:-1])
 
         def fn(x: A, acc: Applicative["Array[B]"]) -> Applicative["Array[B]"]:
-            # Given the next element x, we want to apply f and lift it into the applicative context
-            cons = curry2(self.__class__.cons) # curries function to add an element to the Array
+            """
+            Given the next element x, we want to apply f and 
+            lift it into the applicative context
+            """
+            # curries function to add an element to the Array
+            cons = curry2(self.__class__.cons)
             return (cons & f(x)) * acc
         return rest.foldr(fn, acc0)
 

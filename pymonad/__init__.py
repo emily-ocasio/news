@@ -13,5 +13,5 @@ from .monoid import Monoid
 from .run import Run, pure, ask, get, put, throw, rethrow, \
     run_state, run_except, run_base_effect, run_reader, put_line, get_line
 from .semigroup import Semigroup
-from .string import Char, String, fromCharArray, fromString
+from .string import Char, String, from_char_array, from_string
 from .tuple import Tuple, Threeple
