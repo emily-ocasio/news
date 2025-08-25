@@ -1,8 +1,10 @@
-from abc import ABC, abstractmethod
+"""
+Implementation of Either monad
+"""
 from dataclasses import dataclass
 from typing import Any, TypeVar, Callable, overload
 
-from .functor import Functor, map
+from .functor import Functor, map # pylint:disable=redefined-builtin
 from .monad import ap
 
 L = TypeVar("L")
@@ -10,39 +12,13 @@ R = TypeVar("R")
 S = TypeVar("S")
 T = TypeVar("T")
 
-type Either[L,R] = Left[L] | Right[R]
-
-# class _Either[R](Apply['_Either', R], Functor[R]):
-#     pass
-# @dataclass(frozen=True)
-# class _Either[L,R](Applicative['Either', R], Apply[R], Functor[R], Bind['Either', R], ABC):
-
-#     def __rand__(self, other: Callable[[R], S]) -> 'Either[L, S]':
-#         return map(other, self)
-
-#     def __mul__(self: "_Either[L, Callable[[S], T]]", other: "_Either[L, S]") -> 'Either[L, T]':
-#         return apply(self, other)
-
-#     @abstractmethod
-#     def map(self, f: Callable[[R], S]) -> Either[L, S]:
-#         ...
-
-#     @abstractmethod
-#     def apply(self: Apply[Callable[[S], T]], other: Apply[S]) -> Apply[T]: 
-#         ...
-
-#     @abstractmethod
-#     def bind(self, m: Callable[[R], "Bind['Either', S]"]) -> Bind['Either', S]:
-#         """Chains computations by passing the value inside Either to function m."""
-
-#     @classmethod
-#     def pure(cls, t: Type, value: R) -> Applicative['Either', R]:
-#         """Wraps a value in the Right context."""
-#         return Right.make(value)
-
+type Either[L,R] = "Left[L]" | "Right[R]"
 
 @dataclass(frozen=True)
 class Left[L](Functor):
+    """
+    Represents a left value in an Either type.
+    """
     l: L
 
     @classmethod
@@ -57,13 +33,13 @@ class Left[L](Functor):
     def map(self, f: Callable[[R], S]) -> 'Left[L]':
         return self.make(self.l)
 
-    def _apply(self, other) -> "Left[L]":
+    def _apply(self, other) -> "Left[L]":  # pylint: disable=unused-argument
         return self
-    
+
     def __rshift__(self, m: Callable[[R], Either[L, S]]) -> "Left[L]":
         return self
 
-    def _bind(self, m: Callable[[R], Either[L, S]]) -> "Left[L]":
+    def _bind(self, m: Callable[[R], Either[L, S]]) -> "Left[L]":  # pylint: disable=unused-argument
         return self
 
     def __rand__(self, other: Callable[[R], S]) -> 'Left[L]':
@@ -72,21 +48,26 @@ class Left[L](Functor):
     def __repr__(self):
         """String representation of the Left."""
         return f"Left({self.l})"
-    
+
     def __eq__(self, other) -> bool:
         """Equality check for Left."""
         return isinstance(other, Left) and self.l == other.l
 
 @dataclass(frozen=True)
 class Right[R](Functor[R]):
+    """
+    Represents a right value in an Either type.
+    """
     r: R
 
     @overload
     def __mul__(self: "Right[Callable[[S], T]]", other: Left[L]) -> Left[L]: ...
     @overload
-    def __mul__(self: "Right[Callable[[S], T]]", other: "Right[S]") -> "Right[T]": ...
+    def __mul__(self: "Right[Callable[[S], T]]", other: "Right[S]")\
+        -> "Right[T]": ...
 
-    def __mul__(self: "Right[Callable[[S], T]]", other: Either[L, S]) -> Either[L, T]:
+    def __mul__(self: "Right[Callable[[S], T]]", other: Either[L, S])\
+        -> Either[L, T]:
         """Overrides the * operator for use as apply."""
         return self._apply(other)
 
@@ -98,7 +79,8 @@ class Right[R](Functor[R]):
     def map(self, f: Callable[[R], S]) -> 'Right[S]':
         return self.make(f(self.r))
 
-    def _apply(self: "Right[Callable[[S], T]]", other: Either[L, S]) -> Either[L, T]:
+    def _apply(self: "Right[Callable[[S], T]]", other: Either[L, S])\
+        -> Either[L, T]:
         """Applies the function wrapped in Right to another Either value."""
         return ap(self, other, Right)
         # match other:
@@ -108,7 +90,9 @@ class Right[R](Functor[R]):
         #         return other
 
     def __rshift__(self, m: Callable[[R], Either[L, S]]) -> Either[L, S]:
-        """Chains computations by passing the value inside Right to function m."""
+        """
+        Chains computations by passing the value inside Right to function m.
+        """
         return self._bind(m)
 
 
@@ -117,6 +101,9 @@ class Right[R](Functor[R]):
 
     @classmethod
     def pure(cls, value: R) -> 'Right[R]':
+        """
+        Wraps a value in the Right context.
+        """
         return cls(value)
 
     def __rand__(self, other: Callable[[R], S]) -> 'Right[S]':
@@ -125,7 +112,7 @@ class Right[R](Functor[R]):
     def __repr__(self):
         """String representation of the Right."""
         return f"Right({self.r})"
-    
+
     def __eq__(self, other) -> bool:
         """Equality check for Right."""
         return isinstance(other, Right) and self.r == other.r

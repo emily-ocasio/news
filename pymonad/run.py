@@ -6,9 +6,11 @@
 # pylint: disable=W0212
 # pylint: disable=E1101
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, TypeVar
+from typing import Any, Dict, TypeVar
 
+from .array import Array
 from .dispatch import GetLine, PutLine
 from .either import Either, Left, Right
 from .functor import Functor
@@ -263,3 +265,44 @@ def run_base_effect(dispatch: Dict[type, Callable[[Any], Any]],
         return fn(intent)
     seeded = Run(prog._step, perform_base)
     return seeded._step(seeded)
+
+
+S = TypeVar("S")   # stop marker
+
+def foldm_either_loop_bind(
+    items: Array[A],
+    init: B,
+    step: Callable[[B, A], "Run[Either[S, B]]"],   # (acc, a) -> Run[Either S B]
+) -> "Run[Either[S, B]]":
+    """
+    Loop-based, short-circuiting foldM:
+      - Each iteration uses Run.bind to build the next step.
+      - Immediately _step() to force effects and observe Either.
+      - Break on Left; otherwise continue with Right acc'.
+    No long bind chain is kept in memory.
+    """
+    def run(self_run: "Run[object]") -> "Either[S, B]":
+
+
+        # Start as Right(init) inside Run
+        acc_r: "Run[Either[S, B]]" = pure(Right(init))
+        for a in items:
+            def iteration(acc: Either[S, B], a=a) -> "Run[Either[S, B]]":
+                if isinstance(acc, Left):
+                    return pure(acc)
+                return step(acc.r, a)
+            # One monadic link: acc_r >>= \e -> case e of
+            # Left s -> pure(Left s) ; Right acc -> step acc a
+            acc_r = acc_r._bind(iteration)
+            # Force now, so we can short-circuit via host break
+            res = acc_r._step(self_run)
+            if isinstance(res, Left):
+                return res              # hard short-circuit: no more steps run
+            # res = Right(acc') ; reset acc_r to a pure Right for the next link
+            acc_r = pure(res)
+
+        # Finished all items; force the final Right acc once
+        return acc_r._step(self_run)
+
+    # Pass-through performer
+    return Run(run, lambda intent, current: current._perform(intent, current))
