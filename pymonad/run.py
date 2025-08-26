@@ -8,13 +8,14 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Dict, TypeVar
+from typing import cast, Any, TypeVar, NewType, TypedDict
 
 from .array import Array
-from .dispatch import GetLine, PutLine
+from .dispatch import GetLine, PutLine, Prompt
 from .either import Either, Left, Right
 from .functor import Functor
 from .monad import ap
+from .string import String
 
 A = TypeVar("A")
 B = TypeVar("B")
@@ -145,8 +146,27 @@ def pure(x: A) -> Run[A]:
 
 # ===== Smart constructors =====
 
+class EnvKey(String):
+    """
+    Represents a key in the environment.
+    """
+class Namespace(EnvKey):
+    """
+    Represents a namespace in the environment.
+    """
+PromptKey = NewType('PromptKey', EnvKey)
+type Prompts = dict[PromptKey, Prompt]
 
-def ask() -> Run[dict]:
+class Environment(TypedDict):
+    """
+    Represents the environment data provided by the reader
+    """
+    prompt_ns: Namespace
+    prompts_by_ns: dict[Namespace, Prompts]
+    db_path: str
+    extras: dict[EnvKey, Any]
+
+def ask() -> Run[Environment]:
     """Create a Run action to request the environment (Reader effect)."""
     return Run(lambda self: self._perform(Ask(), self), _unhandled)
 
@@ -176,14 +196,13 @@ def put_line(s: str) -> Run[None]:
     return Run(lambda self: self._perform(PutLine(s), self), _unhandled)
 
 
-def get_line(prompt: str) -> Run[str]:
+def get_line(prompt: Prompt) -> Run[String]:
     """Create a Run action to input a line with a prompt (base effect)."""
     return Run(lambda self: self._perform(GetLine(prompt), self), _unhandled)
 
 # ===== Eliminators =====
 
-
-def run_reader(env: dict, prog: Run[A]) -> Run[A]:
+def run_reader(env: Environment, prog: Run[A]) -> Run[A]:
     """
     Interprets Reader intents by providing the environment to computations.
     """
@@ -198,6 +217,12 @@ def run_reader(env: dict, prog: Run[A]) -> Run[A]:
         return inner._step(inner)
     return Run(step, lambda i, c: c._perform(i, c))
 
+def local(modify: Callable[[Environment], Environment], prog: "Run[A]")\
+    -> "Run[A]":
+    """
+    Run sub program with a modified reader environment.
+    """
+    return ask()._bind(lambda env: run_reader(modify(env), prog))
 
 def run_state(initial: Any, prog: Run[A]) -> Run[tuple[Any, A]]:
     """
@@ -252,7 +277,7 @@ def run_except(prog: Run[A]) -> Run[Either]:
     return Run(step, lambda i, c: c._perform(i, c))
 
 
-def run_base_effect(dispatch: Dict[type, Callable[[Any], Any]],
+def run_base_effect(dispatch: dict[type, Callable[[Any], Any]],
                     prog: Run[A]) -> A:
     """
     Executes the base effects by dispatching intents
@@ -306,3 +331,44 @@ def foldm_either_loop_bind(
 
     # Pass-through performer
     return Run(run, lambda intent, current: current._perform(intent, current))
+
+
+def with_namespace(
+    ns: Namespace,
+    subprog: "Run[A]",
+    *,
+    prompts: dict[PromptKey, Prompt] | None = None
+) -> "Run[A]":
+    """
+    Run subprog with a with specific input_prompts injected into the environment
+    prompts_ns will determine the new Namespace
+    """
+    def mod(env: Environment) -> Environment:
+        pb = env.get("prompts_by_ns", {})
+        return {
+            **env,
+            "prompt_ns": ns,
+            "prompts_by_ns": {
+                **pb,
+                ns: {**pb.get(ns, {}), **(prompts or {})},
+            },
+        }
+
+    return local(mod, subprog)
+
+def input_with_prompt(key_or_literal: PromptKey | Prompt,
+                      *,
+                      fallback_global: bool = True) -> "Run[String]":
+    """
+    Look up prompt in the current namespace only (strict).
+    If fallback_global=True, try global "" before using the literal.
+    """
+    def resolve(env: Environment) -> Prompt:
+        ns = env.get("prompt_ns", Namespace(""))
+        tables = env.get("prompts_by_ns", {})
+        if key_or_literal in tables.get(ns, {}):
+            return tables[ns][cast(PromptKey, key_or_literal)]
+        if fallback_global and key_or_literal in tables.get(Namespace(""), {}):
+            return tables[Namespace("")][cast(PromptKey, key_or_literal)]
+        return Prompt(key_or_literal)  # literal fallback
+    return ask()._bind(lambda env: get_line(resolve(env)))

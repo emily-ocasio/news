@@ -40,6 +40,9 @@ class String(str, Monoid):
     def __eq__(self, other) -> bool:
         return str.__eq__(self, other) if isinstance(other, String) else False
 
+    def __hash__(self):
+        return str.__hash__(self)
+
     def append(self: Self, other: Self) -> Self:
         return type(self)(str.__add__(self, other))
 

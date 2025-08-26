@@ -3,7 +3,7 @@ Main entry point for the application
 Monadic version
 """
 from pymonad import Run, run_reader, run_state, run_base_effect, run_except, \
-    run_sqlite, \
+    run_sqlite, Environment, Namespace,\
     REAL_DISPATCH, put_line, view, Left, Either
 
 from appstate import AppState, user_name
@@ -21,44 +21,54 @@ def main_menu() -> Run[None]:
         put_line(f"Hello, {user}! Let's get started. ")
         )
 
-def main():
+def main() -> None:
     """
     Main program that binds the intents and runs the Run monads.
     """
-    env = {}
+    env: Environment = {
+        "db_path": "newarticles.db",
+        "prompt_ns": Namespace(""),
+        "prompts_by_ns": {},
+        "extras": {}
+    }
     prog = run_reader(env, run_state(AppState(), run_except(main_menu())))
     run_base_effect(REAL_DISPATCH, prog)
 
-# assume: Run, run_reader, run_state, run_except, run_sqlite, run_openai, run_base_effect
+# assume: Run, run_reader, run_state, run_except, run_sqlite,
+# run_openai, run_base_effect
 # and your AppState dataclass plus intents (console/db/openai)
 
-def build_tick(env: dict, state0: "AppState") -> "Run[tuple['AppState', str | None]]":
+def build_tick(env: Environment, state0: "AppState")\
+    -> "Run[tuple['AppState', str | None]]":
     """
     Returns Run[(new_state, next_action)]
     next_action: "quit" | None  (None means keep showing main menu)
     """
     tick = main_menu()  # Run[NextAction] inside your controller layer
 
-    # Choose semantics: preserve state even on error (so you can inspect what happened)
+    # Choose semantics: preserve state even on error
+    # (so you can inspect what happened)
     wrapped = run_reader(env,
               run_sqlite(env["db_path"],
               #run_openai(env["openai_client"],
               run_except(
-                  run_state(state0, tick)   # => Run[Either e (AppState, NextAction)]
+                  run_state(state0, tick) # Run[Either e (AppState, NextAction)]
               )))
 
-    # Map Either to always produce (AppState, action), deciding what to do on errors
+    # Map Either to always produce (AppState, action),
+    # deciding what to do on errors
     def normalize(ei: Either):
         if isinstance(ei, Left):
-            # decide policy: keep prior state or use a safe recovery; here we keep prior
-            return (state0, None)          # show an error in UI elsewhere if you like
+            # decide policy: keep prior state or use a safe recovery;
+            # here we keep prior
+            return (state0, None)    # show an error in UI elsewhere if you like
         # Right((new_state, action))
         ns, action = ei.r
         return (ns, action)
 
     return wrapped.map(normalize)
 
-def main_trampoline(env: dict, state0: "AppState") -> None:
+def main_trampoline(env: Environment, state0: "AppState") -> None:
     """"
     Main loop for the application.
     """
