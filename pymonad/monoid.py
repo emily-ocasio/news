@@ -28,6 +28,7 @@ Example:
 """
 
 from typing import (
+    runtime_checkable,
     Iterable,
     Protocol,
     Self,
@@ -35,6 +36,7 @@ from typing import (
 
 from .semigroup import Semigroup
 
+@runtime_checkable
 class Monoid(Semigroup, Protocol):
     """Base class for Monoid instances.
 

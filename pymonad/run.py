@@ -8,19 +8,22 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import cast, Any, TypeVar, NewType, TypedDict
+from typing import cast, Any, TypeVar, TypedDict
 
 from .array import Array
 from .dispatch import GetLine, PutLine, Prompt
 from .either import Either, Left, Right
 from .functor import Functor
 from .monad import ap
+from .monoid import Monoid
 from .string import String
+from .tuple import Tuple
 
 A = TypeVar("A")
 B = TypeVar("B")
 C = TypeVar("C")
 E = TypeVar("E")
+M = TypeVar("M", bound=Monoid)
 
 
 # ===== Intents (data-only) =====
@@ -154,7 +157,10 @@ class Namespace(EnvKey):
     """
     Represents a namespace in the environment.
     """
-PromptKey = NewType('PromptKey', EnvKey)
+class PromptKey(EnvKey):
+    """
+    Represents a key for prompts in the environment.
+    """
 type Prompts = dict[PromptKey, Prompt]
 
 class Environment(TypedDict):
@@ -222,15 +228,18 @@ def local(modify: Callable[[Environment], Environment], prog: "Run[A]")\
     """
     Run sub program with a modified reader environment.
     """
-    return ask()._bind(lambda env: run_reader(modify(env), prog))
+    return \
+        ask() >> (lambda env:
+        run_reader(modify(env), prog)
+        )
 
-def run_state(initial: Any, prog: Run[A]) -> Run[tuple[Any, A]]:
+def run_state(initial: M, prog: Run[A]) -> Run[Tuple[M, A]]:
     """
     Interprets State intents by managing and updating the state
         throughout the computation.
     Returns a Run containing a tuple of the final state and the result.
     """
-    def step(self_run: Run[Any]) -> tuple[Any, A]:
+    def step(self_run: Run[Any]) -> Tuple[M, A]:
         parent = self_run._perform
         box = {"s": initial}
 
@@ -245,7 +254,7 @@ def run_state(initial: Any, prog: Run[A]) -> Run[tuple[Any, A]]:
                     return parent(intent, current)
         inner = Run(prog._step, perform)
         v = inner._step(inner)
-        return (box["s"], v)
+        return Tuple(box["s"], v)
     return Run(step, lambda i, c: c._perform(i, c))
 
 
