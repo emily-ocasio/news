@@ -187,7 +187,7 @@ def is_in_dc(gpe):
 def unified_prompt(prompts: tuple[str, ...],
                    add_quit: bool = True,
                    allow_return: bool = False,
-                   width: int = 150) -> tuple[str, tuple]:
+                   width: int = 150) -> tuple[str, tuple[str]]:
     """
     Creates a single prompt including individual choices,
         also adds an option to quit

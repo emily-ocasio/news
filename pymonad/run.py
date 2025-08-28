@@ -25,6 +25,8 @@ C = TypeVar("C")
 E = TypeVar("E")
 M = TypeVar("M", bound=Monoid)
 
+class ErrorPayload(String):
+    """Application-specific error messages payload"""
 
 # ===== Intents (data-only) =====
 @dataclass(frozen=True)
@@ -46,13 +48,12 @@ class Put:
 @dataclass(frozen=True)
 class Throw:
     """Except.throw intent (payload is user data)."""
-    e: Any
-
+    e: ErrorPayload
 
 @dataclass(frozen=True)
 class Rethrow:
     """Lift pure Either into Except."""
-    res: Either
+    res: Either[ErrorPayload, Any]
 
 
 # Private control-flow sentinel for non-local exit of Throw/Rethrow(Left)
@@ -61,8 +62,8 @@ class Rethrow:
 class _Thrown(Exception):
     __slots__ = ("payload",)
 
-    def __init__(self, payload: Any):
-        self.payload = payload
+    def __init__(self, payload: ErrorPayload):
+        self.payload: ErrorPayload = payload
 
 # ===== Run carrier =====
 
@@ -258,7 +259,7 @@ def run_state(initial: M, prog: Run[A]) -> Run[Tuple[M, A]]:
     return Run(step, lambda i, c: c._perform(i, c))
 
 
-def run_except(prog: Run[A]) -> Run[Either]:
+def run_except(prog: Run[A]) -> Run[Either[ErrorPayload, A]]:
     """
     Interpret Throw/Rethrow into Either:
       - Throw(e), Rethrow(Left e) → Left(e)
@@ -267,7 +268,7 @@ def run_except(prog: Run[A]) -> Run[Either]:
         Left(ex) here (by design).
     """
 
-    def step(self_run: Run[Any]) -> Either:
+    def step(self_run: Run[Any]) -> Either[ErrorPayload, A]:
         parent = self_run._perform
 
         def perform(intent, current):
@@ -282,7 +283,7 @@ def run_except(prog: Run[A]) -> Run[Either]:
         except _Thrown as te:
             return Left(te.payload)
         except Exception as ex: # pylint: disable=broad-except
-            return Left(ex)
+            return Left(ErrorPayload(f"Unhandled exception: {ex}"))
     return Run(step, lambda i, c: c._perform(i, c))
 
 

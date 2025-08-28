@@ -117,6 +117,12 @@ class Array[A](Functor[A], Monoid):
         """String representation of the Array."""
         return f"[{', '.join(map(repr, self.a))}]"
 
+    def __contains__(self, item: A) -> bool:
+        """
+        Membership test: allows "item in my_array".
+        """
+        return item in self.a
+
     def foldl(self, f: Callable[[B, A], B], acc: B) -> B:
         """
         Left fold over the Array.

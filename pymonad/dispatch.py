@@ -45,4 +45,4 @@ def _getline(x: GetLine) -> String:
     """
     Get a line of input from the user
     """
-    return String(input(x.prompt + " > "))
+    return String(input(x.prompt if x.prompt[-1] == ' ' else x.prompt + ' '))

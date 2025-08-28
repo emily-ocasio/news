@@ -13,7 +13,7 @@ from .monoid import Monoid
 from .run import Run, pure, ask, get, put, throw, rethrow, \
     run_state, run_except, run_base_effect, run_reader, put_line, get_line, \
     PromptKey, EnvKey, Environment, local, Namespace, Prompts, with_namespace, \
-    input_with_prompt
+    input_with_prompt, ErrorPayload
 from .runsql import run_sqlite
 from .semigroup import Semigroup
 from .string import Char, String, from_char_array, from_string

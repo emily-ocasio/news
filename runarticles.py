@@ -2,19 +2,15 @@
 Main entry point for the application
 Monadic version
 """
+import sys
+
 from pymonad import Run, run_reader, run_state, run_base_effect, run_except, \
-    run_sqlite, Environment, Namespace, put_line, \
-    REAL_DISPATCH, Left, Either, Tuple
+    run_sqlite, Environment, Namespace, ErrorPayload, \
+    REAL_DISPATCH, Left, Right, Either, Tuple, put_line, pure
 
 from runinitial import initialize_program
 from appstate import AppState
-
-def main_menu() -> Run[None]:
-    """
-    Pre-trampoline program initialization
-    """
-    return \
-        put_line("Good bye!")
+from mainmenu import main_menu_tick, AfterTick, NextStep
 
 def main() -> None:
     """
@@ -36,15 +32,13 @@ def main() -> None:
 # run_openai, run_base_effect
 # and your AppState dataclass plus intents (console/db/openai)
 
-type TickResult = Tuple[AppState, str | None]
-
 def build_tick(env: Environment, state0: AppState)\
-    -> "Run[TickResult]":
+    -> Run[AfterTick]:
     """
-    Returns Run[(new_state, next_action)]
-    next_action: "quit" | None  (None means keep showing main menu)
+    Returns Run[MainResult]
+    MainResult is Tuple[AppState, MainChoice]
     """
-    tick = main_menu()  # Run[NextAction] inside your controller layer
+    tick = main_menu_tick()  # Run[NextAction] inside your controller layer
 
     # Choose semantics: preserve state even on error
     # (so you can inspect what happened)
@@ -55,31 +49,43 @@ def build_tick(env: Environment, state0: AppState)\
                   run_state(state0, tick) # Run[Either e (AppState, NextAction)]
               )))
 
-    # Map Either to always produce (AppState, action),
+    # Map Either to always produce AfterTick = (AppState, NextStep),
     # deciding what to do on errors
-    def normalize(ei: Either) -> TickResult:
-        if isinstance(ei, Left):
-            # decide policy: keep prior state or use a safe recovery;
-            # here we keep prior
-            return Tuple(state0, None)    # show an error in UI elsewhere if you like
-        # Right((Tuple(new_state, action)))
-        #ns, action = ei.r
-        return Tuple(ei.r.fst, ei.r.snd)
+    # Also runtime "cast" into AfterTick class
+    def normalize(ei: Either[ErrorPayload, Tuple[AppState, NextStep]]) \
+        -> Run[AfterTick]:
+        match ei:
+            case Left(err):
+                # decide policy: keep prior state or use a safe recovery;
+                # here we keep prior after showing error
+                return \
+                    put_line(f"Error occurred: {err}\nTry again...") ^ \
+                    pure(AfterTick.make(state0, NextStep.CONTINUE))
+            case Right(result):
+                return pure(AfterTick.make(result.fst, result.snd))
 
-    return wrapped.map(normalize)
+    return wrapped >> normalize
 
-def main_trampoline(env: Environment, state0: "AppState") -> None:
-    """"
+def main_trampoline(env: Environment, state0: AppState) -> None:
+    """
     Main loop for the application.
     """
     state = state0
     while True:  # trampoline — no recursion, no TCO needed
         tick = build_tick(env, state)
-        action_t = run_base_effect(REAL_DISPATCH, tick)
-        state = action_t.fst                       # <-- persist across ticks
-        if action_t.snd == "quit":
-            break
+        after_tick = run_base_effect(REAL_DISPATCH, tick)
+        state = after_tick.state     # <-- persist across ticks
+        if after_tick.next_step == NextStep.QUIT:
+            exit_program()
         # else: loop back to main menu
+
+def exit_program() -> None:
+    """
+    Clean up resources and exit the program.
+    """
+    print("Exiting program...")
+    # Perform any necessary cleanup here
+    sys.exit()
 
 if __name__ == "__main__":
     main()
