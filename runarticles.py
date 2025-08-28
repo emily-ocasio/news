@@ -10,7 +10,8 @@ from pymonad import Run, run_reader, run_state, run_base_effect, run_except, \
 
 from runinitial import initialize_program
 from appstate import AppState
-from mainmenu import main_menu_tick, AfterTick, NextStep
+from mainmenu import main_menu_tick, AfterTick
+from menuprompts import NextStep
 
 def main() -> None:
     """
@@ -43,7 +44,7 @@ def build_tick(env: Environment, state0: AppState)\
     # Choose semantics: preserve state even on error
     # (so you can inspect what happened)
     wrapped = run_reader(env,
-              run_sqlite(env["db_path"],
+              run_sqlite(env['db_path'],
               #run_openai(env["openai_client"],
               run_except(
                   run_state(state0, tick) # Run[Either e (AppState, NextAction)]

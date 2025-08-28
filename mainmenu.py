@@ -5,7 +5,10 @@ from enum import Enum
 from pymonad import Run, Tuple, pure, put_line
 from appstate import AppState
 from choose import initial_prompts as mainmenu_prompts
-from menuprompts import MenuChoice, MenuPrompts, input_from_menu
+from menuprompts import MenuChoice, MenuPrompts, input_from_menu, NextStep
+
+
+from gpt_filtering import second_filter
 
 class MainChoice(Enum):
     """
@@ -43,13 +46,6 @@ class MainChoice(Enum):
 #         """
 #         return self.snd
 
-class NextStep(Enum):
-    """
-    Trampoline actions to take after the tick
-    """
-    CONTINUE = "continue"
-    QUIT = "quit"
-
 class AfterTick(Tuple[AppState, NextStep]):
     """
     Represents the state and the next step after the tick.
@@ -78,12 +74,13 @@ def dispatch_from_main_menu(choice: MainChoice) \
     Dispatch the 'tock' action based on the main result.
     """
     match choice:
+        case MainChoice.GPT:
+            return second_filter()
         case MainChoice.REVIEW \
             | MainChoice.FIX \
             | MainChoice.NEW \
             | MainChoice.ASSIGN \
             | MainChoice.AUTO \
-            | MainChoice.GPT \
             | MainChoice.HUMANIZE \
             | MainChoice.VICTIM:
             return \

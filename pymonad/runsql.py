@@ -3,18 +3,25 @@ Intent and eliminator for SQL (database) effects.
 """
 #pylint:disable=W0212
 from dataclasses import dataclass
-from typing import NewType, TypeVar
+from typing import TypeVar
 from typing import Any
 
 import sqlite3
 
 from .array import Array
-from .run import Run
+from .run import Run, _unhandled
 from .string import String
 
-SQL = NewType("SQL", String)
+class SQL(String):
+    """
+    Represents a SQL string.
+    """
+
 type SQLParam = String | int
-type SQLParams = Array[SQLParam]
+class SQLParams(Array[SQLParam]):
+    """
+    Represents a list of SQL parameters.
+    """
 
 # --- DB intents ---
 @dataclass(frozen=True)
@@ -23,7 +30,7 @@ class SqlQuery:
     Represents a SQL query with parameters.
     """
     sql: SQL
-    params: SQLParams = Array.mempty()
+    params: SQLParams = SQLParams(())
 
 @dataclass(frozen=True)
 class SqlExec:
@@ -31,7 +38,7 @@ class SqlExec:
     Represents a SQL execution command with parameters.
     """
     sql: SQL
-    params: SQLParams = Array.mempty()
+    params: SQLParams = SQLParams(())
 
 @dataclass(frozen=True)
 class SqlScript:
@@ -46,6 +53,34 @@ class InTransaction:
     Represents a database transaction.
     """
     program: Run[Any]  # sub-program run atomically
+
+def sql_query(sql: SQL, params: SQLParams = SQLParams(())) -> Run[Array]:
+    """
+    Smart constructor for SQL queries with intent.
+    """
+    return Run(lambda self: self._perform(SqlQuery(sql, params), self),
+               _unhandled)
+
+def sql_exec(sql: SQL, params: SQLParams = SQLParams(())) -> Run[None]:
+    """
+    Smart constructor for SQL execution with intent.
+    """
+    return Run(lambda self: self._perform(SqlExec(sql, params), self),
+               _unhandled)
+
+def sql_script(sql: SQL) -> "Run[None]":
+    """
+    Smart constructor for SQL scripts with intent.
+    """
+    return Run(lambda self: self._perform(SqlScript(sql), self), _unhandled)
+
+def in_transaction(prog: "Run[A]") -> "Run[A]":
+    """
+    Smart constructor for database transactions with intent.
+    """
+    return Run(lambda self: self._perform(InTransaction(prog), self),
+               _unhandled)
+
 A = TypeVar("A")
 def run_sqlite(
     db_path: str,

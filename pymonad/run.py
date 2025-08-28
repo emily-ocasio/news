@@ -162,7 +162,14 @@ class PromptKey(EnvKey):
     """
     Represents a key for prompts in the environment.
     """
+
 type Prompts = dict[PromptKey, Prompt]
+
+def to_prompts(prompts: dict[str, str]) -> Prompts:
+    """
+    Converts a dictionary of string prompts to a Prompts object.
+    """
+    return {PromptKey(k): Prompt(v) for k, v in prompts.items()}
 
 class Environment(TypedDict):
     """
@@ -347,7 +354,7 @@ def with_namespace(
     ns: Namespace,
     subprog: "Run[A]",
     *,
-    prompts: dict[PromptKey, Prompt] | None = None
+    prompts: Prompts | None = None
 ) -> "Run[A]":
     """
     Run subprog with a with specific input_prompts injected into the environment
