@@ -19,6 +19,20 @@ class Article:
     def __repr__(self) -> str:
         display, _ = display_article(self.total, self.current, self.row, ())
         return display
+    
+    @property
+    def title(self) -> str:
+        """
+        Returns the title of the article.
+        """
+        return self.row['Title']
+
+    @property
+    def full_text(self) -> str:
+        """
+        Returns the full text of the article.
+        """
+        return self.row['FullText']
 
 def from_row(row: Row, current: int = 0, total: int = 0) -> Article:
     """

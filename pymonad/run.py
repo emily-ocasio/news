@@ -8,11 +8,14 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import cast, Any, TypeVar, TypedDict
+from typing import cast, Any, TypeVar
+
 
 from .array import Array
-from .dispatch import GetLine, PutLine, Prompt
+from .dispatch import GetLine, PutLine, InputPrompt
 from .either import Either, Left, Right
+from .environment import Environment, Namespace, PromptKey, AllPrompts, \
+    all_prompts
 from .functor import Functor
 from .monad import ap
 from .monoid import Monoid
@@ -150,36 +153,6 @@ def pure(x: A) -> Run[A]:
 
 # ===== Smart constructors =====
 
-class EnvKey(String):
-    """
-    Represents a key in the environment.
-    """
-class Namespace(EnvKey):
-    """
-    Represents a namespace in the environment.
-    """
-class PromptKey(EnvKey):
-    """
-    Represents a key for prompts in the environment.
-    """
-
-type Prompts = dict[PromptKey, Prompt]
-
-def to_prompts(prompts: dict[str, str]) -> Prompts:
-    """
-    Converts a dictionary of string prompts to a Prompts object.
-    """
-    return {PromptKey(k): Prompt(v) for k, v in prompts.items()}
-
-class Environment(TypedDict):
-    """
-    Represents the environment data provided by the reader
-    """
-    prompt_ns: Namespace
-    prompts_by_ns: dict[Namespace, Prompts]
-    db_path: str
-    extras: dict[EnvKey, Any]
-
 def ask() -> Run[Environment]:
     """Create a Run action to request the environment (Reader effect)."""
     return Run(lambda self: self._perform(Ask(), self), _unhandled)
@@ -210,7 +183,7 @@ def put_line(s: str) -> Run[None]:
     return Run(lambda self: self._perform(PutLine(s), self), _unhandled)
 
 
-def get_line(prompt: Prompt) -> Run[String]:
+def get_line(prompt: InputPrompt) -> Run[String]:
     """Create a Run action to input a line with a prompt (base effect)."""
     return Run(lambda self: self._perform(GetLine(prompt), self), _unhandled)
 
@@ -325,7 +298,6 @@ def foldm_either_loop_bind(
     """
     def run(self_run: "Run[object]") -> "Either[S, B]":
 
-
         # Start as Right(init) inside Run
         acc_r: "Run[Either[S, B]]" = pure(Right(init))
         for a in items:
@@ -349,43 +321,45 @@ def foldm_either_loop_bind(
     # Pass-through performer
     return Run(run, lambda intent, current: current._perform(intent, current))
 
-
 def with_namespace(
     ns: Namespace,
     subprog: "Run[A]",
     *,
-    prompts: Prompts | None = None
+    prompts: AllPrompts
 ) -> "Run[A]":
     """
-    Run subprog with a with specific input_prompts injected into the environment
+    Run subprog with a with specific prompts injected into the environment
     prompts_ns will determine the new Namespace
     """
     def mod(env: Environment) -> Environment:
-        pb = env.get("prompts_by_ns", {})
-        return {
-            **env,
+        named_prompts = env["prompts_by_ns"]
+        new_prompts_for_ns = all_prompts(env, ns) | prompts
+        new_prompts_by_ns = named_prompts | { ns: new_prompts_for_ns }
+        return cast(Environment, env | {
             "prompt_ns": ns,
-            "prompts_by_ns": {
-                **pb,
-                ns: {**pb.get(ns, {}), **(prompts or {})},
-            },
-        }
+            "prompts_by_ns": new_prompts_by_ns,
+        })
 
     return local(mod, subprog)
 
-def input_with_prompt(key_or_literal: PromptKey | Prompt,
+def input_with_prompt(key_or_literal: PromptKey | InputPrompt,
                       *,
                       fallback_global: bool = True) -> "Run[String]":
     """
     Look up prompt in the current namespace only (strict).
     If fallback_global=True, try global "" before using the literal.
     """
-    def resolve(env: Environment) -> Prompt:
-        ns = env.get("prompt_ns", Namespace(""))
-        tables = env.get("prompts_by_ns", {})
-        if key_or_literal in tables.get(ns, {}):
-            return tables[ns][cast(PromptKey, key_or_literal)]
-        if fallback_global and key_or_literal in tables.get(Namespace(""), {}):
-            return tables[Namespace("")][cast(PromptKey, key_or_literal)]
-        return Prompt(key_or_literal)  # literal fallback
-    return ask()._bind(lambda env: get_line(resolve(env)))
+    def resolve(env: Environment) -> InputPrompt:
+        prompt_key = PromptKey(key_or_literal)
+        literal = InputPrompt(key_or_literal)
+        ns_input_prompts = all_prompts(env)['input_prompts']
+        if fallback_global:
+            global_input_prompts = all_prompts(
+                env, Namespace(""))['input_prompts']
+            return ns_input_prompts.get(prompt_key,
+                    global_input_prompts.get(prompt_key,
+                    literal))
+        return ns_input_prompts.get(prompt_key, literal)
+    return \
+        ask() >> (lambda env:
+        get_line(resolve(env)))

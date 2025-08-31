@@ -18,10 +18,10 @@ class HomicideClass(str, Enum):
     """
     Enum for homicide classification
     """
-    HOMICIDE = "homicide"
     VEHICULAR_HOMICIDE = "vehicular homicide"
     KILLED_BY_LAW_ENFORCEMENT = "killed by law enforcement"
     FICTIONAL_HOMICIDE = "fictional homicide"
+    HOMICIDE = "other homicide"
     NO_HOMICIDE_IN_ARTICLE = "no homicide in article"
 
 

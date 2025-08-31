@@ -3,15 +3,17 @@ Main entry point for the application
 Monadic version
 """
 import sys
+from openai import OpenAI
 
 from pymonad import Run, run_reader, run_state, run_base_effect, run_except, \
-    run_sqlite, Environment, Namespace, ErrorPayload, \
-    REAL_DISPATCH, Left, Right, Either, Tuple, put_line, pure
+    run_sqlite, run_openai, Environment, Namespace, ErrorPayload, \
+    REAL_DISPATCH, Left, Right, Either, Tuple, put_line, pure, GPTModel
 
 from runinitial import initialize_program
 from appstate import AppState
 from mainmenu import main_menu_tick, AfterTick
 from menuprompts import NextStep
+from secr_apis.gpt3_key import GPT_API_KEY
 
 def main() -> None:
     """
@@ -21,6 +23,10 @@ def main() -> None:
         "db_path": "newarticles.db",
         "prompt_ns": Namespace(""),
         "prompts_by_ns": {},
+        "openai_default_model": GPTModel.GPT_5_NANO,
+        "openai_models": {},
+        "openai_client": lambda: OpenAI(api_key=GPT_API_KEY,
+                                        timeout=20.0, max_retries=2),
         "extras": {}
     }
     prog = run_reader(env, run_state(AppState.mempty(), \
@@ -44,11 +50,11 @@ def build_tick(env: Environment, state0: AppState)\
     # Choose semantics: preserve state even on error
     # (so you can inspect what happened)
     wrapped = run_reader(env,
-              run_sqlite(env['db_path'],
-              #run_openai(env["openai_client"],
-              run_except(
-                  run_state(state0, tick) # Run[Either e (AppState, NextAction)]
-              )))
+                run_except(
+                run_sqlite(env['db_path'],
+                run_openai(env["openai_client"],
+                run_state(state0, tick) # Run[Either e (AppState, NextAction)]
+                ))))
 
     # Map Either to always produce AfterTick = (AppState, NextStep),
     # deciding what to do on errors

@@ -6,7 +6,7 @@ from enum import Enum
 from typing import Any
 
 from calculations import unified_prompt
-from pymonad import Array, Prompt, PromptKey, Char, Tuple, Run, get_line, \
+from pymonad import Array, InputPrompt, PromptKey, Char, Tuple, Run, get_line, \
     pure, input_with_prompt
 
 class NextStep(Enum):
@@ -28,11 +28,11 @@ class MenuDispatch(Tuple[MenuChoice, Callable[[Any], Run]]):
 
 type MenuChoices = Array[MenuChoice]
 
-class MenuPrompts(Array[Prompt]):
+class MenuPrompts(Array[InputPrompt]):
     """
     List of prompt options for a single menu
     """
-    _full_prompt: Prompt
+    _full_prompt: InputPrompt
     _choices: MenuChoices
     _allow_return: bool
     _frozen: bool
@@ -41,10 +41,10 @@ class MenuPrompts(Array[Prompt]):
                  add_quit: bool = True,
                  allow_return: bool = False,
                  width: int = 150):
-        super().__init__(tuple(Prompt(p) for p in prompts))
+        super().__init__(tuple(InputPrompt(p) for p in prompts))
         full_prompt, choices = unified_prompt(self.a, width=width,
             add_quit=add_quit, allow_return=allow_return)
-        object.__setattr__(self, "_full_prompt", Prompt(full_prompt))
+        object.__setattr__(self, "_full_prompt", InputPrompt(full_prompt))
         object.__setattr__(self, "_choices",
                 Array(tuple(MenuChoice(choice) for choice in choices)))
         object.__setattr__(self, "_allow_return", allow_return)
@@ -56,7 +56,7 @@ class MenuPrompts(Array[Prompt]):
         object.__setattr__(self, name, value)
 
     @property
-    def full_prompt(self) -> Prompt:
+    def full_prompt(self) -> InputPrompt:
         """
         Get the full prompt text, formatted properly in columns
         """
@@ -84,7 +84,7 @@ def input_from_menu(prompts: MenuPrompts) -> Run[MenuChoice]:
       return that choice. Otherwise, repeat the "Select option > " prompt.
     """
     # Prompt object used for the "Select option" line
-    repeat_prompt = Prompt("> ")
+    repeat_prompt = InputPrompt("> ")
 
     def loop(show_full: bool) -> Run[MenuChoice]:
         # Show the full menu only on the first iteration
@@ -113,7 +113,8 @@ def input_number(key: PromptKey,
     Get a number input from the user within the specified range.
     Repeats until a valid number is entered.
     """
-    def loop(repeat_prompt: PromptKey | Prompt = Prompt('> ')) -> Run[int]:
+    def loop(repeat_prompt: PromptKey | InputPrompt = InputPrompt('> '))\
+        -> Run[int]:
         return \
             input_with_prompt(repeat_prompt) >> (lambda s:
             _process_input(str(s))

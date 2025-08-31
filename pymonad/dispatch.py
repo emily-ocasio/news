@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Callable
 from .string import String
 
-class Prompt(String):
+class InputPrompt(String):
     """
     Represents a prompt for user input.
     """
@@ -19,7 +19,7 @@ class PutLine:
 @dataclass(frozen=True)
 class GetLine:
     """Base I/O: input a line with prompt."""
-    prompt: Prompt
+    prompt: InputPrompt
 
 REAL_DISPATCH: dict[type, Callable] = {}
 

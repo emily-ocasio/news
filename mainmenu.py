@@ -24,28 +24,6 @@ class MainChoice(Enum):
     VICTIM = MenuChoice('V')
     QUIT = MenuChoice('Q')
 
-# class MainResult(Tuple[AppState, MainChoice]):
-#     """
-#     Main menu result
-#     """
-#     @classmethod
-#     def make(cls, fst, snd) -> 'MainResult':
-#         return cls(fst, snd)
-
-#     @property
-#     def state(self) -> AppState:
-#         """
-#         State of the application
-#         """
-#         return self.fst
-
-#     @property
-#     def choice(self) -> MainChoice:
-#         """
-#         User's choice from the main menu
-#         """
-#         return self.snd
-
 class AfterTick(Tuple[AppState, NextStep]):
     """
     Represents the state and the next step after the tick.

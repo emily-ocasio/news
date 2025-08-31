@@ -146,7 +146,8 @@ for keyword in townlist:
 # Define Washington DC-related keywords
 dc_keywords = tuple([
     'washington', 'district', 'DC', 'D.C', 'NW', 'NE', 'SE', 'SW',
-    'northwest', 'northeast', 'southeast', 'southwest', 'capitol hill'
+    'northwest', 'northeast', 'southeast', 'southwest', 'capitol hill',
+    'embassy row', 'this city'
 ])
 dc_regex = re.compile(any_word_regex_string(dc_keywords), re.IGNORECASE)
 
