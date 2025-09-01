@@ -323,9 +323,8 @@ def foldm_either_loop_bind(
 
 def with_namespace(
     ns: Namespace,
-    subprog: "Run[A]",
-    *,
-    prompts: AllPrompts
+    prompts: AllPrompts,
+    subprog: "Run[A]"
 ) -> "Run[A]":
     """
     Run subprog with a with specific prompts injected into the environment

@@ -21,9 +21,9 @@ class HomicideClass(str, Enum):
     VEHICULAR_HOMICIDE = "vehicular homicide"
     KILLED_BY_LAW_ENFORCEMENT = "killed by law enforcement"
     FICTIONAL_HOMICIDE = "fictional homicide"
-    HOMICIDE = "other homicide"
+    MILITARY_KILLINGS = "military killings"
     NO_HOMICIDE_IN_ARTICLE = "no homicide in article"
-
+    OTHER_ACTUAL_HOMICIDE = "other actual homicide"
 
 class LocationClass(Enum):
     """

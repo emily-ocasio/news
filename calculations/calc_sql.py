@@ -609,7 +609,8 @@ def gpt_victims_sql() -> str:
 def articles_to_filter_sql() -> str:
     """
     SQL statement to return articles to filter based on a limit
-    Only considers articles within the dataset called 'CLASSTRAIN'
+    Only considers articles within the dataset called 'CLASS_WP'
+    And that the AutoClass is 'M' (previously filtered as murder by regex)
     """
     return """
         SELECT * FROM articles

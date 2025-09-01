@@ -38,6 +38,7 @@ absolute_roots = (
 conditional_roots = (
     'shot',
     'shooting',
+    'injur',
     'wounded',
     'stabb',
     'kidnap',
@@ -603,7 +604,7 @@ def gpt_homicide_class_code(classification: HomicideClass) -> str:
     This is what is saved in the database
     """
     codes = {
-        HomicideClass.HOMICIDE: 'M',
+        HomicideClass.OTHER_ACTUAL_HOMICIDE: 'M',
         HomicideClass.VEHICULAR_HOMICIDE: 'VM',
         HomicideClass.KILLED_BY_LAW_ENFORCEMENT: 'LEM',
         HomicideClass.FICTIONAL_HOMICIDE: 'FM',

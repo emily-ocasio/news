@@ -19,7 +19,7 @@ class Article:
     def __repr__(self) -> str:
         display, _ = display_article(self.total, self.current, self.row, ())
         return display
-    
+
     @property
     def title(self) -> str:
         """

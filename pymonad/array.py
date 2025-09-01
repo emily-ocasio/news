@@ -2,7 +2,7 @@
 # pylint: disable=W0212
 from dataclasses import dataclass
 from functools import reduce
-from typing import Callable, TypeVar, Type
+from typing import Callable, TypeVar, Type, Self
 
 from .applicative import Applicative
 from .curry import curry2
@@ -54,9 +54,9 @@ class Array[A](Functor[A], Monoid):
         return Array((x,) + ar.a)
 
     @classmethod
-    def snoc(cls, ar: "Array[B]", x: B) -> "Array[B]":
+    def snoc(cls, ar: Self, x: A) -> Self:
         """Appends an element to the Array."""
-        return Array(ar.a + (x,))
+        return cls(ar.a + (x,))
 
     @classmethod
     def make(cls, a: tuple[A, ...]) -> 'Array[A]':

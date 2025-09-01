@@ -21,5 +21,5 @@ def initialize_program() -> Run[None]:
             set_(user_name, name)
             )
 
-    return with_namespace(Namespace(""), initialize(),
-                          prompts=to_prompts(INITIAL_PROMPTS))
+    return with_namespace(Namespace(""), to_prompts(INITIAL_PROMPTS),
+                          initialize())
