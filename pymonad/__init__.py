@@ -16,10 +16,11 @@ from .run import Run, pure, ask, get, put, throw, rethrow, \
     run_state, run_except, run_base_effect, run_reader, put_line, get_line, \
     with_namespace, local, foldm_either_loop_bind, \
     input_with_prompt, ErrorPayload, _unhandled
-from .openai import GPTPrompt, GPTPromptTemplate, GPTModel
+from .openai import GPTPrompt, GPTFullResponse, GPTPromptTemplate, GPTModel, \
+    GPTResponseTuple, to_gpt_tuple
 from .runsql import run_sqlite, SQL, SQLParams, sql_query, sql_exec
 from .runopenai import run_openai, with_models, response_with_gpt_prompt, \
-    reasoning_summary
+    response_message, to_json
 from .semigroup import Semigroup
 from .string import Char, String, from_char_array, from_string
 from .tuple import Tuple, Threeple

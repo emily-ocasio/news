@@ -4,20 +4,23 @@ Intent, eliminator and constructors for OpenAI API calls
 # pylint:disable=W0212
 from dataclasses import dataclass
 from collections.abc import Callable
+import json
 from typing import Any, TypeVar, cast
-from openai import OpenAI
-from openai.types.responses import Response, ParsedResponse, \
-    ResponseReasoningItem
-from openai.types.responses.response_prompt_param import Variables
 
+from jsonref import replace_refs
+from openai import OpenAI
+from openai.types.responses import Response, ParsedResponse
+from openai.types.responses.response_prompt_param import Variables
 from pydantic import BaseModel
 
+from .either import Left, Right
 from .environment import PromptKey, Environment, EnvKey, all_prompts
-from .openai import GPTModel, GPTPrompt
-from .run import ErrorPayload, throw, Run, _unhandled, ask, local
+from .openai import GPTModel, GPTPrompt, GPTFullResponse
+from .run import ErrorPayload, throw, Run, _unhandled, ask, local, pure, \
+    put_line
 
 A = TypeVar('A')
-
+P = TypeVar('P', bound=BaseModel)
 @dataclass(frozen=True)
 class OAChat:
     """OpenAI Response API call intent"""
@@ -25,6 +28,7 @@ class OAChat:
     model: GPTModel
     text_format: type[BaseModel] | None = None
     temperature: float = 0
+
 
 def gpt_response(prompt: GPTPrompt,
                  model: GPTModel,
@@ -60,6 +64,22 @@ def response_with_gpt_prompt(prompt_key: PromptKey,
         ask() >> (lambda env:
         gpt_response(resolve_prompt(env), resolve_model(env), text_format)
         )
+
+def response_message(specific: Callable[[BaseModel], str],
+                     gpt_full: GPTFullResponse) \
+                    ->  Run[GPTFullResponse]:
+    """
+    Generate a response message from the GPT response.
+    """
+    match gpt_full:
+        case Left():
+            return pure(gpt_full)
+        case Right(resp):
+            return \
+                put_line(specific(resp.parsed.output)) ^ \
+                put_line(f"GPT Usage: {resp.parsed.usage}") ^ \
+                put_line(f"GPT reasoning summary: \n{resp.parsed.reasoning}") ^\
+                pure(gpt_full)
 
 def run_openai(
     client_ctor: Callable[[], Any],
@@ -110,15 +130,23 @@ def with_models(models: dict[EnvKey, GPTModel], prog: Run[A]) -> Run[A]:
         return new
     return local(modify, prog)
 
-def reasoning_summary(resp: ParsedResponse) -> str:
+def to_json(text_format: type[BaseModel]) -> str:
     """
-    Generate a reasoning summary from the GPT response.
+    Convert the Pydantic model to JSON schema.
     """
-    outputs = resp.output
-    reasoning_items = [item for item in outputs
-                       if item.type == "reasoning"]
-    summary_text = f"{len(reasoning_items)} reasoning items found:\n"
-    for reasoning in reasoning_items:
-        for summary in reasoning.summary:
-            summary_text += f"{summary.text}\n"
-    return summary_text
+    schema = text_format.model_json_schema(mode='serialization')
+    schema['name'] = schema['title']
+    schema['strict'] = True
+    schema.pop('title')
+    schema['schema'] = {
+        'type': 'object',
+        'properties': schema['properties'],
+        'required': schema['required'],
+        'additionalProperties': False
+    }
+    schema.pop('properties')
+    schema.pop('type')
+    schema.pop('required')
+    schema = replace_refs(schema, jsonschema=True, proxies=False)
+    schema.pop('$defs')
+    return json.dumps(schema, indent=2)

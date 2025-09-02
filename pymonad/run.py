@@ -10,7 +10,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import cast, Any, TypeVar
 
-
 from .array import Array
 from .dispatch import GetLine, PutLine, InputPrompt
 from .either import Either, Left, Right

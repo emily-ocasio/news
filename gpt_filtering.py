@@ -2,17 +2,15 @@
 Secondary filtering of articles using GPT
 """
 
+from functools import partial
 from typing import cast
 
-import json
-from jsonref import replace_refs
-from openai.types.responses import ParsedResponse
 from pydantic import BaseModel
 
 from pymonad import Run, with_namespace, to_prompts, Namespace, EnvKey, \
-    PromptKey, pure, put_line, sql_query, SQL, SQLParams, Either, Right, \
+    PromptKey, pure, put_line, sql_query, SQL, SQLParams, Either, Right, Left, \
     GPTModel, with_models, response_with_gpt_prompt, foldm_either_loop_bind, \
-    wal, reasoning_summary
+    to_gpt_tuple, response_message, to_json, rethrow
 from menuprompts import input_number, NextStep
 from article import Article, Articles, from_rows
 from calculations import articles_to_filter_sql
@@ -32,49 +30,27 @@ def second_filter() -> Run[NextStep]:
     Use GPT to further filter articles that are homicide related
     and in correct location
     """
+    def _specific_message(parsed_output: BaseModel) -> str:
+        parsed_output = cast(HomicideClassResponse, parsed_output)
+        return f"GPT classification: {parsed_output.classification.value}\n"
+    print_specific_message = partial(response_message, _specific_message)
     def _second_filter() -> Run[NextStep]:
-        def to_json(text_format: type[BaseModel]) -> str:
-            """
-            Convert the Pydantic model to JSON schema.
-            """
-            schema = text_format.model_json_schema(mode='serialization')
-            schema['name'] = schema['title']
-            schema['strict'] = True
-            schema.pop('title')
-            schema['schema'] = {
-                'type': 'object',
-                'properties': schema['properties'],
-                'required': schema['required'],
-                'additionalProperties': False
-            }
-            schema.pop('properties')
-            schema.pop('type')
-            schema.pop('required')
-            schema = replace_refs(schema, jsonschema=True, proxies=False)
-            schema.pop('$defs')
-            return json.dumps(schema, indent=2)
-
         def _filter_next(articles: Articles, next_article: Article) \
             -> Run[Either[str, Articles]]:
+            def append_article(gpt_full) -> Run[Either[str, Articles]]:
+                if isinstance(gpt_full, Left):
+                    return pure(gpt_full)
+                return pure(Right(Articles.snoc(articles, next_article)))
             variables = {"article_title": next_article.title,
                          "article_text": next_article.full_text}
             return \
                 put_line(f"Filtering article:\n {next_article}") ^ \
-                response_with_gpt_prompt(
+                (to_gpt_tuple & response_with_gpt_prompt(
                     PromptKey("homicide_filter"),
                     variables,
                     HomicideClassResponse,
                     EnvKey("filter")
-                ) >> (lambda _resp: wal(
-                resp:= cast(ParsedResponse[HomicideClassResponse], _resp),
-                parsed:= cast(HomicideClassResponse, resp.output_parsed),
-                outputs:= resp.output,
-                put_line(f"GPT response: {parsed.classification}\n\n" +
-                        f"GPT usage: {resp.usage}\n" +
-                        f"reasoning summary: \n{reasoning_summary(resp)}") ^
-                pure(Right(Articles.snoc(articles, next_article)))
-                ))
-
+                )) >> print_specific_message >> append_article
         return \
             input_number(PromptKey("filternumber")) >> (lambda num:
             pure(NextStep.CONTINUE) if num <= 0
@@ -86,6 +62,7 @@ def second_filter() -> Run[NextStep]:
             foldm_either_loop_bind(articles,
                                    Articles(()),
                                    _filter_next) >> (lambda filtered:
+            rethrow(filtered) ^ \
             put_line("All articles filtered.\n") ^ \
             pure(NextStep.CONTINUE)
             )))
