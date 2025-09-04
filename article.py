@@ -1,11 +1,17 @@
 """
 Article class and related functions
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
+from datetime import datetime
 from sqlite3 import Row
-from calculations import display_article
+from typing import cast
 
-from pymonad import Array
+from pydantic import BaseModel
+
+from calculations import display_article, camel_to_snake
+from pymonad import Array, String
+from state import WashingtonPostArticleAnalysis, Article_Classification, \
+    Homicide_Classification
 
 @dataclass(frozen=True)
 class Article:
@@ -15,24 +21,99 @@ class Article:
     row: Row
     current: int = 0
     total: int = 0
+    record_id: int | None = None
+    pub_date: str | None = None
+    gpt_class: str | None = None
+    auto_class: str | None = None
+    title: str | None = None
+    full_text: str | None = None
 
-    def __repr__(self) -> str:
+    def __str__(self) -> str:
         display, _ = display_article(self.total, self.current, self.row, ())
         return display
 
-    @property
-    def title(self) -> str:
-        """
-        Returns the title of the article.
-        """
-        return self.row['Title']
+    def __post_init__(self):
+        for col in self.row.keys():
+            snake = camel_to_snake(col)
+            if snake in (f.name for f in fields(self)):
+                current_val = getattr(self, snake)
+                # only overwrite when the field is currently None
+                if current_val is None:
+                    object.__setattr__(self, snake, self.row[col])
 
     @property
-    def full_text(self) -> str:
+    def full_date(self) -> str:
         """
-        Returns the full text of the article.
+        Return the publication date including the date of the week
         """
-        return self.row['FullText']
+        if self.pub_date:
+            date = datetime.strptime(self.pub_date, "%Y%m%d")
+            return date.strftime('%A %B %-d, %Y')
+        return "Unknown"
+
+    @classmethod
+    def new_gpt_class(cls, homicide_class: BaseModel) \
+        -> String | None:
+        """
+        Updates the GPT classification for the article.
+        """
+        gpt_class: str | None = None
+        _homicide_class = cast(WashingtonPostArticleAnalysis, homicide_class)
+        match _homicide_class.article_classification, \
+            _homicide_class.homicide_classification:
+            case (None, None):
+                gpt_class = None
+            case (None, _):
+                gpt_class = "ERR_NONE"
+            case (Article_Classification.NO_HOMICIDE_IN_ARTICLE, _):
+                gpt_class = "N_NOHOM"
+            case (Article_Classification.HOMICIDE_BEFORE_1977, _):
+                gpt_class = "E"
+            case (Article_Classification.HOMICIDES_OUTSIDE_WASHINGTON_DC, _):
+                gpt_class = "O"
+            case (Article_Classification.HOMICIDE_IN_WASHINGTON_DC_SINCE_1977,
+                  None):
+                gpt_class = "ERR_M_NONE"
+            case (Article_Classification.HOMICIDE_IN_WASHINGTON_DC_SINCE_1977,
+                  Homicide_Classification.VEHICULAR_HOMICIDE):
+                gpt_class = "N_VEH"
+            case (Article_Classification.HOMICIDE_IN_WASHINGTON_DC_SINCE_1977,
+                  Homicide_Classification.FICTIONAL_HOMICIDE):
+                gpt_class = "N_FIC"
+            case (Article_Classification.HOMICIDE_IN_WASHINGTON_DC_SINCE_1977,
+                  Homicide_Classification.MILITARY_KILLINGS):
+                gpt_class = "N_MIL"
+            case (Article_Classification.HOMICIDE_IN_WASHINGTON_DC_SINCE_1977,
+                  Homicide_Classification.OTHER_ACTUAL_HOMICIDE):
+                gpt_class = "M"
+            case _, _:
+                gpt_class = "ERR_OTHER"
+        # _homicide_class = cast(HomicideClassDCResponse, homicide_class)
+        # match _homicide_class.classification, _homicide_class.location:
+        #     case (None, None):
+        #         gpt_class = None
+        #     case HomicideClass.OTHER_ACTUAL_HOMICIDE, LocationClassDC.IN_DC:
+        #         gpt_class = "M"
+        #     case HomicideClass.OTHER_ACTUAL_HOMICIDE,
+        #          LocationClassDC.NOT_IN_DC:
+        #         gpt_class = "O"
+        #     case HomicideClass.OTHER_ACTUAL_HOMICIDE, None:
+        #         gpt_class = "E_M_NONE"
+        #     case HomicideClass.VEHICULAR_HOMICIDE, _:
+        #         gpt_class = "N_VEH"
+        #     case HomicideClass.KILLED_BY_LAW_ENFORCEMENT, _:
+        #         gpt_class = "N_LAW"
+        #     case HomicideClass.FICTIONAL_HOMICIDE, _:
+        #         gpt_class = "N_FIC"
+        #     case HomicideClass.MILITARY_KILLINGS, _:
+        #         gpt_class = "N_MIL"
+        #     case HomicideClass.NO_HOMICIDE_IN_ARTICLE, _:
+        #         gpt_class = "N_NOHOM"
+        #     case None, _:
+        #         gpt_class = "E_NONE"
+        #     case _:
+        #         gpt_class = "E_OTHER"
+        return None if not gpt_class else String(gpt_class)
 
 def from_row(row: Row, current: int = 0, total: int = 0) -> Article:
     """

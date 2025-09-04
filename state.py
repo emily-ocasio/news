@@ -8,7 +8,7 @@ from typing import NamedTuple, Optional, Any, List
 from enum import Enum
 from sqlite3 import Row
 from immutabledict import immutabledict
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 Rows = tuple[Row, ...]
 TextChoice = immutabledict[str, str]
@@ -25,6 +25,25 @@ class HomicideClass(str, Enum):
     NO_HOMICIDE_IN_ARTICLE = "no homicide in article"
     OTHER_ACTUAL_HOMICIDE = "other actual homicide"
 
+class Article_Classification(str, Enum): # pylint:disable=invalid-name
+    """
+    Enum for article classification
+    """
+    NO_HOMICIDE_IN_ARTICLE = "no homicide in article"
+    HOMICIDE_BEFORE_1977 = "homicide before 1977"
+    HOMICIDES_OUTSIDE_WASHINGTON_DC = "homicides outside Washington, D.C."
+    HOMICIDE_IN_WASHINGTON_DC_SINCE_1977 = \
+        "homicide in Washington, D.C. since 1977"
+
+class Homicide_Classification(str, Enum): # pylint:disable=invalid-name
+    """
+    Enum for homicide classification
+    """
+    VEHICULAR_HOMICIDE = "vehicular homicide"
+    FICTIONAL_HOMICIDE = "fictional homicide"
+    MILITARY_KILLINGS = "military killings"
+    OTHER_ACTUAL_HOMICIDE = "other actual homicide"
+
 class LocationClass(Enum):
     """
     Enum for location classification
@@ -33,13 +52,12 @@ class LocationClass(Enum):
     IN_MASSACHUSETTS = "homicide(s) in Massachusetts"
 
 
-class LocationClassDC(Enum):
+class LocationClassDC(str, Enum):
     """
     Enum for location classification for DC
     """
-    NOT_IN_DC = "not in Washington, DC"
-    IN_DC = "in Washington, DC"
-
+    NOT_IN_DC = "not in Washington, D.C."
+    IN_DC = "in Washington, D.C."
 
 class County(str, Enum):
     """
@@ -97,22 +115,32 @@ class Sex(str, Enum):
     """ Enum for sex """
     MALE = "male"
     FEMALE = "female"
-    UNKNOWN = "unknown"
 
+class Race(str, Enum):
+    """ Enum for race """
+    WHITE = "White"
+    BLACK = "Black"
+    ASIAN = "Asian"
+    NATIVE_AMERICAN = "Native American"
+
+class Ethnicity(str, Enum):
+    """ Enum for ethnicity """
+    HISPANIC = "Hispanic"
+    NON_HISPANIC = "Non-Hispanic"
 
 class Weapon(str, Enum):
     """ Enum for weapon """
     SHOTGUN = "shotgun"
     RIFLE = "rifle"
-    HANDGUN = "handgun, pistol, revolver, etc"
-    FIREARM = "other firearm"
-    KNIFE = "knife or cutting instrument"
-    BLUNT_OBJECT = "blunt object - hammer, club, etc"
-    BEATING = "personal weapon, including beating"
-    FIRE = "fire, arson"
-    STRANGULATION = "strangulation or hanging"
+    HANDGUN = "handgun"
+    FIREARM = "firearm"
+    KNIFE = "knife"
+    BLUNT_OBJECT = "blunt object"
+    BEATING = "personal weapon"
+    FIRE = "fire"
+    STRANGULATION = "strangulation"
     ASPHYXIATION = "asphyxiation"
-    DRUGS = "sleeping pills or other drugs"
+    DRUGS = "drugs"
     EXPLOSIVES = "explosives"
     DROWNING = "drowning"
     OTHER = "other"
@@ -123,22 +151,21 @@ class Circumstance(str, Enum):
     """
     Enum for circumstances of the crime
     """
-    NO_KILLING = "victim is not dead may be in critical condition"
+    #NO_KILLING = "victim is not dead may be in critical condition"
     ARSON = "arson"
     VEHICULAR_HOMICIDE = "vehicular homicide"
-    FELON_KILLED_BY_POLICE = "death of felon at hands of police"
-    INSTITUTIONAL_KILLING = \
-        "killing within an institution such as jail or mental hospital"
+    #FELON_KILLED_BY_POLICE = "death of felon at hands of police"
+    INSTITUTIONAL_KILLING = "institutional killing"
     BURGLARY = "burglary"
     ROBBERY = "robbery"
     BRAWL = "brawl"
-    RAPE = "rape or other sex offense"
+    RAPE = "rape"
     ARGUMENT = "argument"
-    GANG_KILLING = "gang-related killing"
+    GANG_KILLING = "gang killing"
     LOVERS_TRIANGLE = "lover's triangle"
     CHILD_KILLED_BY_BABYSITTER = "child killed by babysitter"
     NEGLIGENCE = "negligence"
-    OTHER = "all other"
+    OTHER = "other"
     UNDETERMINED = "undetermined"
 
 
@@ -161,6 +188,14 @@ class HomicideClassResponse(BaseModel):
     Response model for homicide classification.
     """
     classification: HomicideClass
+
+class HomicideClassDCResponse(BaseModel):
+    """
+    Response model for homicide classification for DC.
+    """
+    classification: HomicideClass
+    location: LocationClassDC | None
+
 
 
 class VictimBase(BaseModel):
@@ -197,6 +232,45 @@ class VictimBase(BaseModel):
         "the crime, and any investigation or trial. "
         "Include every detail mentioned in the article about the victim.")
 
+class Victim(BaseModel):
+    """
+    Model for Victim information
+    """
+    model_config = ConfigDict(extra="forbid")
+    victim_name: str | None
+    victim_age: int | None
+    victim_sex: Sex | None
+    victim_race: Race | None
+    victim_ethnicity: Ethnicity | None
+    relationship: Relationship | None
+class Incident(BaseModel):
+    """
+    Model for Incident information
+    """
+    model_config = ConfigDict(extra="forbid")
+    year: int
+    month: int
+    day: int | None
+    location: str | None
+    circumstance: Circumstance
+    weapon: Weapon
+    offender_count: int | None
+    offender_name: str | None
+    offender_age: int | None
+    offender_sex: Sex | None
+    offender_race: Race | None
+    offender_ethnicity: Ethnicity | None
+    victim_count: int | None
+    victim: list[Victim]
+
+class WashingtonPostArticleAnalysis(BaseModel):
+    """
+    Response model for Washington Post article analysis.
+    """
+    model_config = ConfigDict(extra="forbid")
+    article_classification: Article_Classification
+    homicide_classification: Homicide_Classification | None
+    incidents: list[Incident]
 
 class VictimDC(VictimBase):
     """
@@ -206,7 +280,7 @@ class VictimDC(VictimBase):
         description="Location of the homicide")
 
 
-class Victim(VictimBase):
+class VictimMass(VictimBase):
     """Model for Victim information in Massachusetts"""
     county: County = Field(
         description="County where the homicide occurred (infer from other "

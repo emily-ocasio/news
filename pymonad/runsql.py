@@ -17,11 +17,23 @@ class SQL(String):
     Represents a SQL string.
     """
 
-type SQLParam = String | int
+type SQLParam = String | int | None
 class SQLParams(Array[SQLParam]):
     """
     Represents a list of SQL parameters.
     """
+    def to_params(self) -> tuple:
+        """
+        Convert SQLParams to a tuple of parameters.
+        """
+        def _convert(param: SQLParam) -> str | int | None:
+            match param:
+                case String(s):
+                    return s
+                case _:
+                    return param
+
+        return tuple(_convert(param) for param in self.a)
 
 # --- DB intents ---
 @dataclass(frozen=True)
@@ -105,13 +117,16 @@ def run_sqlite(
             def perform(intent: Any, current: "Run[Any]") -> Any:
                 match intent:
                     case SqlQuery(sql, params):
-                        cur = con.execute(sql, params)
+                        cur = con.execute(str(sql), params)
                         rows = cur.fetchall()
                         cur.close()
                         return rows
 
                     case SqlExec(sql, params):
-                        con.execute(sql, params)
+                        con.execute(str(sql), params.to_params())
+                        con.commit()
+                        print(f"SQL executed with sql: {str(sql)}, "
+                              f"params: {params.to_params()}")
                         return None
 
                     case SqlScript(sql):

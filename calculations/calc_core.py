@@ -759,3 +759,11 @@ def gather_valid_generic_victims(
                     continue
                 results.append(ArticleGenericVictimItem(row['RecordId'], v))
     return tuple(results)
+
+def camel_to_snake(name: str) -> str:
+    """Convert camelCase to snake_case."""
+    # Insert underscore between lowercase/number and uppercase,
+    # and between acronym/end and start of word
+    s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', name)
+    s2 = re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1)
+    return s2.replace('-', '_').lower()

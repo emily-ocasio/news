@@ -15,7 +15,7 @@ from pydantic import BaseModel
 
 from .either import Left, Right
 from .environment import PromptKey, Environment, EnvKey, all_prompts
-from .openai import GPTModel, GPTPrompt, GPTFullResponse
+from .openai import GPTModel, GPTPrompt, GPTFullResponse, GPTResponseTuple
 from .run import ErrorPayload, throw, Run, _unhandled, ask, local, pure, \
     put_line
 
@@ -43,43 +43,33 @@ def gpt_response(prompt: GPTPrompt,
     return Run(lambda self: self._perform(intent, self), _unhandled)
 
 def response_with_gpt_prompt(prompt_key: PromptKey,
-                             variables: dict[str, str],
+                             variables: dict[str, str | None],
                              text_format: type[BaseModel],
                              model_key: EnvKey) \
     -> Run[Response | ParsedResponse]:
     """
     Resolve the GPT prompt from the environment.
     """
+    if any(v is None for v in variables.values()):
+        return throw(ErrorPayload(f"Missing variables in prompt: {prompt_key}"))
     var_dict = {k: cast(Variables, v) for k, v in variables.items()}
-    def resolve_prompt(env: Environment) -> GPTPrompt:
+
+    def resolve_prompt(env: Environment) -> Run[GPTPrompt]:
         gpt_prompts = all_prompts(env)['gpt_prompts']
         if prompt_key not in gpt_prompts:
-            throw(ErrorPayload(f"Undefined GPT prompt: {prompt_key}"))
-        return GPTPrompt(gpt_prompts[prompt_key], var_dict)
+            return throw(ErrorPayload(f"Undefined GPT prompt: {prompt_key}"))
+        return pure(GPTPrompt(gpt_prompts[prompt_key], var_dict))
 
     def resolve_model(env: Environment) -> GPTModel:
         return env['openai_models'].get(
             model_key, env['openai_default_model'])
+
+    # ask for env, then resolve_prompt (monadic), then call gpt_response
     return \
         ask() >> (lambda env:
-        gpt_response(resolve_prompt(env), resolve_model(env), text_format)
-        )
-
-def response_message(specific: Callable[[BaseModel], str],
-                     gpt_full: GPTFullResponse) \
-                    ->  Run[GPTFullResponse]:
-    """
-    Generate a response message from the GPT response.
-    """
-    match gpt_full:
-        case Left():
-            return pure(gpt_full)
-        case Right(resp):
-            return \
-                put_line(specific(resp.parsed.output)) ^ \
-                put_line(f"GPT Usage: {resp.parsed.usage}") ^ \
-                put_line(f"GPT reasoning summary: \n{resp.parsed.reasoning}") ^\
-                pure(gpt_full)
+        resolve_prompt(env) >> (lambda prompt:
+        gpt_response(prompt, resolve_model(env), text_format)
+        ))
 
 def run_openai(
     client_ctor: Callable[[], Any],
@@ -105,7 +95,8 @@ def run_openai(
                             reasoning={
                                 "effort": "medium",
                                 "summary": "detailed"
-                            }
+                            },
+                            timeout=60.0
                         )
                     return client.responses.create(
                         model=model,
@@ -150,3 +141,28 @@ def to_json(text_format: type[BaseModel]) -> str:
     schema = replace_refs(schema, jsonschema=True, proxies=False)
     schema.pop('$defs')
     return json.dumps(schema, indent=2)
+
+def from_either(fn: Callable[[GPTResponseTuple], Run[Any]],
+                gpt_full: GPTFullResponse) -> Run[Any]:
+    """
+    Convert a function that operates on a GPTResponseTuple into a Run[Any].
+    """
+    match gpt_full:
+        case Left():
+            return pure(gpt_full)
+        case Right(resp):
+            return fn(resp)
+
+def response_message(specific: Callable[[BaseModel], str],
+                     gpt_full: GPTFullResponse) \
+                    ->  Run[GPTFullResponse]:
+    """
+    Generate a response message from the GPT response.
+    """
+    def message(resp: GPTResponseTuple) -> Run[GPTFullResponse]:
+        return \
+            put_line(specific(resp.parsed.output)) ^ \
+            put_line(f"GPT Usage: {resp.parsed.usage}") ^ \
+            put_line(f"GPT reasoning summary: \n{resp.parsed.reasoning}") ^\
+            pure(gpt_full)
+    return from_either(message, gpt_full)

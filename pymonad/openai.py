@@ -20,10 +20,13 @@ class GPTError(str, Enum):
     NO_USAGE_DATA = "GPT response has no usage data"
     NOT_PARSED = "GPT response is not parsed"
 
+class GPTTokenType(str, Enum):
+    """OpenAI GPT token type enumeration"""
+    UNCACHED = "uncached"
+    CACHED = "cached"
+    OUTPUT = "output"
 class GPTModel(str, Enum):
     """OpenAI GPT model enumeration"""
-    GPT_3_5_TURBO = "gpt-3.5-turbo"
-    GPT_4 = "gpt-4"
     GPT_5_NANO = "gpt-5-nano"
 
     @classmethod
@@ -35,6 +38,21 @@ class GPTModel(str, Enum):
             if model_str.startswith(model.value):
                 return model
         return None
+
+    def price(self, token_type: GPTTokenType) -> float:
+        """
+        Get the price per 1M tokens for a specific token type.
+        """
+        match self, token_type:
+            case GPTModel.GPT_5_NANO, GPTTokenType.UNCACHED:
+                return 0.05
+            case GPTModel.GPT_5_NANO, GPTTokenType.CACHED:
+                return 0.005
+            case GPTModel.GPT_5_NANO, GPTTokenType.OUTPUT:
+                return 0.4
+            case _:
+                raise ValueError(
+                    f"Unknown model or token type: {self}, {token_type}")
 
 @dataclass(frozen=True)
 class GPTPromptTemplate:
@@ -77,6 +95,7 @@ class GPTReasoning(String):
     Represents the reasoning summary behind a GPT response.
     """
 
+BUNDLE = 1000
 @dataclass(frozen=True)
 class GPTUsage:
     """
@@ -91,20 +110,44 @@ class GPTUsage:
 
     def __str__(self):
         return ("GPT Usage for this response:\n"
-                f"Model: {self.model_used}, \n"
-                f"Input Tokens: {self.input_tokens}, \n"
-                f"Cached Tokens: {self.cached_tokens}, \n"
-                f"Output Tokens: {self.output_tokens}, \n"
-                f"Reasoning Tokens: {self.reasoning_tokens}, \n"
-                f"Total Tokens: {self.total_tokens}, \n"
-                f"Estimated Cost per 1000 responses: ${self.cost:.4f}\n")
+            f"Model: {self.model_used.value if self.model_used else 'None'}, \n"
+            f"Uncached Tokens:  {self.uncached_tokens:5d} \n"
+            f"Cached Tokens:    {self.cached_tokens:5d} \n"
+            f"      Total Input Tokens:  {self.input_tokens:5d} \n"
+            f"Message Tokens:   {self.actual_output_tokens:5d} \n"
+            f"Reasoning Tokens: {self.reasoning_tokens:5d} \n"
+            f"      Total Output Tokens: {self.output_tokens:5d} \n"
+            f"      Total Tokens:        {self.total_tokens:5d} \n"
+            f"Estimated Cost per {BUNDLE} responses: "
+            f"${self.cost(BUNDLE):.4f}\n")
+
+    def cost(self, bundle = 1000) -> float:
+        """
+        Estimated cost per bundle of responses based on this usage
+        """
+        ratio = bundle / 1_000_000
+        if self.model_used is None:
+            return 0.0
+        unc_price = self.model_used.price(GPTTokenType.UNCACHED)
+        cached_price = self.model_used.price(GPTTokenType.CACHED)
+        output_price = self.model_used.price(GPTTokenType.OUTPUT)
+        return ratio * (unc_price * self.uncached_tokens \
+            + cached_price * self.cached_tokens \
+            + output_price * self.output_tokens)
 
     @property
-    def cost(self) -> float:
+    def uncached_tokens(self) -> int:
         """
-        Estimated cost per 1000 responses based on this usage
+        Uncached input tokens used in the response.
         """
-        return self.total_tokens * 0.0004
+        return self.input_tokens - self.cached_tokens
+
+    @property
+    def actual_output_tokens(self) -> int:
+        """
+        Actual (non-reasoning)output tokens used in the response.
+        """
+        return self.output_tokens - self.reasoning_tokens
 
     @classmethod
     def mempty(cls) -> 'GPTUsage':

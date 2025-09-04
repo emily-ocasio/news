@@ -8,6 +8,7 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass
+import traceback
 from typing import cast, Any, TypeVar
 
 from .array import Array
@@ -262,7 +263,9 @@ def run_except(prog: Run[A]) -> Run[Either[ErrorPayload, A]]:
         except _Thrown as te:
             return Left(te.payload)
         except Exception as ex: # pylint: disable=broad-except
-            return Left(ErrorPayload(f"Unhandled exception: {ex}"))
+            tb_exc = traceback.TracebackException.from_exception(ex)
+            tb_str = ''.join(tb_exc.format())
+            return Left(ErrorPayload(f"Unhandled exception: {ex}\n{tb_str}"))
     return Run(step, lambda i, c: c._perform(i, c))
 
 

@@ -20,7 +20,7 @@ from .openai import GPTPrompt, GPTFullResponse, GPTPromptTemplate, GPTModel, \
     GPTResponseTuple, to_gpt_tuple
 from .runsql import run_sqlite, SQL, SQLParams, sql_query, sql_exec
 from .runopenai import run_openai, with_models, response_with_gpt_prompt, \
-    response_message, to_json
+    response_message, to_json, from_either
 from .semigroup import Semigroup
 from .string import Char, String, from_char_array, from_string
 from .tuple import Tuple, Threeple
