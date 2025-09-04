@@ -6,8 +6,7 @@ from enum import Enum
 from typing import Any
 
 from calculations import unified_prompt
-from pymonad import Array, InputPrompt, PromptKey, Char, Tuple, Run, get_line, \
-    pure, input_with_prompt
+from pymonad import Array, InputPrompt, Char, Tuple, Run, get_line, pure
 
 class NextStep(Enum):
     """
@@ -105,28 +104,3 @@ def input_from_menu(prompts: MenuPrompts) -> Run[MenuChoice]:
 
     # Start by showing the full prompt once
     return loop(True)
-
-def input_number(key: PromptKey,
-                 min_value: int = 0,
-                 max_value: int = 100000000) -> Run[int]:
-    """
-    Get a number input from the user within the specified range.
-    Repeats until a valid number is entered.
-    """
-    def loop(repeat_prompt: PromptKey | InputPrompt = InputPrompt('> '))\
-        -> Run[int]:
-        return \
-            input_with_prompt(repeat_prompt) >> (lambda s:
-            _process_input(str(s))
-        )
-
-    def _process_input(line: str) -> Run[int]:
-        try:
-            value = int(line)
-            if min_value <= value <= max_value:
-                return pure(value)
-            return loop()
-        except ValueError:
-            return loop()
-
-    return loop(key)

@@ -6,6 +6,7 @@ Type Definitions, including:
 from collections.abc import Callable
 from typing import NamedTuple, Optional, Any, List
 from enum import Enum
+import json
 from sqlite3 import Row
 from immutabledict import immutabledict
 from pydantic import BaseModel, Field, ConfigDict
@@ -154,7 +155,7 @@ class Circumstance(str, Enum):
     #NO_KILLING = "victim is not dead may be in critical condition"
     ARSON = "arson"
     VEHICULAR_HOMICIDE = "vehicular homicide"
-    #FELON_KILLED_BY_POLICE = "death of felon at hands of police"
+    FELON_KILLED_BY_POLICE = "felon killed by police"
     INSTITUTIONAL_KILLING = "institutional killing"
     BURGLARY = "burglary"
     ROBBERY = "robbery"
@@ -261,7 +262,7 @@ class Incident(BaseModel):
     offender_race: Race | None
     offender_ethnicity: Ethnicity | None
     victim_count: int | None
-    victim: list[Victim]
+    victim: list[Victim] = Field(min_length=1)
 
 class WashingtonPostArticleAnalysis(BaseModel):
     """
@@ -271,6 +272,27 @@ class WashingtonPostArticleAnalysis(BaseModel):
     article_classification: Article_Classification
     homicide_classification: Homicide_Classification | None
     incidents: list[Incident]
+
+    @property
+    def incidents_json(self) -> str:
+        """
+        Return the incidents as a JSON string."""
+        if len(self.incidents) == 0:
+            return ""
+        incidents_list = self.model_dump()['incidents']
+        return json.dumps(incidents_list, indent=2)
+
+    @property
+    def result_str(self) -> str:
+        """
+        Return a string summary of the classification results.
+        """
+        art = self.article_classification.value
+        hom = self.homicide_classification.value \
+            if self.homicide_classification else 'None'
+        return f"GPT article classification: {art}\n" + \
+            f"GPT homicide classification: {hom}\n" + \
+            self.incidents_json
 
 class VictimDC(VictimBase):
     """

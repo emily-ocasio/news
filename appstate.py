@@ -12,6 +12,7 @@ class AppState(Monoid):
     Application top-level state.
     """
     user_name: String = String.mempty()
+    selected_option: String = String.mempty()
 
     @classmethod
     def mempty(cls) -> "AppState":
@@ -37,3 +38,4 @@ class AppState(Monoid):
         return type(self)(**out)
 
 user_name: Lens[AppState, str] = lens("user_name")
+selected_option: Lens[AppState, str] = lens("selected_option")

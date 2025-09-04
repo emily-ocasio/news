@@ -9,6 +9,7 @@ from menuprompts import MenuChoice, MenuPrompts, input_from_menu, NextStep
 
 
 from gpt_filtering import second_filter
+from fixarticle import fix_article
 
 class MainChoice(Enum):
     """
@@ -54,8 +55,9 @@ def dispatch_from_main_menu(choice: MainChoice) \
     match choice:
         case MainChoice.GPT:
             return second_filter()
+        case MainChoice.FIX:
+            return fix_article()
         case MainChoice.REVIEW \
-            | MainChoice.FIX \
             | MainChoice.NEW \
             | MainChoice.ASSIGN \
             | MainChoice.AUTO \

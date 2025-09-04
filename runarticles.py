@@ -3,12 +3,14 @@ Main entry point for the application
 Monadic version
 """
 import sys
+from typing import cast
 from openai import OpenAI
 
 from pymonad import Run, run_reader, run_state, run_base_effect, run_except, \
     run_sqlite, run_openai, Environment, Namespace, ErrorPayload, \
     REAL_DISPATCH, Left, Right, Either, Tuple, put_line, pure, GPTModel
 
+from article import ArticleAppError
 from runinitial import initialize_program
 from appstate import AppState
 from mainmenu import main_menu_tick, AfterTick
@@ -66,7 +68,9 @@ def build_tick(env: Environment, state0: AppState)\
                 # decide policy: keep prior state or use a safe recovery;
                 # here we keep prior after showing error
                 return \
-                    put_line(f"Error occurred: {err}\nTry again...") ^ \
+                    (put_line(f"Error occurred: {err}\nTry again...") \
+                    if err.app is None else \
+                    put_line(cast(ArticleAppError, err.app).value)) ^ \
                     pure(AfterTick.make(state0, NextStep.CONTINUE))
             case Right(result):
                 return pure(AfterTick.make(result.fst, result.snd))

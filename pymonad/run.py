@@ -28,8 +28,24 @@ C = TypeVar("C")
 E = TypeVar("E")
 M = TypeVar("M", bound=Monoid)
 
-class ErrorPayload(String):
-    """Application-specific error messages payload"""
+Err = TypeVar("Err")   # application-specific error type
+
+class ErrorPayload[Err](String):
+    """Application-specific error payload.
+
+    Usage:
+      - ErrorPayload[str]("message")
+      - ErrorPayload[MyError]( "message", MyError.SomeCase )
+
+    The instance behaves like the existing String (constructed with the message)
+    and carries an optional `app` attribute of type Optional[Err].
+    """
+    app: Err | None = None
+    def __new__(cls, s: str, app: Err | None = None):
+        obj = super().__new__(cls, s)
+        object.__setattr__(obj, "app", app)
+        return obj
+
 
 # ===== Intents (data-only) =====
 @dataclass(frozen=True)
@@ -51,12 +67,12 @@ class Put:
 @dataclass(frozen=True)
 class Throw:
     """Except.throw intent (payload is user data)."""
-    e: ErrorPayload
+    e: ErrorPayload[Any]
 
 @dataclass(frozen=True)
 class Rethrow:
     """Lift pure Either into Except."""
-    res: Either[ErrorPayload, Any]
+    res: Either[ErrorPayload[Any], Any]
 
 
 # Private control-flow sentinel for non-local exit of Throw/Rethrow(Left)
@@ -65,8 +81,8 @@ class Rethrow:
 class _Thrown(Exception):
     __slots__ = ("payload",)
 
-    def __init__(self, payload: ErrorPayload):
-        self.payload: ErrorPayload = payload
+    def __init__(self, payload: ErrorPayload[Any]):
+        self.payload: ErrorPayload[Any] = payload
 
 # ===== Run carrier =====
 
@@ -265,6 +281,9 @@ def run_except(prog: Run[A]) -> Run[Either[ErrorPayload, A]]:
         except Exception as ex: # pylint: disable=broad-except
             tb_exc = traceback.TracebackException.from_exception(ex)
             tb_str = ''.join(tb_exc.format())
+            # Default ErrorPayload carries only a diagnostic message;
+            # applications can create ErrorPayload[MyError](msg, app_err)
+            # where needed.
             return Left(ErrorPayload(f"Unhandled exception: {ex}\n{tb_str}"))
     return Run(step, lambda i, c: c._perform(i, c))
 
@@ -364,3 +383,28 @@ def input_with_prompt(key_or_literal: PromptKey | InputPrompt,
     return \
         ask() >> (lambda env:
         get_line(resolve(env)))
+
+def input_number(key: PromptKey,
+                 min_value: int = 0,
+                 max_value: int = 10000000000) -> Run[int]:
+    """
+    Get a number input from the user within the specified range.
+    Repeats until a valid number is entered.
+    """
+    def loop(repeat_prompt: PromptKey | InputPrompt = InputPrompt('> '))\
+        -> Run[int]:
+        return \
+            input_with_prompt(repeat_prompt) >> (lambda s:
+            _process_input(str(s))
+        )
+
+    def _process_input(line: str) -> Run[int]:
+        try:
+            value = int(line)
+            if min_value <= value <= max_value:
+                return pure(value)
+            return loop()
+        except ValueError:
+            return loop()
+
+    return loop(key)

@@ -125,8 +125,8 @@ def run_sqlite(
                     case SqlExec(sql, params):
                         con.execute(str(sql), params.to_params())
                         con.commit()
-                        print(f"SQL executed with sql: {str(sql)}, "
-                              f"params: {params.to_params()}")
+                        # print(f"SQL executed with sql: {str(sql)}, "
+                        #       f"params: {params.to_params()}")
                         return None
 
                     case SqlScript(sql):

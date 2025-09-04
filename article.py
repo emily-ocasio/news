@@ -3,6 +3,7 @@ Article class and related functions
 """
 from dataclasses import dataclass, fields
 from datetime import datetime
+from enum import Enum
 from sqlite3 import Row
 from typing import cast
 
@@ -12,6 +13,15 @@ from calculations import display_article, camel_to_snake
 from pymonad import Array, String
 from state import WashingtonPostArticleAnalysis, Article_Classification, \
     Homicide_Classification
+
+class ArticleAppError(str, Enum):
+    """
+    Enumeration of possible errors in article processing.
+    """
+    NO_ARTICLE_FOUND = "No article found with that record ID."
+    MULTIPLE_ARTICLES_FOUND = "Unexpected result - more than one article found."
+    USER_ABORT = ""
+
 
 @dataclass(frozen=True)
 class Article:
