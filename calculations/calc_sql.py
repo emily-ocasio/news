@@ -606,6 +606,25 @@ def gpt_victims_sql() -> str:
         WHERE RecordId = ?
     """
 
+
+def insert_gptresults_sql() -> str:
+    """
+    SQL statement to insert a new row into gptResults.
+    Omits ResultId (INTEGER PRIMARY KEY) so SQLite will assign it automatically.
+    Parameters order:
+    (RecordId, UserName, TimeStamp, PromptKey, PromptId, Variables,
+     Model, FormatType, OutputJson, Reasoning, TotalInputTokens,
+     CachedInputTokens, TotalOutputTokens, ReasoningTokens, CostPerThousand)
+    """
+    return """
+        INSERT INTO gptResults
+        (RecordId, UserName, TimeStamp, PromptKey, PromptId, PromptVersion, Variables,
+         Model, FormatType, OutputJson, Reasoning, TotalInputTokens,
+         CachedInputTokens, TotalOutputTokens, ReasoningTokens, CostPerThousand)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """
+
+
 def articles_to_filter_sql() -> str:
     """
     SQL statement to return articles to filter based on a limit

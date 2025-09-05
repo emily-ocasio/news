@@ -17,7 +17,7 @@ class SQL(String):
     Represents a SQL string.
     """
 
-type SQLParam = String | int | None
+type SQLParam = String | int | float | None
 class SQLParams(Array[SQLParam]):
     """
     Represents a list of SQL parameters.
@@ -26,7 +26,7 @@ class SQLParams(Array[SQLParam]):
         """
         Convert SQLParams to a tuple of parameters.
         """
-        def _convert(param: SQLParam) -> str | int | None:
+        def _convert(param: SQLParam) -> str | int | float | None:
             match param:
                 case String(s):
                     return s

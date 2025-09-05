@@ -10,7 +10,7 @@ from .environment import Environment, EnvKey, Namespace, PromptKey, \
 from .functor import Functor, map #pylint: disable=redefined-builtin
 from .lens import Lens, view, set_, over, modify, lens
 from .maybe import Maybe, Just, Nothing, fromMaybe
-from .monad import Kleisli, Monad, ap, comp, compose_kleisli, wal
+from .monad import Kleisli, Monad, ap, comp, compose_kleisli, wal, bind_first
 from .monoid import Monoid
 from .run import Run, pure, ask, get, put, throw, rethrow, \
     run_state, run_except, run_base_effect, run_reader, put_line, get_line, \
@@ -20,7 +20,7 @@ from .openai import GPTPrompt, GPTFullResponse, GPTPromptTemplate, GPTModel, \
     GPTResponseTuple, to_gpt_tuple
 from .runsql import run_sqlite, SQL, SQLParams, sql_query, sql_exec
 from .runopenai import run_openai, with_models, response_with_gpt_prompt, \
-    response_message, to_json, from_either
+    response_message, to_json, from_either, resolve_prompt_template
 from .semigroup import Semigroup
 from .string import Char, String, from_char_array, from_string
 from .tuple import Tuple, Threeple

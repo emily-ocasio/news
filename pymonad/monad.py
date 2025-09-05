@@ -1,7 +1,8 @@
 """ monad protocol
 """
 # pylint: disable=W2301
-from typing import Any, Callable, Protocol, TypeVar, cast
+from typing import Any, Callable, Protocol, TypeVar, cast, \
+    ParamSpec, Concatenate
 
 from .applicative import Applicative
 #from .maybe import Maybe
@@ -72,6 +73,21 @@ def wal(*args):
     using the := walrus operator
     """
     return args[-1]
+
+P = ParamSpec("P")
+T = TypeVar("T")
+R = TypeVar("R")
+
+def bind_first(func: Callable[Concatenate[T, P], R], first: T) \
+    -> Callable[P, R]:
+    """
+    Bind the first positional argument of `func` and return a callable typed
+    with the remaining parameters.
+    This preserves parameter types for type checkers.
+    """
+    def _bound(*args: P.args, **kwargs: P.kwargs) -> R:
+        return func(first, *args, **kwargs)
+    return _bound
 
 def comp(f: Callable, g: Callable) -> Callable:
     """

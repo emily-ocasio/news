@@ -8,13 +8,13 @@ from pymonad import Run, Namespace, with_namespace, to_prompts, put_line, \
 from appstate import selected_option
 from article import Article, Articles, ArticleAppError, from_rows
 from gpt_filtering import GPT_PROMPTS, GPT_MODELS, print_gpt_response, \
-    save_article_fn, filter_article
+    save_article_fn, filter_article, save_gpt_fn
 from menuprompts import NextStep, MenuPrompts, MenuChoice, input_from_menu
 
 FIX_PROMPTS: dict[str, str | tuple[str,]] = {
     "record_id": "Please enter the record ID of the article you want to fix: ",
 }
-ARTICLE_PROMPT = ("Apply [S]econd filter via GPT", 
+ARTICLE_PROMPT = ("Apply [S]econd filter via GPT",
                   "[C]ontinue to select another article",
                   "Go back to [M]ain menu")
 
@@ -88,10 +88,12 @@ def second_filter(article: Article) -> Run[Article]:
     Process second filter action for the article.
     """
     save_article = save_article_fn(article)
+    save_gpt = save_gpt_fn(article)
     return \
         filter_article(article) >> \
         print_gpt_response >> \
         save_article >> \
+        save_gpt >> \
         rethrow ^ \
         pure(article)
 
