@@ -20,8 +20,8 @@ T = TypeVar('T', bound=Semigroup)
 M = TypeVar('M', bound=Monoid)
 N = TypeVar('N', bound=Monoid)
 
-class Applicative[A]():
-    """ Base class for Applicative instances."""
+# class Applicative[A]():
+#     """ Base class for Applicative instances."""
 
 
 @dataclass(frozen=True)

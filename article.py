@@ -98,31 +98,6 @@ class Article:
                 gpt_class = "M"
             case _, _:
                 gpt_class = "ERR_OTHER"
-        # _homicide_class = cast(HomicideClassDCResponse, homicide_class)
-        # match _homicide_class.classification, _homicide_class.location:
-        #     case (None, None):
-        #         gpt_class = None
-        #     case HomicideClass.OTHER_ACTUAL_HOMICIDE, LocationClassDC.IN_DC:
-        #         gpt_class = "M"
-        #     case HomicideClass.OTHER_ACTUAL_HOMICIDE,
-        #          LocationClassDC.NOT_IN_DC:
-        #         gpt_class = "O"
-        #     case HomicideClass.OTHER_ACTUAL_HOMICIDE, None:
-        #         gpt_class = "E_M_NONE"
-        #     case HomicideClass.VEHICULAR_HOMICIDE, _:
-        #         gpt_class = "N_VEH"
-        #     case HomicideClass.KILLED_BY_LAW_ENFORCEMENT, _:
-        #         gpt_class = "N_LAW"
-        #     case HomicideClass.FICTIONAL_HOMICIDE, _:
-        #         gpt_class = "N_FIC"
-        #     case HomicideClass.MILITARY_KILLINGS, _:
-        #         gpt_class = "N_MIL"
-        #     case HomicideClass.NO_HOMICIDE_IN_ARTICLE, _:
-        #         gpt_class = "N_NOHOM"
-        #     case None, _:
-        #         gpt_class = "E_NONE"
-        #     case _:
-        #         gpt_class = "E_OTHER"
         return None if not gpt_class else String(gpt_class)
 
 def from_row(row: Row, current: int = 0, total: int = 0) -> Article:

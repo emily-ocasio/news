@@ -1,5 +1,6 @@
 """ Implements purescript-like Array type in Python."""
 # pylint: disable=W0212
+from __future__ import annotations
 from dataclasses import dataclass
 from functools import reduce
 from typing import Callable, TypeVar, Type, Self
@@ -12,7 +13,7 @@ from .monoid import Monoid
 B = TypeVar('B')
 C = TypeVar('C')
 M = TypeVar('M', bound=Monoid)
-F = TypeVar('F', bound=Applicative)
+# F = TypeVar('F', bound=Applicative)
 
 @dataclass(frozen=True)
 class Array[A](Functor[A], Monoid):
@@ -37,6 +38,11 @@ class Array[A](Functor[A], Monoid):
 
     def __getitem__(self, index: int) -> A:
         return self.a[index]
+
+    @property
+    def length(self) -> int:
+        """Returns the length of the Array."""
+        return len(self.a)
 
     def append(self: "Array[A]", other: "Array[A]") -> "Array[A]":
         return Array(self.a + other.a)
@@ -144,6 +150,13 @@ class Array[A](Functor[A], Monoid):
         """
         return reduce(lambda x, y: x.append(f(y)), self.a, m_cls.mempty())
 
+    def filter(self, predicate: Callable[[A], bool]) -> Array[A]:
+        """
+        Filters the Array based on a predicate function.
+        Returns a new Array containing only elements that satisfy the predicate.
+        """
+        return Array(tuple(filter(predicate, self.a)))
+
     def traverse(self, f: Callable[[A], Applicative[B]]) \
         -> Applicative["Array[B]"]:
         """
@@ -174,7 +187,7 @@ class Array[A](Functor[A], Monoid):
             return (cons & f(x)) * acc
         return rest.foldr(fn, acc0)
 
-    def sequence(self: "Array[Applicative[B]]") -> Applicative["Array[B]"]:
+    def sequence(self: Array[Applicative[B]]) -> Applicative[Array[B]]:
         """
         Sequences an Array of Applicatives into an Applicative of Array.
         Applies the applicative context to each element and combines them.

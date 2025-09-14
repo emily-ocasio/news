@@ -2,7 +2,7 @@
 # run_effects_menu_all.py — Python "Run" (à la PureScript)
 #   with Reader + State + Except in the controller
 """
-
+from __future__ import annotations
 # pylint: disable=W0212
 # pylint: disable=E1101
 
@@ -11,6 +11,7 @@ from dataclasses import dataclass
 import traceback
 from typing import cast, Any, TypeVar
 
+from .applicative import Applicative
 from .array import Array
 from .dispatch import GetLine, PutLine, InputPrompt
 from .either import Either, Left, Right
@@ -88,7 +89,7 @@ class _Thrown(Exception):
 
 
 @dataclass(slots=True, frozen=True)
-class Run[A](Functor[A]):
+class Run[A](Functor[A], Applicative[A]):
     """
     Carrier for effectful computations, parameterized by type A.
     Encapsulates a computation step and a performer for handling intents.
@@ -96,53 +97,61 @@ class Run[A](Functor[A]):
     _step: Callable[["Run[Any]"], A]
     _perform: Callable[[Any, "Run[Any]"], Any]
 
-    def __init__(self, step: Callable[["Run[Any]"], A],
-                 perform: Callable[[Any, "Run[Any]"], Any]):
+    def __init__(self, step: Callable[[Run[Any]], A],
+                 perform: Callable[[Any, Run[Any]], Any]):
         object.__setattr__(self, "_step", step)
         object.__setattr__(self, "_perform", perform)
 
-    def __rand__(self, f: Callable[[A], B]) -> "Run[B]":
+    def __rand__(self, f: Callable[[A], B]) -> Run[B]:
         """
         Enables using the & operator for mapping a function
         over the Run.
         """
         return self.map(f)
 
-    def __rshift__(self, f: Callable[[A], "Run[B]"]) -> "Run[B]":
+    def __rshift__(self, f: Callable[[A], Run[B]]) -> Run[B]:
         """
         Enables using the >> operator for chaining computations
         over the Run.
         """
         return self._bind(f)
 
-    def __mul__(self: "Run[Callable[[B], C]]", other: "Run[B]") -> "Run[C]":
+    def __mul__(self: Run[Callable[[B], C]], other: Applicative[B]) -> Run[C]:
         """
         Enables using the * operator for applying a function
         in the Run to a value in the Run.
         """
-        return self._apply(other)
+        return self._apply(cast(Run[B], other))
 
-    def __xor__(self, other: "Run[B]") -> "Run[B]":
+    def __xor__(self, other: Run[B]) -> Run[B]:
         """
         Enables using the ^ operator for applying a function
         in the Run to a value in the Run.
         """
         return self.apply_second(other)
 
-    def map(self, f: Callable[[A], B]) -> "Run[B]":
+    def map(self, f: Callable[[A], B]) -> Run[B]:
         """
         Functor map: transforms the result of the computation using function f.
         """
         return Run(lambda self_run: f(self._step(self_run)), self._perform)  # pylint: disable=no-member
 
-    def _apply(self: "Run[Callable[[B], C]]", other: "Run[B]") -> "Run[C]":
+    def _apply(self: Run[Callable[[B], C]], other: Applicative[B]) \
+        -> Run[C]:
         """
         Applies a function in the context of the
         Run monad to a value in the context.
         """
-        return ap(self, other, Run)
+        return ap(self, cast(Run[B], other), Run)
 
-    def _bind(self, f: Callable[[A], "Run[B]"]) -> "Run[B]":
+    @classmethod
+    def pure(cls, value: B) -> Run[B]:
+        """
+        Wraps a value in the Run context.
+        """
+        return Run(lambda _: value, _unhandled)
+
+    def _bind(self, f: Callable[[A], Run[B]]) -> Run[B]:
         """
         Monad bind: chains computations by passing the result to function f,
           which returns a new Run.
@@ -150,7 +159,7 @@ class Run[A](Functor[A]):
         return Run(lambda self_run: f(self._step(self_run))._step(self_run),
                    self._perform)
 
-    def apply_second(self, other: "Run[B]") -> "Run[B]":
+    def apply_second(self, other: Run[B]) -> Run[B]:
         """
         Applies the second Run to the first Run,
         discarding the result of the first Run.
@@ -165,7 +174,7 @@ def pure(x: A) -> Run[A]:
     """
     Lift a pure value into the Run monad.
     """
-    return Run(lambda _self: x, _unhandled)
+    return Run.pure(x)
 
 # ===== Smart constructors =====
 

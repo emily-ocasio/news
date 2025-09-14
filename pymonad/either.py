@@ -1,6 +1,7 @@
 """
 Implementation of Either monad
 """
+from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, TypeVar, Callable, overload
 
@@ -12,7 +13,7 @@ R = TypeVar("R")
 S = TypeVar("S")
 T = TypeVar("T")
 
-type Either[L,R] = "Left[L]" | "Right[R]"
+type Either[L,R] = 'Left[L]' | 'Right[R]'
 
 @dataclass(frozen=True)
 class Left[L](Functor):
@@ -22,27 +23,27 @@ class Left[L](Functor):
     l: L
 
     @classmethod
-    def make(cls, value) -> 'Left':
+    def make(cls, value) -> Left[L]:
         """Creates a new instance of Left."""
         return cls(value)
 
-    def __mul__(self, other: Either[L, Any]) -> "Left[L]":
+    def __mul__(self, other: Either[L, Any]) -> Left[L]:
         """Overrides the * operator for use as apply."""
         return self._apply(other)
 
-    def map(self, f: Callable[[R], S]) -> 'Left[L]':
+    def map(self, f: Callable[[R], S]) -> Left[L]:
         return self.make(self.l)
 
     def _apply(self, other) -> "Left[L]":  # pylint: disable=unused-argument
         return self
 
-    def __rshift__(self, m: Callable[[R], Either[L, S]]) -> "Left[L]":
+    def __rshift__(self, m: Callable[[R], Either[L, S]]) -> Left[L]:
         return self
 
-    def _bind(self, m: Callable[[R], Either[L, S]]) -> "Left[L]":  # pylint: disable=unused-argument
+    def _bind(self, m: Callable[[R], Either[L, S]]) -> Left[L]:  # pylint: disable=unused-argument
         return self
 
-    def __rand__(self, other: Callable[[R], S]) -> 'Left[L]':
+    def __rand__(self, other: Callable[[R], S]) -> Left[L]:
         return map(other, self)
 
     def __repr__(self):
@@ -61,25 +62,25 @@ class Right[R](Functor[R]):
     r: R
 
     @overload
-    def __mul__(self: "Right[Callable[[S], T]]", other: Left[L]) -> Left[L]: ...
+    def __mul__(self: Right[Callable[[S], T]], other: Left[L]) -> Left[L]: ...
     @overload
-    def __mul__(self: "Right[Callable[[S], T]]", other: "Right[S]")\
-        -> "Right[T]": ...
+    def __mul__(self: Right[Callable[[S], T]], other: Right[S])\
+        -> Right[T]: ...
 
-    def __mul__(self: "Right[Callable[[S], T]]", other: Either[L, S])\
+    def __mul__(self: Right[Callable[[S], T]], other: Either[L, S])\
         -> Either[L, T]:
         """Overrides the * operator for use as apply."""
         return self._apply(other)
 
     @classmethod
-    def make(cls, value) -> 'Right':
+    def make(cls, value) -> Right:
         """Creates a new instance of Right."""
         return cls(value)
 
-    def map(self, f: Callable[[R], S]) -> 'Right[S]':
+    def map(self, f: Callable[[R], S]) -> Right[S]:
         return self.make(f(self.r))
 
-    def _apply(self: "Right[Callable[[S], T]]", other: Either[L, S])\
+    def _apply(self: Right[Callable[[S], T]], other: Either[L, S])\
         -> Either[L, T]:
         """Applies the function wrapped in Right to another Either value."""
         return ap(self, other, Right)
@@ -100,13 +101,14 @@ class Right[R](Functor[R]):
         return m(self.r)
 
     @classmethod
-    def pure(cls, value: R) -> 'Right[R]':
+    def pure(cls, value: R) -> Either[Any, R]:
         """
         Wraps a value in the Right context.
         """
-        return cls(value)
+        _result: Either[Any, R] = Right.make(value)
+        return _result
 
-    def __rand__(self, other: Callable[[R], S]) -> 'Right[S]':
+    def __rand__(self, other: Callable[[R], S]) -> Right[S]:
         return map(other, self)
 
     def __repr__(self):

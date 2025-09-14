@@ -1,7 +1,7 @@
 """
 This module provides a base class for Semigroup instances.
 """
-
+# pylint: disable=W2301
 from typing import Protocol, Self
 
 

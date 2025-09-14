@@ -1,6 +1,7 @@
 """ monad protocol
 """
 # pylint: disable=W2301
+from enum import Enum
 from typing import Any, Callable, Protocol, TypeVar, cast, \
     ParamSpec, Concatenate
 
@@ -11,6 +12,11 @@ A = TypeVar('A')
 B = TypeVar('B')
 C = TypeVar('C')
 
+class Unit(Enum):
+    """ Unit type for functions that return nothing """
+    UNIT = "Unit"
+
+unit = Unit.UNIT
 class Monad[A](Applicative[A], Protocol):
     """
     Protocol for Monad, extending Applicative
