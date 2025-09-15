@@ -130,4 +130,5 @@ def process_all(validators: Array[Validator[S]],
         -> Run[V[ItemsFailures[S], Array[T]]]:
         # Combine all the results into a single array
         return Run.pure(array_sequence(vs))
-    return array_traverse(items, process_one) >> combine_results
+    return (array_traverse(items, process_one) >> combine_results) \
+        if items.length > 0 else Run.pure(V.pure(Array(())))

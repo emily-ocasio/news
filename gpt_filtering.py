@@ -10,8 +10,8 @@ import re
 
 from appstate import user_name
 from pymonad import Run, with_namespace, to_prompts, Namespace, EnvKey, \
-    PromptKey, pure, put_line, sql_query, SQL, SQLParams, Either, Right, \
-    GPTModel, with_models, response_with_gpt_prompt, foldm_either_loop_bind, \
+    PromptKey, pure, put_line, sql_query, SQL, SQLParams, Right, \
+    GPTModel, with_models, response_with_gpt_prompt, \
     to_gpt_tuple, response_message, to_json, rethrow, from_either, sql_exec, \
     GPTResponseTuple, GPTFullResponse, String, input_number, throw, \
     ErrorPayload, Tuple, resolve_prompt_template, GPTPromptTemplate, wal, ask, \
@@ -85,22 +85,6 @@ def variables_dict(article: Article) -> dict[str, str | None]:
         "article_text": article.full_text,
         "article_date": article.full_date
     }
-
-# def pre_filter_article(article: Article) -> Run[V[ArticleAppError, Article]]:
-#     """
-#     Pre-filter an article to see if it should be processed by GPT.
-#     Specifically, Do not process if the article contains one
-#     of the terms that indicate it about a special case with
-#     large amount of press coverage.
-#     """
-#     text = (article.title or '') + ' ' + (article.full_text or '')
-#     for term in SPECIAL_CASE_TERMS:
-#         pattern = fr"\b{re.escape(term)}\b"
-#         if re.search(pattern, text, re.IGNORECASE):
-#             return \
-#                 put_line(f"Article is a special case: {term}\n") ^ \
-#                 pure(Just(String(term)))
-#     return pure(Nothing)
 def special_case_validators() -> Array[ArticleValidator]:
     """
     Create an array of validators for special case terms.
@@ -255,32 +239,6 @@ def save_gpt_fn(article: Article) -> GPTFullKreisli:
     bind_save = bind_first(save_gpt_result, article)
     return bind_first(from_either, bind_save)
 
-def process_append(articles: Articles, article: Article) \
-    -> Run[Either[str, Articles]]:
-    """
-    Filter the next article and append to accumulated list
-    of processed articles
-    """
-    save_article= save_article_fn(article)
-    save_gpt = save_gpt_fn(article)
-    def append_to_acc() -> Run[Either[str, Articles]]:
-        return pure(Right(Articles.snoc(articles, article)))
-    return \
-        put_line(f"Processing article {article}...\n") ^ \
-        filter_article(article) >> \
-        print_gpt_response >> \
-        save_article >> \
-        save_gpt ^ \
-        append_to_acc()
-
-def process_articles(articles: Articles) -> Run[Either]:
-    """
-    Process the articles to be filtered.
-    """
-    return \
-        foldm_either_loop_bind(articles, Articles(()), process_append) >> \
-        rethrow
-
 def filter_single_article(article: Article) -> Run[Article]:
     """
     Filter a single article, returning the article on success.
@@ -318,8 +276,10 @@ def process_special_cases(special_failures: Array[ArticleFailures]) \
             gpt_class = \
                 String("SP_" + "_".join(to_upper & special_case_terms))
             return \
+                put_line(f"Special case article id {af.item.record_id} "\
+                    f"title: {af.item.title}\n") ^ \
                 put_line("Special case article assigned class "\
-                         f"{gpt_class}\n") ^ \
+                    f"{gpt_class}\n") ^ \
                 save_article_class(Tuple(af.item, gpt_class))
         def render(err: ErrorPayload) -> FailureDetails:
             return Array((FailureDetail(

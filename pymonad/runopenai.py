@@ -104,7 +104,7 @@ def run_openai(
                             prompt=prompt.to_gpt,
                             text_format=text_format,
                             reasoning={
-                                "effort": "medium",
+                                "effort": "low",
                                 "summary": "detailed"
                             },
                             timeout=60.0
