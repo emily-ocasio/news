@@ -257,10 +257,13 @@ def display_gpt_victims(json_str: str) -> str:
     """
     Display GPT-3 generated victim list
     """
-    victims = json.dumps(json.loads(json_str), indent=2)
-    # ArticleAnalysisResponse.model_validate_json(json)
-    # return victims.model_dump_json(indent = 4)
-    return victims
+    try:
+        victims = json.dumps(json.loads(json_str), indent=2)
+        # ArticleAnalysisResponse.model_validate_json(json)
+        # return victims.model_dump_json(indent = 4)
+        return victims
+    except json.decoder.JSONDecodeError:
+        return "Invalid JSON"
 
 
 def display_remaining_lines(lines, limit_lines=0) -> str:

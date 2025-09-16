@@ -640,6 +640,22 @@ def articles_to_filter_sql() -> str:
         LIMIT ?
     """
 
+def articles_to_extract_sql() -> str:
+    """
+    SQL statement to return articles to extract based on a limit
+    Only considers articles within the dataset called 'CLASS_WP'
+    And that the AutoClass is 'M' (previously filtered as murder by regex)
+    as that the gptClass is 'M_PRELIM' (already classified as homicides in DC)
+    """
+    return """
+        SELECT * FROM articles
+        WHERE Dataset = 'CLASS_WP'
+        AND AutoClass = 'M'
+        AND gptClass IS 'M_PRELIM'
+        ORDER BY PubDate
+        LIMIT ?
+    """
+
 def articles_by_victim_sql() -> str:
     """
     SQL statement to return articles by victim id

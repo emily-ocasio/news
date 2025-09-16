@@ -23,6 +23,7 @@ def main() -> None:
     """
     env: Environment = {
         "db_path": "newarticles.db",
+        "duckdb_path": "news.duckdb",
         "prompt_ns": Namespace(""),
         "prompts_by_ns": {},
         "openai_default_model": GPTModel.GPT_5_NANO,

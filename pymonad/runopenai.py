@@ -5,7 +5,7 @@ Intent, eliminator and constructors for OpenAI API calls
 from dataclasses import dataclass
 from collections.abc import Callable
 import json
-from typing import Any, TypeVar, cast
+from typing import Any, TypeVar, cast, Literal
 
 
 from jsonref import replace_refs
@@ -30,18 +30,21 @@ class OAChat:
     model: GPTModel
     text_format: type[BaseModel] | None = None
     temperature: float = 0
+    effort: Literal['low', 'medium', 'high'] = "low"
 
 
 def gpt_response(prompt: GPTPrompt,
                  model: GPTModel,
                  text_format: type[BaseModel] | None,
-                 temperature: float = 0) \
+                 temperature: float = 0,
+                 effort: Literal["low", "medium", "high"] = "low") \
                     -> Run[Response | ParsedResponse[BaseModel]]:
     """
     Call the OpenAI API with the given parameters and return the response.
     """
     intent = OAChat(
-        prompt, text_format=text_format, model=model, temperature=temperature)
+        prompt, text_format=text_format, model=model, temperature=temperature, \
+              effort=effort)
     return Run(lambda self: self._perform(intent, self), _unhandled)
 
 def resolve_prompt_template(env: Environment, prompt_key: PromptKey) \
@@ -57,7 +60,8 @@ def resolve_prompt_template(env: Environment, prompt_key: PromptKey) \
 def response_with_gpt_prompt(prompt_key: PromptKey,
                              variables: dict[str, str | None],
                              text_format: type[BaseModel],
-                             model_key: EnvKey) \
+                             model_key: EnvKey,
+                             effort: Literal["low", "medium", "high"] = "low") \
     -> Run[Response | ParsedResponse]:
     """
     Resolve the GPT prompt from the environment.
@@ -79,7 +83,7 @@ def response_with_gpt_prompt(prompt_key: PromptKey,
     return \
         ask() >> (lambda env:
         resolve_prompt(env) >> (lambda prompt: \
-        gpt_response(prompt, resolve_model(env), text_format)
+        gpt_response(prompt, resolve_model(env), text_format, effort=effort)
         ))
 
 def run_openai(
@@ -97,14 +101,14 @@ def run_openai(
                     "Run[Response | ParsedResponse[BaseModel]]") \
             -> Any:
             match intent:
-                case OAChat(prompt, model, text_format, temperature):
+                case OAChat(prompt, model, text_format, temperature, effort):
                     if text_format:
                         return client.responses.parse(
                             model=model.value,
                             prompt=prompt.to_gpt,
                             text_format=text_format,
                             reasoning={
-                                "effort": "low",
+                                "effort": effort,
                                 "summary": "detailed"
                             },
                             timeout=60.0

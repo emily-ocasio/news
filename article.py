@@ -11,8 +11,9 @@ from pydantic import BaseModel
 
 from calculations import display_article, camel_to_snake
 from pymonad import Array, String
-from state import WashingtonPostArticleAnalysis, Article_Classification, \
-    Homicide_Classification
+from state import WashingtonPostArticleHomicideClassification, \
+    Article_Classification, \
+    Homicide_Classification, WashingtonPostArticleIncidentExtraction
 
 class ArticleAppError(str, Enum):
     """
@@ -68,7 +69,8 @@ class Article:
         Updates the GPT classification for the article.
         """
         gpt_class: str | None = None
-        _homicide_class = cast(WashingtonPostArticleAnalysis, homicide_class)
+        _homicide_class = cast(WashingtonPostArticleHomicideClassification, \
+                               homicide_class)
         match _homicide_class.article_classification, \
             _homicide_class.homicide_classification:
             case (None, None):
@@ -95,10 +97,25 @@ class Article:
                 gpt_class = "N_MIL"
             case (Article_Classification.HOMICIDE_IN_WASHINGTON_DC_SINCE_1977,
                   Homicide_Classification.OTHER_ACTUAL_HOMICIDE):
-                gpt_class = "M"
+                gpt_class = "M_PRELIM"
             case _, _:
                 gpt_class = "ERR_OTHER"
         return None if not gpt_class else String(gpt_class)
+
+    @classmethod
+    def extracted_gpt_class(cls, extraction: BaseModel) \
+        -> String | None:
+        """
+        Returns the extracted GPT classification for the article.
+        """
+        gpt_class: str | None = None
+        _extraction = cast(WashingtonPostArticleIncidentExtraction, \
+                               extraction)
+        if len(_extraction.incidents) == 0:
+            gpt_class = "N_NOINC"
+        else:
+            gpt_class = "M"
+        return String(gpt_class)
 
 def from_row(row: Row, current: int = 0, total: int = 0) -> Article:
     """

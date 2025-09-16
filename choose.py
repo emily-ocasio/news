@@ -31,9 +31,11 @@ initial_prompts = (
     "Enter [N]ew labels",
     "[A]uto categorize by date",
     "[S]econd filtering via GPT",
+    "[G]PT extraction of incident details",
     "Assign articles to [H]omicides",
     "Determine humani[Z]ing coverage",
-    "Candidate [V]ictim list"
+    "Candidate [V]ictim list",
+    "Build [I]ncident views (DuckDB)"
 )
 
 label_prompts = (

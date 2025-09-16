@@ -295,6 +295,48 @@ class WashingtonPostArticleAnalysis(BaseModel):
             f"GPT homicide classification: {hom}\n" + \
             self.incidents_json
 
+class WashingtonPostArticleHomicideClassification(BaseModel):
+    """
+    Response model for Washington Post article homicide classification
+    Does not include incidents.
+    """
+    model_config = ConfigDict(extra="forbid")
+    article_classification: Article_Classification
+    homicide_classification: Homicide_Classification | None
+
+    @property
+    def result_str(self) -> str:
+        """
+        Return a string summary of the classification results.
+        """
+        art = self.article_classification.value
+        hom = self.homicide_classification.value \
+            if self.homicide_classification else 'None'
+        return f"GPT article classification: {art}\n" + \
+            f"GPT homicide classification: {hom}\n"
+
+class WashingtonPostArticleIncidentExtraction(BaseModel):
+    """
+    Response model for Washington Post article extraction of incident details.
+    """
+    incidents: list[Incident]
+
+    @property
+    def incidents_json(self) -> str:
+        """
+        Return the incidents as a JSON string."""
+        if len(self.incidents) == 0:
+            return ""
+        incidents_list = self.model_dump()['incidents']
+        return json.dumps(incidents_list, indent=2)
+
+    @property
+    def result_str(self) -> str:
+        """
+        Return a string summary of the results (incidents only).
+        """
+        return self.incidents_json
+
 class VictimDC(VictimBase):
     """
     Model for Victim information in Washington, DC

@@ -13,6 +13,7 @@ class AppState(Monoid):
     """
     user_name: String = String.mempty()
     selected_option: String = String.mempty()
+    prompt_key: String = String.mempty()
 
     @classmethod
     def mempty(cls) -> "AppState":
@@ -39,3 +40,4 @@ class AppState(Monoid):
 
 user_name: Lens[AppState, str] = lens("user_name")
 selected_option: Lens[AppState, str] = lens("selected_option")
+prompt_key: Lens[AppState, str] = lens("prompt_key")

@@ -52,6 +52,7 @@ class Environment(TypedDict):
     prompt_ns: ReadOnly[Namespace]
     prompts_by_ns: ReadOnly[NamedPrompts]
     db_path: ReadOnly[str]
+    duckdb_path: ReadOnly[str]
     openai_client: ReadOnly[Callable]
     openai_default_model: ReadOnly[GPTModel]
     openai_models: ReadOnly[dict[EnvKey, GPTModel]]

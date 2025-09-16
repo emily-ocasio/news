@@ -7,8 +7,9 @@ from appstate import AppState
 from choose import initial_prompts as mainmenu_prompts
 from menuprompts import MenuChoice, MenuPrompts, input_from_menu, NextStep
 
-
+from incidents import gpt_incidents
 from gpt_filtering import second_filter
+from incidents_setup import build_incident_views
 from fixarticle import fix_article
 
 class MainChoice(Enum):
@@ -21,8 +22,10 @@ class MainChoice(Enum):
     ASSIGN = MenuChoice('H')
     AUTO = MenuChoice('A')
     GPT = MenuChoice('S')
+    EXTRACTION = MenuChoice('G')
     HUMANIZE = MenuChoice('Z')
     VICTIM = MenuChoice('V')
+    INCIDENTS = MenuChoice('I')
     QUIT = MenuChoice('Q')
 
 class AfterTick(Tuple[AppState, NextStep]):
@@ -57,6 +60,10 @@ def dispatch_from_main_menu(choice: MainChoice) \
             return second_filter()
         case MainChoice.FIX:
             return fix_article()
+        case MainChoice.INCIDENTS:
+            return build_incident_views()
+        case MainChoice.EXTRACTION:
+            return gpt_incidents()
         case MainChoice.REVIEW \
             | MainChoice.NEW \
             | MainChoice.ASSIGN \
