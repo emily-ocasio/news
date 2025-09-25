@@ -6,6 +6,106 @@ from pymonad import Run, pure, put_line, ask, run_duckdb, sql_script, \
 from menuprompts import NextStep
 
 # --- DuckDB SQL ---
+# --- Victim-level extraction & feature engineering ---
+
+# 1) Explode victim array -> one row per victim mention
+CREATE_VICTIMS_CACHED_SQL = SQL(r"""
+CREATE OR REPLACE TABLE victims_cached AS
+SELECT
+  a.article_id,
+  a.city_id,
+  a.publish_date,
+  a.incident_idx,
+  CAST(v.key AS INTEGER) AS victim_idx,
+  json_extract_string(v.value, '$.victim_name')      AS victim_name_raw,
+  try_cast(json_extract_string(v.value, '$.victim_age') AS INTEGER) AS victim_age_raw,
+  json_extract_string(v.value, '$.victim_sex')       AS victim_sex,
+  json_extract_string(v.value, '$.victim_race')      AS victim_race,
+  json_extract_string(v.value, '$.victim_ethnicity') AS victim_ethnicity,
+
+  a.incident_date, a.event_start_day, a.event_end_day,
+  a.street_token, a.weapon, a.circumstance,
+
+  lower(regexp_replace(coalesce(a.offender_name,''), '[^a-z ]', '', 'g')) AS offender_name_norm,
+
+  concat_ws(':', CAST(a.article_id AS VARCHAR), CAST(a.incident_idx AS VARCHAR), CAST(CAST(v.key AS INTEGER) AS VARCHAR)) AS victim_row_id
+FROM incidents_cached a
+CROSS JOIN json_each(CAST(a.incident_json AS JSON), '$.victim') AS v
+WHERE json_type(CAST(a.incident_json AS JSON), '$.victim') = 'ARRAY';
+""")
+
+# 2) Normalize names + sanitize age,
+# add coarse age bucket + parsed forename/surname
+CREATE_VICTIMS_CACHED_ENH_SQL = SQL(r"""
+CREATE OR REPLACE TABLE victims_cached_enh AS
+WITH norm AS (
+  SELECT
+    v.*,
+    -- keep letters, apostrophes, hyphens, spaces; lowercase and trim
+    trim(
+      lower(
+        regexp_replace(
+          coalesce(victim_name_raw, ''),
+          '[^A-Za-z''\- ]'
+          ' ',
+          'g'
+        )
+      )
+    ) AS name_clean
+  FROM victims_cached v
+),
+-- strip common titles at the start
+strip AS (
+  SELECT
+    *,
+    regexp_replace(name_clean, '^(?i)(mr|mrs|ms|miss|dr|rev|ofc|officer)\s+', '', 'g') AS name_no_title
+  FROM norm
+),
+-- strip common suffixes at the end
+strip2 AS (
+  SELECT
+    *,
+    regexp_replace(name_no_title, '\s+(?i)(jr|sr|ii|iii|iv)\.?$', '', 'g') AS name_core
+  FROM strip
+),
+parts AS (
+  SELECT
+    *,
+    -- forename = first token
+    regexp_extract(name_core, '^([a-z''\-]+)', 1) AS victim_forename_norm,
+    -- surname: keep common particles with last token, else just last token
+    CASE
+      WHEN regexp_matches(name_core, '(?i)(?:^|\s)(?:de la|del|de|van|von|da|di|la|le|st)\s+[a-z''\-]+$')
+        THEN regexp_extract(name_core, '((?i)(?:de la|del|de|van|von|da|di|la|le|st)\s+[a-z''\-]+)$', 1)
+      ELSE regexp_extract(name_core, '([a-z''\-]+)$', 1)
+    END AS victim_surname_norm
+  FROM strip2
+)
+SELECT
+  *,
+  -- concise full-name concat (enables TF on the *full* name in Splink)
+  CASE
+    WHEN victim_forename_norm IS NOT NULL AND victim_surname_norm IS NOT NULL
+      THEN victim_forename_norm || ' ' || victim_surname_norm
+  END AS victim_fullname_concat,
+
+  -- full normalized name (spaces only; keep for your other comps if needed)
+  regexp_replace(name_core, '[^a-z ]', '', 'g') AS victim_name_norm,
+
+  -- age sanity + 5-year bucket
+  CASE WHEN victim_age_raw BETWEEN 0 AND 120 THEN victim_age_raw END AS victim_age,
+  CASE WHEN victim_age_raw BETWEEN 0 AND 120 THEN floor(victim_age_raw/5) END AS victim_age_bucket5
+FROM parts;
+""")
+
+COUNT_VICTIMS_SQL  = SQL("SELECT COUNT(*) AS n FROM victims_cached_enh;")
+PREVIEW_VICTIMS_SQL = SQL(r"""
+SELECT article_id, incident_idx, victim_idx, victim_row_id,
+       victim_name_raw, victim_age, victim_sex, victim_race, victim_ethnicity
+FROM victims_cached_enh
+LIMIT 10;
+""")
+# --- Incident-level extraction & feature engineering ---
 CREATE_STG_ARTICLE_INCIDENTS_SQL = SQL(r"""
 CREATE OR REPLACE VIEW stg_article_incidents AS
 WITH base AS (
@@ -94,6 +194,7 @@ norm AS (
 SELECT
   article_id, city_id,
   incident_idx,
+  CAST(incident_json AS JSON) AS incident_json,
   publish_date, article_title, article_text,
   year_raw AS year, month_sane AS month, day_sane AS day,
   incident_date, event_start_day, event_end_day,
@@ -161,16 +262,25 @@ def build_incident_views() -> Run[NextStep]:
                     put_line(f"[I] View rows: {rows[0]['n']}")
                 ) ^
                 sql_script(CREATE_INCIDENTS_CACHED_SQL) ^
-                sql_query(COUNT_CACHE_SQL) >> (lambda rows:
-                    put_line(f"[I] incidents_cached rows: {rows[0]['n']}")
+                # (optional) sanity check that column exists
+                sql_query(SQL("PRAGMA table_info('incidents_cached')")) >> \
+                  (lambda rows:
+                    put_line("[I] incidents_cached columns: " +
+                            ", ".join(str(r['name']) for r in rows))
                 ) ^
-                sql_query(PREVIEW_CACHE_SQL) >> (lambda rows:
-                    put_line("[I] Preview incidents_cached (first 10):") ^
+                sql_script(CREATE_VICTIMS_CACHED_SQL) ^
+                sql_script(CREATE_VICTIMS_CACHED_ENH_SQL) ^
+                sql_query(COUNT_VICTIMS_SQL) >> (lambda rows:
+                    put_line(f"[I] victims_cached_enh rows: {rows[0]['n']}")
+                ) ^
+                sql_query(PREVIEW_VICTIMS_SQL) >> (lambda rows:
+                    put_line("[I] Preview victims_cached_enh (first 10):") ^
                     put_line("\n".join(
-                        f"  id={r['article_id']} inc={r['incident_idx']} "
-                        f"date={r['incident_date']} weapon={r['weapon']} "
-                        f"circ={r['circumstance']} "
-                        f"summary='{r['summary_snip']}'" for r in rows
+                        f"  art={r['article_id']} inc={r['incident_idx']} "
+                        f"vic={r['victim_idx']} id={r['victim_row_id']} "
+                        f"name='{r['victim_name_raw']}' age={r['victim_age']} "
+                        f"sex={r['victim_sex']} race={r['victim_race']}"
+                        for r in rows
                     ))
                 )
             ),

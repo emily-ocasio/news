@@ -20,10 +20,11 @@ from .run import Run, pure, ask, get, put, throw, rethrow, \
 from .openai import GPTPrompt, GPTFullResponse, GPTPromptTemplate, GPTModel, \
     GPTResponseTuple, to_gpt_tuple
 from .runsql import run_sqlite, SQL, SQLParams, sql_query, sql_exec, \
-    run_duckdb, sql_script
+    run_duckdb, sql_script, with_duckdb
 from .runopenai import run_openai, with_models, response_with_gpt_prompt, \
     response_message, to_json, from_either, resolve_prompt_template
 from .semigroup import Semigroup
+from .runsplink import splink_dedupe_job
 from .string import Char, String, from_char_array, from_string
 from .traverse import array_sequence, array_traverse
 from .tuple import Tuple, Threeple

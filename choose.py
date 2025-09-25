@@ -35,7 +35,8 @@ initial_prompts = (
     "Assign articles to [H]omicides",
     "Determine humani[Z]ing coverage",
     "Candidate [V]ictim list",
-    "Build [I]ncident views (DuckDB)"
+    "Build [I]ncident views (DuckDB)",
+    "Run [D]edup incidents (Splink)"
 )
 
 label_prompts = (

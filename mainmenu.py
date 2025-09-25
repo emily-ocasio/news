@@ -8,6 +8,7 @@ from choose import initial_prompts as mainmenu_prompts
 from menuprompts import MenuChoice, MenuPrompts, input_from_menu, NextStep
 
 from incidents import gpt_incidents
+from incidents_dedupe import dedupe_incidents
 from gpt_filtering import second_filter
 from incidents_setup import build_incident_views
 from fixarticle import fix_article
@@ -26,6 +27,7 @@ class MainChoice(Enum):
     HUMANIZE = MenuChoice('Z')
     VICTIM = MenuChoice('V')
     INCIDENTS = MenuChoice('I')
+    DEDUP = MenuChoice('D')
     QUIT = MenuChoice('Q')
 
 class AfterTick(Tuple[AppState, NextStep]):
@@ -64,6 +66,8 @@ def dispatch_from_main_menu(choice: MainChoice) \
             return build_incident_views()
         case MainChoice.EXTRACTION:
             return gpt_incidents()
+        case MainChoice.DEDUP:
+            return dedupe_incidents()
         case MainChoice.REVIEW \
             | MainChoice.NEW \
             | MainChoice.ASSIGN \

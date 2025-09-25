@@ -10,7 +10,7 @@ import sqlite3
 import duckdb
 
 from .array import Array
-from .run import Run, _unhandled
+from .run import Run, _unhandled, ask
 from .string import String
 
 class SQL(String):
@@ -224,3 +224,13 @@ def run_duckdb(
         finally:
             con.close()
     return Run(step, lambda i, c: c._perform(i, c))
+
+def with_duckdb(subprog: Run[A]) -> Run[A]:
+    """
+    Context wrapper to run a sub-program in DuckDB mode.
+    Assumes the environment has "duckdb_path" set.
+    """
+    return \
+        ask() >> (lambda env:
+        run_duckdb(env["duckdb_path"], subprog)
+        )
