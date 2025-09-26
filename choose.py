@@ -36,6 +36,7 @@ initial_prompts = (
     "Determine humani[Z]ing coverage",
     "Candidate [V]ictim list",
     "Build [I]ncident views (DuckDB)",
+    "Run [M]AR geocoding (addresses)",
     "Run [D]edup incidents (Splink)"
 )
 

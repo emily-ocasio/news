@@ -232,5 +232,6 @@ def with_duckdb(subprog: Run[A]) -> Run[A]:
     """
     return \
         ask() >> (lambda env:
-        run_duckdb(env["duckdb_path"], subprog)
+        run_duckdb(env["duckdb_path"], subprog,
+                   attach_sqlite_path=env['db_path'])
         )

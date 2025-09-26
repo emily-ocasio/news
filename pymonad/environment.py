@@ -56,6 +56,7 @@ class Environment(TypedDict):
     openai_client: ReadOnly[Callable]
     openai_default_model: ReadOnly[GPTModel]
     openai_models: ReadOnly[dict[EnvKey, GPTModel]]
+    mar_key: ReadOnly[str]
     extras: ReadOnly[Mapping[EnvKey, Any]]
 
 def all_prompts(env: Environment, ns: Namespace | None = None) -> AllPrompts:

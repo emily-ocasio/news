@@ -13,7 +13,8 @@ from typing import cast, Any, TypeVar
 
 from .applicative import Applicative
 from .array import Array
-from .dispatch import GetLine, PutLine, InputPrompt
+from .dispatch import GetLine, PutLine, InputPrompt, MarGeocode, Sleep, \
+    GeocodeResult
 from .either import Either, Left, Right
 from .environment import Environment, Namespace, PromptKey, AllPrompts, \
     all_prompts
@@ -207,10 +208,18 @@ def put_line(s: str) -> Run[None]:
     """Create a Run action to output a line (base effect)."""
     return Run(lambda self: self._perform(PutLine(s), self), _unhandled)
 
-
 def get_line(prompt: InputPrompt) -> Run[String]:
     """Create a Run action to input a line with a prompt (base effect)."""
     return Run(lambda self: self._perform(GetLine(prompt), self), _unhandled)
+
+def geocode_address(address: str, mar_key: str) -> Run[GeocodeResult]:
+    """Create a Run action to geocode an address via MAR."""
+    return Run(lambda self: self._perform(MarGeocode(address, mar_key), self), \
+               _unhandled)
+
+def sleep_ms(ms: int) -> Run[None]:
+    """Sleep for rate limiting or courtesy."""
+    return Run(lambda self: self._perform(Sleep(ms), self), _unhandled)
 
 # ===== Eliminators =====
 

@@ -12,6 +12,7 @@ from incidents_dedupe import dedupe_incidents
 from gpt_filtering import second_filter
 from incidents_setup import build_incident_views
 from fixarticle import fix_article
+from geocode_incidents import geocode_incidents
 
 class MainChoice(Enum):
     """
@@ -27,6 +28,7 @@ class MainChoice(Enum):
     HUMANIZE = MenuChoice('Z')
     VICTIM = MenuChoice('V')
     INCIDENTS = MenuChoice('I')
+    GEOCODE = MenuChoice('M')
     DEDUP = MenuChoice('D')
     QUIT = MenuChoice('Q')
 
@@ -66,6 +68,8 @@ def dispatch_from_main_menu(choice: MainChoice) \
             return build_incident_views()
         case MainChoice.EXTRACTION:
             return gpt_incidents()
+        case MainChoice.GEOCODE:              # <-- add
+            return geocode_incidents()
         case MainChoice.DEDUP:
             return dedupe_incidents()
         case MainChoice.REVIEW \
