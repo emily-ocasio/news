@@ -1,51 +1,61 @@
 """
 Defines functions with side effects and maps them to intents
 """
+
 from dataclasses import dataclass
 from typing import Callable, TypedDict
+import json
 import time
 import requests
 
 import duckdb
 from splink import Linker, DuckDBAPI
+from splink.internals.blocking_rule_creator import BlockingRuleCreator
+
+
 from .string import String
+
 
 class InputPrompt(String):
     """
     Represents a prompt for user input.
     """
+
+
 class GeocodeResult(TypedDict, total=False):
     """
     Result of geocode query
     """
+
     ok: bool
     normalized_input: str
     matched_address: str
-    x_lon: float           # MAR returns X/Y; X = lon, Y = lat
+    x_lon: float  # MAR returns X/Y; X = lon, Y = lat
     y_lat: float
-    score: float
-    ssl: str               # Street Segment ID (very useful!)
-    anc: str
-    ward: str
-    psa: str
     raw_json: dict
+
 
 @dataclass(frozen=True)
 class PutLine:
     """Base I/O: output a line."""
+
     s: str
-    end: str = '\n'
+    end: str = "\n"
+
 
 @dataclass(frozen=True)
 class GetLine:
     """Base I/O: input a line with prompt."""
+
     prompt: InputPrompt
+
 
 @dataclass(frozen=True)
 class SplinkDedupeJob:
     """
     Splink deduplication intent
     """
+
     duckdb_path: str
     input_table: str
     settings: dict
@@ -53,31 +63,43 @@ class SplinkDedupeJob:
     cluster_threshold: float
     pairs_out: str
     clusters_out: str
+    deterministic_rules: list[str | BlockingRuleCreator]
+    deterministic_recall: float
     train_first: bool = False
+    training_blocking_rule: str | None = None
+
+
 @dataclass(frozen=True)
 class MarGeocode:
     """Effect: Geocode a DC address via MAR 2 API (findAddress2)."""
+
     address: str
     mar_key: str
     # You can add optional params here if needed (e.g., preferScoreMin, etc.)
 
+
 @dataclass(frozen=True)
 class Sleep:
     """Effect: Sleep for N milliseconds (for rate limiting)."""
+
     ms: int
 
 
 REAL_DISPATCH: dict[type, Callable] = {}
+
 
 def intentdef(intent: type) -> Callable[[Callable], Callable]:
     """
     Decorator for intent functions
     Registers the function in the REAL_DISPATCH dictionary
     """
+
     def decorator(func: Callable) -> Callable:
         REAL_DISPATCH[intent] = func
         return func
+
     return decorator
+
 
 @intentdef(PutLine)
 def _putline(x: PutLine) -> None:
@@ -86,25 +108,33 @@ def _putline(x: PutLine) -> None:
     """
     print(x.s, end=x.end)
 
+
 @intentdef(GetLine)
 def _getline(x: GetLine) -> String:
     """
     Get a line of input from the user
     """
-    return String(input(x.prompt if x.prompt[-1] == ' ' else x.prompt + ' '))
+    return String(input(x.prompt if x.prompt[-1] == " " else x.prompt + " "))
+
 
 @intentdef(SplinkDedupeJob)
 def _splink_dedupe(job: SplinkDedupeJob) -> tuple[str, str]:
     db_api = DuckDBAPI(connection=duckdb.connect(job.duckdb_path))
     linker = Linker(job.input_table, job.settings, db_api=db_api)
 
+    linker.training.estimate_probability_two_random_records_match(
+        job.deterministic_rules, recall=job.deterministic_recall
+    )
+    linker.training.estimate_u_using_random_sampling(1e8)
+
     if job.train_first:
-        # Use your prediction blocking rules for training too
-        training_rules = job.settings.get(
-            "blocking_rules_to_generate_predictions", [])
-        # Splink v4: British spelling + explicit training rules param
+        # Prefer explicit training rule from intent, otherwise fall back
+        # to the blocking rules used for prediction.
+        training_rule = job.training_blocking_rule or job.settings.get(
+            "blocking_rules_to_generate_predictions", []
+        )
         linker.training.estimate_parameters_using_expectation_maximisation(
-            blocking_rule=training_rules
+            blocking_rule=training_rule
         )
 
     df_pairs = linker.inference.predict(
@@ -117,86 +147,152 @@ def _splink_dedupe(job: SplinkDedupeJob) -> tuple[str, str]:
     # 3) Persist outputs into stable tables in the same DB
     con = duckdb.connect(job.duckdb_path)
     try:
-        con.execute(f"CREATE OR REPLACE TABLE {job.pairs_out} AS "
-                    f"SELECT * FROM {df_pairs.physical_name}")
-        con.execute(f"CREATE OR REPLACE TABLE {job.clusters_out} AS "
-                    f"SELECT * FROM {df_clusters.physical_name}")
+        con.execute(
+            f"CREATE OR REPLACE TABLE {job.pairs_out} AS "
+            f"SELECT * FROM {df_pairs.physical_name}"
+        )
+        con.execute(
+            f"CREATE OR REPLACE TABLE {job.clusters_out} AS "
+            f"SELECT * FROM {df_clusters.physical_name}"
+        )
     finally:
         con.close()
 
     return (job.pairs_out, job.clusters_out)
+
 
 @intentdef(MarGeocode)
 def _mar_geocode(x: MarGeocode) -> GeocodeResult:
     # MAR 2: https://geocoder.doc.dc.gov/api (findAddress2 endpoint)
     # Simple GET with 'address' and 'f=json'
     url = f"https://datagate.dc.gov/mar/open/api/v2.2/locations/{x.address}"
-    params = {
-        "apikey": x.mar_key
-    }
+    params = {"apikey": x.mar_key}
     try:
         resp = requests.get(url, params=params, timeout=10)
         resp.raise_for_status()
         j = resp.json()
-        cand = (j.get("Result", {}) or {}).get("addresses", [])
-        if not cand:
-            return GeocodeResult(
-                ok=False,
-                normalized_input=x.address,
-                matched_address="",
-                x_lon=0,
-                y_lat=0,
-                score=0,
-                ssl="",
-                anc="",
-                ward="",
-                psa="",
-                raw_json=j
-        )
-        # Take top candidate
-        c0 = cand[0]
-        addr = c0.get("address")
-        score = c0.get("score")
-        # Usually returned nested under 'location' or 'x','y' — MAR returns projection also as 'x','y'
-        loc = c0.get("location", {})
-        x_lon = loc.get("x") if isinstance(loc, dict) else c0.get("x")
-        y_lat = loc.get("y") if isinstance(loc, dict) else c0.get("y")
-
-        # Pull useful geography fields when present
-        # (some fields are under 'marMatchAddr' / 'nodeId' / 'ssl' etc.)
-        mar_attrs = c0.get("marAttributes", {}) or {}
-        ssl = mar_attrs.get("SSL") or mar_attrs.get("ssl")
-        anc = mar_attrs.get("ANC")
-        ward = mar_attrs.get("WARD")
-        psa = mar_attrs.get("PSA")
-
-        return GeocodeResult(
-            ok=True,
-            normalized_input=x.address,
-            matched_address=addr,
-            x_lon=float(x_lon) if x_lon is not None else 0,
-            y_lat=float(y_lat) if y_lat is not None else 0,
-            score=float(score) if score is not None else 0,
-            ssl=str(ssl) if ssl is not None else "",
-            anc=str(anc) if anc is not None else "",
-            ward=str(ward) if ward is not None else "",
-            psa=str(psa) if psa is not None else "",
-            raw_json=j
-        )
-    except Exception as e:  # keep hard failure as not-ok result
+    except requests.exceptions.Timeout as e:
         return GeocodeResult(
             ok=False,
             normalized_input=x.address,
             matched_address="",
             x_lon=0,
             y_lat=0,
-            score=0,
-            ssl="",
-            anc="",
-            ward="",
-            psa="",
-            raw_json={"error": str(e)}
+            raw_json={"message": f"timeout error: {str(e)}"},
         )
+    except requests.exceptions.SSLError as e:
+        return GeocodeResult(
+            ok=False,
+            normalized_input=x.address,
+            matched_address="",
+            x_lon=0,
+            y_lat=0,
+            raw_json={"message": f"ssl error: {str(e)}"},
+        )
+    except requests.exceptions.HTTPError as e:
+        code = getattr(e.response, "status_code", None)
+        return GeocodeResult(
+            ok=False,
+            normalized_input=x.address,
+            matched_address="",
+            x_lon=0,
+            y_lat=0,
+            raw_json={"message": f"http_error {code}, {str(e)}"},
+        )
+    except requests.exceptions.RequestException as e:
+        return GeocodeResult(
+            ok=False,
+            normalized_input=x.address,
+            matched_address="",
+            x_lon=0,
+            y_lat=0,
+            raw_json={"message": f"network_error: {str(e)}"},
+        )
+    except (json.JSONDecodeError, ValueError) as e:
+        return GeocodeResult(
+            ok=False,
+            normalized_input=x.address,
+            matched_address="",
+            x_lon=0,
+            y_lat=0,
+            raw_json={"message": f"invalid_json: {str(e)}"},
+        )
+    try:
+        success = j.get("Success", False)
+        if not success:
+            return GeocodeResult(
+                ok=False,
+                normalized_input=x.address,
+                matched_address="",
+                x_lon=0,
+                y_lat=0,
+                raw_json={"message": j.get("message", "Success= False")},
+            )
+        result = j.get("Result", {})
+        if not result:
+            return GeocodeResult(
+                ok=False,
+                normalized_input=x.address,
+                matched_address="",
+                x_lon=0,
+                y_lat=0,
+                raw_json={"message": j.get("message", "No Result present")},
+            )
+        addresses = result.get("addresses", [])
+        if not addresses:
+            intersections = result.get("intersections", [])
+            if not intersections:
+                blocks = result.get("blocks", [])
+                if not blocks:
+                    return GeocodeResult(
+                        ok=False,
+                        normalized_input=x.address,
+                        matched_address="",
+                        x_lon=0,
+                        y_lat=0,
+                        raw_json={"message": "No addresses or intersections found"},
+                    )
+                # Take first block candidate
+                b0 = blocks[0].get("block", {}).get("properties", {})
+                return GeocodeResult(
+                    ok=True,
+                    normalized_input=x.address,
+                    matched_address=b0.get("FullBlock", ""),
+                    x_lon=float(b0.get("Longitude", 0)),
+                    y_lat=float(b0.get("Latitude", 0)),
+                    raw_json=j,
+                )
+            # Take first intersection candidate
+            c0 = intersections[0].get("intersection", {}).get("properties", {})
+            return GeocodeResult(
+                ok=True,
+                normalized_input=x.address,
+                matched_address=c0.get("FullIntersection", ""),
+                x_lon=float(c0.get("Longitude", 0)),
+                y_lat=float(c0.get("Latitude", 0)),
+                raw_json=j,
+            )
+        # Take top candidate
+        c0 = addresses[0].get("address", {}).get("properties", {})
+
+        return GeocodeResult(
+            ok=True,
+            normalized_input=x.address,
+            matched_address=c0.get("FullAddress", ""),
+            x_lon=float(c0.get("Longitude", 0)),
+            y_lat=float(c0.get("Latitude", 0)),
+            raw_json=j,
+        )
+    except (TypeError, ValueError) as e:
+        return GeocodeResult(
+            ok=False,
+            normalized_input=x.address,
+            matched_address="",
+            x_lon=0,
+            y_lat=0,
+            raw_json={"message": f"parse_error: {str(e)}"},
+        )
+
 
 @intentdef(Sleep)
 def _sleep(x: Sleep) -> None:

@@ -2,7 +2,7 @@
 
 ## 1. Project Overview
 
-This project is a command-line tool for managing, analyzing, and interacting with news articles and crime data, with support for user prompts, database operations, and integration with OpenAI GPT models. The main entry point is `articles.py`.
+This project is a command-line tool for managing, analyzing, and interacting with news articles and crime data, with support for user prompts, database operations, and integration with OpenAI GPT models. The main entry point is `runarticles.py`.
 
 ---
 

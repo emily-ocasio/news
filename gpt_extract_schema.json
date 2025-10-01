@@ -1,0 +1,346 @@
+{
+  "description": "Response model for Washington Post article extraction of incident details.",
+  "name": "WashingtonPostArticleIncidentExtraction",
+  "strict": true,
+  "schema": {
+    "type": "object",
+    "properties": {
+      "incidents": {
+        "items": {
+          "additionalProperties": false,
+          "description": "Model for Incident information",
+          "properties": {
+            "year": {
+              "title": "Year",
+              "type": "integer"
+            },
+            "month": {
+              "title": "Month",
+              "type": "integer"
+            },
+            "day": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Day"
+            },
+            "location": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Location"
+            },
+            "circumstance": {
+              "description": "Enum for circumstances of the crime",
+              "enum": [
+                "arson",
+                "vehicular homicide",
+                "felon killed by police",
+                "institutional killing",
+                "burglary",
+                "robbery",
+                "brawl",
+                "rape",
+                "argument",
+                "gang killing",
+                "lover's triangle",
+                "child killed by babysitter",
+                "negligence",
+                "other",
+                "undetermined"
+              ],
+              "title": "Circumstance",
+              "type": "string"
+            },
+            "weapon": {
+              "description": "Enum for weapon ",
+              "enum": [
+                "shotgun",
+                "rifle",
+                "handgun",
+                "firearm",
+                "knife",
+                "blunt object",
+                "personal weapon",
+                "fire",
+                "strangulation",
+                "asphyxiation",
+                "drugs",
+                "explosives",
+                "drowning",
+                "other",
+                "unknown"
+              ],
+              "title": "Weapon",
+              "type": "string"
+            },
+            "offender_count": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Offender Count"
+            },
+            "offender_name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Offender Name"
+            },
+            "offender_age": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Offender Age"
+            },
+            "offender_sex": {
+              "anyOf": [
+                {
+                  "description": "Enum for sex ",
+                  "enum": [
+                    "male",
+                    "female"
+                  ],
+                  "title": "Sex",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "offender_race": {
+              "anyOf": [
+                {
+                  "description": "Enum for race ",
+                  "enum": [
+                    "White",
+                    "Black",
+                    "Asian",
+                    "Native American"
+                  ],
+                  "title": "Race",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "offender_ethnicity": {
+              "anyOf": [
+                {
+                  "description": "Enum for ethnicity ",
+                  "enum": [
+                    "Hispanic",
+                    "Non-Hispanic"
+                  ],
+                  "title": "Ethnicity",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "victim_count": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Victim Count"
+            },
+            "summary": {
+              "title": "Summary",
+              "type": "string"
+            },
+            "victim": {
+              "items": {
+                "additionalProperties": false,
+                "description": "Model for Victim information",
+                "properties": {
+                  "victim_name": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Victim Name"
+                  },
+                  "victim_age": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Victim Age"
+                  },
+                  "victim_sex": {
+                    "anyOf": [
+                      {
+                        "description": "Enum for sex ",
+                        "enum": [
+                          "male",
+                          "female"
+                        ],
+                        "title": "Sex",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "victim_race": {
+                    "anyOf": [
+                      {
+                        "description": "Enum for race ",
+                        "enum": [
+                          "White",
+                          "Black",
+                          "Asian",
+                          "Native American"
+                        ],
+                        "title": "Race",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "victim_ethnicity": {
+                    "anyOf": [
+                      {
+                        "description": "Enum for ethnicity ",
+                        "enum": [
+                          "Hispanic",
+                          "Non-Hispanic"
+                        ],
+                        "title": "Ethnicity",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "relationship": {
+                    "anyOf": [
+                      {
+                        "description": "Relationship between the victim and the offender\nFrom the point of view of the victim",
+                        "enum": [
+                          "acquaintance",
+                          "son",
+                          "daughter",
+                          "husband",
+                          "stranger",
+                          "wife",
+                          "ex-wife",
+                          "ex-husband",
+                          "brother",
+                          "sister",
+                          "other family",
+                          "girlfriend",
+                          "boyfriend",
+                          "neighbor",
+                          "stepfather",
+                          "stepmother",
+                          "stepson",
+                          "friend",
+                          "other known to victim",
+                          "mother",
+                          "father",
+                          "in-law",
+                          "employee",
+                          "homosexual relationship"
+                        ],
+                        "title": "Relationship",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "victim_name",
+                  "victim_age",
+                  "victim_sex",
+                  "victim_race",
+                  "victim_ethnicity",
+                  "relationship"
+                ],
+                "title": "Victim",
+                "type": "object"
+              },
+              "minItems": 1,
+              "title": "Victim",
+              "type": "array"
+            }
+          },
+          "required": [
+            "year",
+            "month",
+            "day",
+            "location",
+            "circumstance",
+            "weapon",
+            "offender_count",
+            "offender_name",
+            "offender_age",
+            "offender_sex",
+            "offender_race",
+            "offender_ethnicity",
+            "victim_count",
+            "summary",
+            "victim"
+          ],
+          "title": "Incident",
+          "type": "object"
+        },
+        "title": "Incidents",
+        "type": "array"
+      }
+    },
+    "required": [
+      "incidents"
+    ],
+    "additionalProperties": false
+  }
+}

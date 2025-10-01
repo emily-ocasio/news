@@ -36,6 +36,27 @@ class SQLParams(Array[SQLParam]):
 
         return tuple(_convert(param) for param in self.a)
 
+class SQLExecutionError(Exception):
+    """
+    Raised by run_sqlite/run_duckdb performer when the underlying
+    driver raises an exception. Captures SQL and params.
+    """
+    def __init__(self, sql: str, params: tuple | None, original: Exception):
+        self.sql = sql
+        self.params = params
+        self.original = original
+        super().__init__(str(original))
+
+    def __str__(self) -> str:
+        p = "None" if self.params is None else repr(self.params)
+        return (
+            f"{self.original.__class__.__name__}: {self.original}\n"
+            f"--- SQL Context --------------------------------\n"
+            f"SQL:\n{self.sql}\n"
+            f"Params: {p}\n"
+            f"------------------------------------------------"
+        )
+
 # --- DB intents ---
 @dataclass(frozen=True)
 class SqlQuery:
@@ -118,21 +139,26 @@ def run_sqlite(
             def perform(intent: Any, current: "Run[Any]") -> Any:
                 match intent:
                     case SqlQuery(sql, params):
-                        cur = con.execute(str(sql), params)
-                        rows = cur.fetchall()
-                        cur.close()
-                        return rows
-
+                        try:
+                            cur = con.execute(str(sql), params.to_params())
+                            rows = cur.fetchall()
+                            cur.close()
+                            return rows
+                        except Exception as ex:  # noqa: BLE001
+                            raise SQLExecutionError(str(sql), params.to_params(), ex) from ex
                     case SqlExec(sql, params):
-                        con.execute(str(sql), params.to_params())
-                        con.commit()
-                        # print(f"SQL executed with sql: {str(sql)}, "
-                        #       f"params: {params.to_params()}")
-                        return None
-
+                        try:
+                            con.execute(str(sql), params.to_params())
+                            con.commit()
+                            return None
+                        except Exception as ex:  # noqa: BLE001
+                            raise SQLExecutionError(str(sql), params.to_params(), ex) from ex
                     case SqlScript(sql):
-                        con.executescript(sql)
-                        return None
+                        try:
+                            con.executescript(str(sql))
+                            return None
+                        except Exception as ex:  # noqa: BLE001
+                            raise SQLExecutionError(str(sql), None, ex) from ex
 
                     case InTransaction(subprog):
                         try:
@@ -182,28 +208,29 @@ def run_duckdb(
                 con.execute(setup_sql)
 
             def _query_dicts(sql_s: str, params: SQLParams) -> list[dict]:
-                cur = con.execute(sql_s, params.to_params())
-                # Column names from DB-API cursor description;
-                # avoids relying on DuckDBPyRelation
-                cols = [d[0] for d in (cur.description or [])]
-                rows = cur.fetchall()
-                return [dict(zip(cols, tup)) for tup in rows]
-
+                try:
+                    cur = con.execute(sql_s, params.to_params())
+                    cols = [d[0] for d in (cur.description or [])]
+                    rows = cur.fetchall()
+                    return [dict(zip(cols, tup)) for tup in rows]
+                except Exception as ex:  # noqa: BLE001
+                    raise SQLExecutionError(sql_s, params.to_params(), ex) from ex
             def perform(intent: Any, current: "Run[Any]") -> Any:
                 match intent:
                     case SqlQuery(sql, params):
                         return _query_dicts(str(sql), params)
-
                     case SqlExec(sql, params):
-                        # DuckDB auto-commits by default
-                        # still fine to call execute
-                        con.execute(str(sql), params.to_params())
-                        return None
-
+                        try:
+                            con.execute(str(sql), params.to_params())
+                            return None
+                        except Exception as ex:  # noqa: BLE001
+                            raise SQLExecutionError(str(sql), params.to_params(), ex) from ex
                     case SqlScript(sql):
-                        # DuckDB supports multiple statements separated by ';'
-                        con.execute(str(sql))
-                        return None
+                        try:
+                            con.execute(str(sql))
+                            return None
+                        except Exception as ex:  # noqa: BLE001
+                            raise SQLExecutionError(str(sql), None, ex) from ex
 
                     case InTransaction(subprog):
                         # DuckDB has transactional semantics; use BEGIN/COMMIT

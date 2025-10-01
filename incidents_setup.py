@@ -15,6 +15,7 @@ SELECT
   a.article_id,
   a.city_id,
   a.publish_date,
+  a.year, a.month, a.day,
   a.incident_idx,
   CAST(v.key AS INTEGER) AS victim_idx,
   json_extract_string(v.value, '$.victim_name')      AS victim_name_raw,
@@ -24,9 +25,12 @@ SELECT
   json_extract_string(v.value, '$.victim_ethnicity') AS victim_ethnicity,
 
   a.incident_date, a.event_start_day, a.event_end_day,
-  a.street_token, a.weapon, a.circumstance,
+  a.weapon, a.circumstance,
 
-  lower(regexp_replace(coalesce(a.offender_name,''), '[^a-z ]', '', 'g')) AS offender_name_norm,
+  -- keep raw offender_name so we can normalize it with the same logic as victims
+  a.offender_name,
+
+  try_cast(json_extract_string(v.value, '$.victim_count') AS INTEGER) AS victim_count,
 
   concat_ws(':', CAST(a.article_id AS VARCHAR), CAST(a.incident_idx AS VARCHAR), CAST(CAST(v.key AS INTEGER) AS VARCHAR)) AS victim_row_id
 FROM incidents_cached a
@@ -41,61 +45,97 @@ CREATE OR REPLACE TABLE victims_cached_enh AS
 WITH norm AS (
   SELECT
     v.*,
-    -- keep letters, apostrophes, hyphens, spaces; lowercase and trim
     trim(
       lower(
         regexp_replace(
           coalesce(victim_name_raw, ''),
-          '[^A-Za-z''\- ]'
+          '[^A-Za-z''\- ]',
           ' ',
           'g'
         )
       )
-    ) AS name_clean
+    ) AS name_clean,
+    trim(
+      lower(
+        regexp_replace(
+          coalesce(offender_name, ''),
+          '[^A-Za-z''\- ]',
+          ' ',
+          'g'
+        )
+      )
+    ) AS offender_name_clean
   FROM victims_cached v
 ),
--- strip common titles at the start
 strip AS (
   SELECT
     *,
-    regexp_replace(name_clean, '^(?i)(mr|mrs|ms|miss|dr|rev|ofc|officer)\s+', '', 'g') AS name_no_title
+    regexp_replace(name_clean, '^(?i)(mr|mrs|ms|miss|dr|rev|ofc|officer)\s+', '', 'g') AS name_no_title,
+    regexp_replace(offender_name_clean, '^(?i)(mr|mrs|ms|miss|dr|rev|ofc|officer)\s+', '', 'g') AS offender_no_title
   FROM norm
 ),
--- strip common suffixes at the end
 strip2 AS (
   SELECT
     *,
-    regexp_replace(name_no_title, '\s+(?i)(jr|sr|ii|iii|iv)\.?$', '', 'g') AS name_core
+    regexp_replace(name_no_title, '\s+(?i)(jr|sr|ii|iii|iv)\.?$', '', 'g') AS name_core,
+    regexp_replace(offender_no_title, '\s+(?i)(jr|sr|ii|iii|iv)\.?$', '', 'g') AS offender_name_core
   FROM strip
 ),
 parts AS (
   SELECT
     *,
-    -- forename = first token
-    regexp_extract(name_core, '^([a-z''\-]+)', 1) AS victim_forename_norm,
-    -- surname: keep common particles with last token, else just last token
     CASE
-      WHEN regexp_matches(name_core, '(?i)(?:^|\s)(?:de la|del|de|van|von|da|di|la|le|st)\s+[a-z''\-]+$')
-        THEN regexp_extract(name_core, '((?i)(?:de la|del|de|van|von|da|di|la|le|st)\s+[a-z''\-]+)$', 1)
-      ELSE regexp_extract(name_core, '([a-z''\-]+)$', 1)
-    END AS victim_surname_norm
+      WHEN victim_name_raw IS NULL THEN NULL
+      WHEN name_core LIKE '% %' THEN regexp_extract(name_core, '^([a-z''\-]+)', 1)
+      ELSE NULL
+    END AS victim_forename_norm,
+    CASE
+      WHEN victim_name_raw IS NULL THEN NULL
+      WHEN name_core LIKE '% %' THEN
+        CASE
+          WHEN regexp_matches(name_core, '(?i)(?:^|\s)(?:de la|del|de|van|von|da|di|la|le|st)\s+[a-z''\-]+$')
+            THEN regexp_extract(name_core, '((?i)(?:de la|del|de|van|von|da|di|la|le|st)\s+[a-z''\-]+)$', 1)
+          ELSE regexp_extract(name_core, '([a-z''\-]+)$', 1)
+        END
+      ELSE NULL
+    END AS victim_surname_norm,
+    CASE
+      WHEN offender_name IS NULL THEN NULL
+      WHEN offender_name_core LIKE '% %' THEN regexp_extract(offender_name_core, '^([a-z''\-]+)', 1)
+      ELSE NULL
+    END AS offender_forename_norm,
+    CASE
+      WHEN offender_name IS NULL THEN NULL
+      WHEN offender_name_core LIKE '% %' THEN
+        CASE
+          WHEN regexp_matches(offender_name_core, '(?i)(?:^|\s)(?:de la|del|de|van|von|da|di|la|le|st)\s+[a-z''\-]+$')
+            THEN regexp_extract(offender_name_core, '((?i)(?:de la|del|de|van|von|da|di|la|le|st)\s+[a-z''\-]+)$', 1)
+          ELSE regexp_extract(offender_name_core, '([a-z''\-]+)$', 1)
+        END
+      ELSE NULL
+    END AS offender_surname_norm
   FROM strip2
 )
 SELECT
-  *,
-  -- concise full-name concat (enables TF on the *full* name in Splink)
+  p.*,
   CASE
     WHEN victim_forename_norm IS NOT NULL AND victim_surname_norm IS NOT NULL
       THEN victim_forename_norm || ' ' || victim_surname_norm
   END AS victim_fullname_concat,
-
-  -- full normalized name (spaces only; keep for your other comps if needed)
+  CASE
+    WHEN offender_forename_norm IS NOT NULL AND offender_surname_norm IS NOT NULL
+      THEN offender_forename_norm || ' ' || offender_surname_norm
+  END AS offender_fullname_concat,
   regexp_replace(name_core, '[^a-z ]', '', 'g') AS victim_name_norm,
-
-  -- age sanity + 5-year bucket
+  regexp_replace(offender_name_core, '[^a-z ]', '', 'g') AS offender_name_norm,
   CASE WHEN victim_age_raw BETWEEN 0 AND 120 THEN victim_age_raw END AS victim_age,
-  CASE WHEN victim_age_raw BETWEEN 0 AND 120 THEN floor(victim_age_raw/5) END AS victim_age_bucket5
-FROM parts;
+  CASE WHEN victim_age_raw BETWEEN 0 AND 120 THEN floor(victim_age_raw/5) END AS victim_age_bucket5,
+  i.date_precision,
+  i.midpoint_day
+FROM parts p
+LEFT JOIN incidents_cached i
+  ON p.article_id = i.article_id
+ AND p.incident_idx = i.incident_idx;
 """)
 
 COUNT_VICTIMS_SQL  = SQL("SELECT COUNT(*) AS n FROM victims_cached_enh;")
@@ -119,7 +159,6 @@ WITH base AS (
     CAST(i.key AS INTEGER) AS incident_idx,
     i.value AS incident_json,
 
-    -- raw ints (may contain 0)
     try_cast(json_extract_string(i.value,'$.year')  AS INTEGER) AS year_raw,
     try_cast(json_extract_string(i.value,'$.month') AS INTEGER) AS month_raw,
     try_cast(json_extract_string(i.value,'$.day')   AS INTEGER) AS day_raw,
@@ -144,11 +183,9 @@ WITH base AS (
     END
   ) AS i
 ),
--- Sanitize Y/M/D, then compute date fields
 dates AS (
   SELECT
     *,
-    -- Treat 0 or out-of-range values as NULL
     CASE WHEN month_raw BETWEEN 1 AND 12 THEN month_raw END AS month_sane,
     CASE WHEN day_raw   BETWEEN 1 AND 31 THEN day_raw   END AS day_sane
   FROM base
@@ -157,9 +194,13 @@ norm_dates AS (
   SELECT
     *,
     CASE
+      WHEN year_raw IS NOT NULL AND month_sane IS NOT NULL AND day_sane IS NOT NULL THEN 'day'
+      WHEN year_raw IS NOT NULL AND month_sane IS NOT NULL THEN 'month'
+      WHEN year_raw IS NOT NULL THEN 'year'
+    END AS date_precision,
+    CASE
       WHEN year_raw IS NOT NULL AND month_sane IS NOT NULL AND day_sane IS NOT NULL
         THEN make_date(year_raw, month_sane, day_sane)
-      ELSE NULL
     END AS incident_date,
     CASE
       WHEN year_raw IS NOT NULL AND month_sane IS NOT NULL AND day_sane IS NOT NULL
@@ -168,7 +209,6 @@ norm_dates AS (
         THEN date_diff('day', DATE '1970-01-01', make_date(year_raw, month_sane, 1))
       WHEN year_raw IS NOT NULL AND month_sane IS NULL
         THEN date_diff('day', DATE '1970-01-01', make_date(year_raw, 1, 1))
-      ELSE NULL
     END AS event_start_day,
     CASE
       WHEN year_raw IS NOT NULL AND month_sane IS NOT NULL AND day_sane IS NOT NULL
@@ -177,18 +217,20 @@ norm_dates AS (
         THEN date_diff('day', DATE '1970-01-01', (make_date(year_raw, month_sane, 1) + INTERVAL 1 MONTH - INTERVAL 1 DAY))
       WHEN year_raw IS NOT NULL AND month_sane IS NULL
         THEN date_diff('day', DATE '1970-01-01', (make_date(year_raw, 1, 1) + INTERVAL 1 YEAR - INTERVAL 1 DAY))
-      ELSE NULL
-    END AS event_end_day
+    END AS event_end_day,
+    -- Add midpoint_day for partial dates
+    CASE
+      WHEN event_start_day IS NOT NULL AND event_end_day IS NOT NULL
+        THEN floor((event_start_day + event_end_day) / 2)
+    END AS midpoint_day
   FROM dates
 ),
--- Normalization features
 norm AS (
   SELECT
     *,
     ((event_start_day IS NOT NULL) AND (event_end_day IS NOT NULL)) AS has_incident_date,
     (event_end_day - event_start_day) AS interval_span_days,
-    lower(regexp_replace(coalesce(summary, ''), '[^a-z0-9 ]', '', 'g')) AS summary_norm,
-    regexp_extract(coalesce(location_raw, ''), '([A-Za-z][A-Za-z0-9]+(?:\s(St|Ave|Blvd|Rd|Street|Avenue))?)') AS street_token
+    lower(regexp_replace(coalesce(summary, ''), '[^a-z0-9 ]', '', 'g')) AS summary_norm
   FROM norm_dates
 )
 SELECT
@@ -197,9 +239,10 @@ SELECT
   CAST(incident_json AS JSON) AS incident_json,
   publish_date, article_title, article_text,
   year_raw AS year, month_sane AS month, day_sane AS day,
-  incident_date, event_start_day, event_end_day,
+  incident_date, event_start_day, event_end_day, midpoint_day,
+  date_precision,  -- Include precision in final output
   has_incident_date, interval_span_days,
-  location_raw, street_token,
+  location_raw,
   circumstance, weapon,
   offender_count, offender_name, offender_age,
   offender_sex, offender_race, offender_ethnicity,

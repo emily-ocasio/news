@@ -47,6 +47,10 @@ class ErrorPayload[Err](String):
         obj = super().__new__(cls, s)
         object.__setattr__(obj, "app", app)
         return obj
+    def __str__(self) -> str:
+        if self.app is None:
+            return super().__str__()
+        return f"{super().__str__()} (app={self.app})"
 
 
 # ===== Intents (data-only) =====

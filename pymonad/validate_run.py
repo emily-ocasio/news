@@ -49,6 +49,12 @@ type ItemsFailures[S] = Array[ItemFailures[S]] # All failures for many items
 # If no failures, validator returns Valid(Unit) in Run context
 type Validator[S] = Callable[[S], Run[V[FailureDetails[S], Unit]]]
 
+def no_op(_: ErrorPayload) -> Run[Unit]:
+    """
+    No-op error handler
+    """
+    return Run.pure(unit)
+
 def validate_item(validators: Array[Validator[S]], item: S) \
     -> Run[V[ItemsFailures[S], S]]:
     """
@@ -93,7 +99,8 @@ def validate_item(validators: Array[Validator[S]], item: S) \
 def process_all(validators: Array[Validator[S]],
                 render: Callable[[ErrorPayload], FailureDetails],
                 happy: Callable[[S], Run[T]],
-                items: Array[S]) \
+                items: Array[S],
+                unhappy: Callable[[ErrorPayload], Run[Unit]] = no_op ) \
                 -> Run[V[ItemsFailures[S], Array[T]]]:
     """
     Given array of items, perform effectful validation on each,
@@ -111,8 +118,11 @@ def process_all(validators: Array[Validator[S]],
                     # No run exception
                     return Run.pure(V.pure(r))
                 case Left(err):
+                    # Run unhappy handler
                     # Re-render run exception into item failure
-                    return Run.pure(
+                    return \
+                        unhappy(err) ^ \
+                        Run.pure(
                         V.invalid(Array((ItemFailures(item, render(err)),))))
         return run_except(happy(item)) >> catch_run_exceptions
     def process_validation(v_item: V[ItemsFailures[S], S]) \
