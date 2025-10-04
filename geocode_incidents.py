@@ -32,6 +32,7 @@ from pymonad import (
 )
 from incidents_setup import CREATE_VICTIMS_CACHED_ENH_SQL
 from menuprompts import NextStep
+from pymonad.runsql import sql_script
 
 CREATE_CACHE_SQL = SQL(
     r"""
@@ -212,6 +213,9 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
         )
 
     return (
+        sql_script(SQL(r"""
+            LOAD splink_udfs;
+        """)) ^
         sql_exec(CREATE_CACHE_SQL)
         ^ sql_query(SELECT_ADDRESSES_SQL)
         >> (

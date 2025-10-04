@@ -118,6 +118,8 @@ parts AS (
 )
 SELECT
   p.*,
+
+  -- Concatenations
   CASE
     WHEN victim_forename_norm IS NOT NULL AND victim_surname_norm IS NOT NULL
       THEN victim_forename_norm || ' ' || victim_surname_norm
@@ -126,10 +128,30 @@ SELECT
     WHEN offender_forename_norm IS NOT NULL AND offender_surname_norm IS NOT NULL
       THEN offender_forename_norm || ' ' || offender_surname_norm
   END AS offender_fullname_concat,
+
+  -- Individual-part Soundex (from splink_udfs)
+  CASE WHEN victim_forename_norm IS NOT NULL
+    THEN soundex(victim_forename_norm)
+  END AS victim_forename_soundex,
+  CASE WHEN victim_surname_norm IS NOT NULL
+    THEN soundex(victim_surname_norm)
+  END AS victim_surname_soundex,
+  CASE WHEN offender_forename_norm IS NOT NULL
+    THEN soundex(offender_forename_norm)
+  END AS offender_forename_soundex,
+  CASE WHEN offender_surname_norm IS NOT NULL
+    THEN soundex(offender_surname_norm)
+  END AS offender_surname_soundex,
+
+  -- Normalized full-name strings (letters+spaces only)
   regexp_replace(name_core, '[^a-z ]', '', 'g') AS victim_name_norm,
   regexp_replace(offender_name_core, '[^a-z ]', '', 'g') AS offender_name_norm,
+
+  -- Age cleanup + buckets
   CASE WHEN victim_age_raw BETWEEN 0 AND 120 THEN victim_age_raw END AS victim_age,
   CASE WHEN victim_age_raw BETWEEN 0 AND 120 THEN floor(victim_age_raw/5) END AS victim_age_bucket5,
+
+  -- Date fields from incidents_cached
   i.date_precision,
   i.midpoint_day
 FROM parts p
@@ -300,6 +322,10 @@ def build_incident_views() -> Run[NextStep]:
         run_duckdb(
             env.get("duckdb_path", "news.duckdb"),
             (
+                sql_script(SQL(r"""
+                    INSTALL splink_udfs FROM community;
+                    LOAD splink_udfs;
+                """)) ^
                 sql_script(CREATE_STG_ARTICLE_INCIDENTS_SQL) ^
                 sql_query(COUNT_VIEW_SQL) >> (lambda rows:
                     put_line(f"[I] View rows: {rows[0]['n']}")

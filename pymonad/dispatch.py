@@ -3,12 +3,14 @@ Defines functions with side effects and maps them to intents
 """
 
 from dataclasses import dataclass
-from typing import Callable, TypedDict
+from typing import Callable, TypedDict, cast, Any
 import json
 import time
 import requests
 
+import altair as alt
 import duckdb
+from pandas import DataFrame
 from splink import Linker, DuckDBAPI
 from splink.internals.blocking_rule_creator import BlockingRuleCreator
 
@@ -66,7 +68,7 @@ class SplinkDedupeJob:
     deterministic_rules: list[str | BlockingRuleCreator]
     deterministic_recall: float
     train_first: bool = False
-    training_blocking_rule: str | None = None
+    training_blocking_rules: list[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -120,22 +122,25 @@ def _getline(x: GetLine) -> String:
 @intentdef(SplinkDedupeJob)
 def _splink_dedupe(job: SplinkDedupeJob) -> tuple[str, str]:
     db_api = DuckDBAPI(connection=duckdb.connect(job.duckdb_path))
-    linker = Linker(job.input_table, job.settings, db_api=db_api)
+    linker = Linker(job.input_table,
+                    job.settings | {'retain_intermediate_calculation_columns': True},
+                    db_api=db_api)
 
     linker.training.estimate_probability_two_random_records_match(
         job.deterministic_rules, recall=job.deterministic_recall
     )
-    linker.training.estimate_u_using_random_sampling(1e8)
+    linker.training.estimate_u_using_random_sampling(1e6)
 
     if job.train_first:
         # Prefer explicit training rule from intent, otherwise fall back
         # to the blocking rules used for prediction.
-        training_rule = job.training_blocking_rule or job.settings.get(
-            "blocking_rules_to_generate_predictions", []
-        )
-        linker.training.estimate_parameters_using_expectation_maximisation(
-            blocking_rule=training_rule
-        )
+        for _ in range(1):  # 1 iteration of EM
+            for training_rule in job.training_blocking_rules or job.settings.get(
+                "blocking_rules_to_generate_predictions", []
+            ):
+                linker.training.estimate_parameters_using_expectation_maximisation(
+                    blocking_rule=training_rule
+                )
 
     df_pairs = linker.inference.predict(
         threshold_match_probability=job.predict_threshold
@@ -144,6 +149,19 @@ def _splink_dedupe(job: SplinkDedupeJob) -> tuple[str, str]:
         df_pairs,
         threshold_match_probability=job.cluster_threshold,
     )
+    alt.renderers.enable("browser")
+    chart = linker.visualisations.match_weights_chart()
+    chart.show() # type: ignore
+    mw = chart["data"].to_dict()["values"]
+    mw_df = DataFrame(mw)
+
+    pd_pairs = df_pairs.as_pandas_dataframe()
+    inspect_df = pd_pairs[(pd_pairs['victim_surname_norm_l'] == 'proctor') & (pd_pairs['victim_surname_norm_r'] == 'proctor')]
+    inspect_dict = cast(list[dict[str, Any]], inspect_df.to_dict(orient='records'))
+    waterfall = linker.visualisations.waterfall_chart(inspect_dict)
+    waterfall.show() #type: ignore
+    print(f"number of rows: {len(inspect_dict)}")
+
     # 3) Persist outputs into stable tables in the same DB
     con = duckdb.connect(job.duckdb_path)
     try:
@@ -155,6 +173,8 @@ def _splink_dedupe(job: SplinkDedupeJob) -> tuple[str, str]:
             f"CREATE OR REPLACE TABLE {job.clusters_out} AS "
             f"SELECT * FROM {df_clusters.physical_name}"
         )
+        con.register("mw_df", mw_df)
+        con.execute("CREATE OR REPLACE TABLE match_weights AS SELECT * FROM mw_df")
     finally:
         con.close()
 

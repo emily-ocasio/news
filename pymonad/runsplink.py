@@ -19,7 +19,7 @@ def splink_dedupe_job(
     pairs_out: str = "incidents_pairs",
     clusters_out: str = "incidents_clusters",
     train_first: bool = False,
-    training_blocking_rule: str | None = None,
+    training_blocking_rules: list[str] | None = None,
     deterministic_rules: list[str | BlockingRuleCreator] | None = None,
     deterministic_recall: float = 0.5
 ) -> Run[tuple[str, str]]:
@@ -40,7 +40,7 @@ def splink_dedupe_job(
                 deterministic_rules or [],
                 deterministic_recall,
                 train_first,
-                training_blocking_rule,
+                training_blocking_rules or [],
             ),
             self,
         ),

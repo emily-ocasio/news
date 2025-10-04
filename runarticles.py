@@ -90,7 +90,7 @@ def main_trampoline(env: Environment, state0: AppState) -> None:
         after_tick = run_base_effect(REAL_DISPATCH, tick)
         state = after_tick.state     # <-- persist across ticks
         if after_tick.next_step == NextStep.QUIT:
-            exit_program()
+            return
         # else: loop back to main menu
 
 def exit_program() -> None:
@@ -103,3 +103,5 @@ def exit_program() -> None:
 
 if __name__ == "__main__":
     main()
+    exit_program()
+
