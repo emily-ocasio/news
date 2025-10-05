@@ -14,7 +14,7 @@ from .run import Run
 
 def splink_dedupe_job(
     duckdb_path: str,
-    input_table: str,
+    input_table: str | list[str],
     settings: dict,
     predict_threshold: float,
     cluster_threshold: float,

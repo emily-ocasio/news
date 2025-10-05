@@ -25,3 +25,4 @@ newsources.ipynb
 wp_articleinput.ipynb
 code_analyzer.py
 .codegpt
+*.html

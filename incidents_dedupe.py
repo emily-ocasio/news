@@ -21,6 +21,7 @@ from comparison import (
 )
 from menuprompts import NextStep
 from pymonad import (
+    Environment,
     Run,
     ask,
     put_line,
@@ -30,49 +31,68 @@ from pymonad import (
     SQL,
     splink_dedupe_job,
     with_duckdb,
+    Unit,
+    unit,
 )
 
-
-def dedupe_incidents_with_splink(env) -> Run[NextStep]:
+def _create_victims_named_table() -> Run[Unit]:
     """
-    Deduplicate incident records using Splink.
+    Create a table of victims that have name present.
+    This will be used for the initial Splink deduplication step.
     """
     return (
         sql_exec(
             SQL(
                 """--sql
-            CREATE OR REPLACE VIEW victims_named AS
-            SELECT *
-            FROM victims_cached_enh
-            WHERE victim_forename_norm IS NOT NULL
-            OR victim_surname_norm IS NOT NULL;
-        """
+        CREATE OR REPLACE TABLE victims_named AS
+        SELECT *
+        FROM victims_cached_enh
+        WHERE victim_forename_norm IS NOT NULL
+        OR victim_surname_norm IS NOT NULL;
+    """
             )
         )
+        ^ put_line("[D] Created victims_named table.")
         ^ sql_query(SQL("SELECT COUNT(*) AS n FROM victims_named"))
         >> (lambda rows: put_line(f"[D] victims_named rows: {rows[0]['n']}"))
-        ^ splink_dedupe_job(
-            duckdb_path=env["duckdb_path"],
-            input_table="victims_named",
-            settings=_settings_for_victim_dedupe(),
-            predict_threshold=0.0,
-            cluster_threshold=0.65,
-            pairs_out="victim_pairs",
-            clusters_out="victim_clusters",
-            train_first=True,
-            training_blocking_rules=NAMED_VICTIM_BLOCKS_FOR_TRAINING,
-            deterministic_rules=NAMED_VICTIM_DETERMINISTIC_BLOCKS,
-            deterministic_recall=0.8,
+        ^ pure(unit)
+    )
+
+
+def _dedupe_named_victims(env: Environment) -> Run[Unit]:
+    """
+    Run initial pass of Splink deduplication on the victims_named table.
+    """
+    return splink_dedupe_job(
+        duckdb_path=env["duckdb_path"],
+        input_table="victims_named",
+        settings=_settings_for_victim_dedupe(),
+        predict_threshold=0.0,
+        cluster_threshold=0.65,
+        pairs_out="victim_pairs",
+        clusters_out="victim_clusters",
+        train_first=True,
+        training_blocking_rules=NAMED_VICTIM_BLOCKS_FOR_TRAINING,
+        deterministic_rules=NAMED_VICTIM_DETERMINISTIC_BLOCKS,
+        deterministic_recall=0.8,
+    ) >> (
+        lambda outnames: put_line(
+            f"[D] Wrote {outnames[0]} and {outnames[1]} in DuckDB."
         )
-        >> (
-            lambda outnames: put_line(
-                f"[D] Wrote {outnames[0]} and {outnames[1]} in DuckDB."
-            )
-        )
-        ^ sql_exec(
+    ) ^ pure(
+        unit
+    )
+
+
+def _create_cluster_tables() -> Run[Unit]:
+    """
+    Create tables for victim clusters and their members.
+    """
+    return (
+        sql_exec(
             SQL(
                 """--sql
-            CREATE OR REPLACE VIEW victim_entity_members AS
+            CREATE OR REPLACE TABLE victim_entity_members AS
             SELECT
             c.cluster_id AS victim_entity_id,
             v.*
@@ -104,19 +124,21 @@ def dedupe_incidents_with_splink(env) -> Run[NextStep]:
         """
             )
         )
+        ^ put_line("[D] Created victim_entities view.")
         ^ sql_query(SQL("SELECT COUNT(*) AS n FROM victim_entities"))
         >> (lambda rows: put_line(f"[D] victim_entities rows: {rows[0]['n']}"))
-        # --- Summary: top 10 clusters by duplicate count + member details ---
-        ^ sql_exec(
-            SQL(
-                """--beginsql
-            CREATE OR REPLACE VIEW victim_cluster_counts AS
-            SELECT cluster_id, COUNT(*) AS member_count
-            FROM victim_clusters
-            GROUP BY cluster_id;
-        """
-            )
-        )
+        ^ pure(unit)
+    )
+
+
+def dedupe_incidents_with_splink(env) -> Run[NextStep]:
+    """
+    Deduplicate incident records using Splink.
+    """
+    return (
+        _create_victims_named_table()
+        ^ _dedupe_named_victims(env)
+        ^ _create_cluster_tables()
         ^ sql_query(
             SQL(
                 """
@@ -236,13 +258,11 @@ def dedupe_incidents_with_splink(env) -> Run[NextStep]:
         )
         ^ sql_query(SQL("SELECT COUNT(*) AS n FROM victims_orphan"))
         >> (lambda rows: put_line(f"[D] victims_orphan rows: {rows[0]['n']}"))
-        # --- Unified input for link_only pass (entities vs orphans) ---
         ^ sql_exec(
             SQL(
                 """--sql
-            CREATE OR REPLACE TEMPORARY TABLE linkage_input AS
+            CREATE OR REPLACE TABLE entity_link_input AS
             SELECT
-              'entity' AS source_dataset,
               cast(victim_entity_id AS varchar) AS unique_id,
               city_id,
               entity_midpoint_day AS midpoint_day,
@@ -253,12 +273,16 @@ def dedupe_incidents_with_splink(env) -> Run[NextStep]:
               canonical_race AS victim_race,
               canonical_ethnicity AS victim_ethnicity,
               mode_weapon AS weapon,
-              mode_circumstance AS circumstance,
-              NULL::varchar AS victim_row_id
-            FROM victim_entity_reps
-            UNION ALL
+              mode_circumstance AS circumstance
+            FROM victim_entity_reps;
+        """
+            )
+        )
+        ^ sql_exec(
+            SQL(
+                """--sql
+            CREATE OR REPLACE TABLE orphan_link_input AS
             SELECT
-              'orphan' AS source_dataset,
               cast(victim_row_id AS varchar) AS unique_id,
               city_id,
               midpoint_day,
@@ -269,8 +293,7 @@ def dedupe_incidents_with_splink(env) -> Run[NextStep]:
               victim_race,
               victim_ethnicity,
               weapon,
-              circumstance,
-              cast(victim_row_id AS varchar) AS victim_row_id
+              circumstance
             FROM victims_orphan;
         """
             )
@@ -279,16 +302,16 @@ def dedupe_incidents_with_splink(env) -> Run[NextStep]:
             SQL(
                 """--sql
             SELECT
-              sum(CASE WHEN source_dataset='entity' THEN 1 ELSE 0 END) AS n_entities,
-              sum(CASE WHEN source_dataset='orphan' THEN 1 ELSE 0 END) AS n_orphans
-            FROM linkage_input;
+              (SELECT COUNT(*) FROM entity_link_input)  AS n_entities,
+              (SELECT COUNT(*) FROM orphan_link_input) AS n_orphans;
         """
             )
         )
         >> (
             lambda rows: put_line(
-                f"[D] linkage_input entities={rows[0]['n_entities']}, "
-                f"orphans={rows[0]['n_orphans']}"
+                f"[D] entity_link_input={rows[0]['n_entities']}, "
+                f"orphan_link_input={rows[0]['n_orphans']}\n"
+                f"[D] Now run link_entities to link these two tables.\n"
             )
         )
         ^ pure(NextStep.CONTINUE)

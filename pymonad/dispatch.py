@@ -57,9 +57,8 @@ class SplinkDedupeJob:
     """
     Splink deduplication intent
     """
-
     duckdb_path: str
-    input_table: str
+    input_table: str | list[str]
     settings: dict
     predict_threshold: float
     cluster_threshold: float
@@ -163,9 +162,15 @@ def _splink_dedupe(job: SplinkDedupeJob) -> tuple[str, str]:
         & (pd_pairs["victim_surname_norm_r"] == "goodarzi")
     ]
     inspect_dict = cast(list[dict[str, Any]], inspect_df.to_dict(orient="records"))
-    waterfall = linker.visualisations.waterfall_chart(inspect_dict)
-    waterfall.show()  # type: ignore
+    #waterfall = linker.visualisations.waterfall_chart(inspect_dict)
+    #waterfall.show()  # type: ignore
     print(f"number of rows: {len(inspect_dict)}")
+
+    linker.visualisations.comparison_viewer_dashboard(
+        df_pairs,
+        out_path="comparison_viewer.html",
+        overwrite=True,
+        num_example_rows=20)
 
     # 3) Persist outputs into stable tables in the same DB
     con = duckdb.connect(job.duckdb_path)
