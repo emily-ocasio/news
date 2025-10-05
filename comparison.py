@@ -11,10 +11,10 @@ import splink.comparison_level_library as cll
 from blocking import _clause_from_comps
 
 def _specific_value_comp_builder(field: str, value: str) -> str:
-    return f'"{field}_l" {value} AND "{field}_r" {value}'
+    return f'("{field}_l" {value} AND "{field}_r" {value})'
 
 def _null_comp_builder(field: str, result: str = "IS NULL") -> str:
-    return f'"{field}_l" {result} OR "{field}_r" {result}'
+    return f'("{field}_l" {result} OR "{field}_r" {result})'
 
 def _exact_comp_builder(field: str) -> str:
     return f'"{field}_l" = "{field}_r"'
@@ -48,6 +48,7 @@ class ComparisonComp(StrEnum):
     """
         # "AND date_precision_l <> 'year' AND date_precision_r <> 'year'"
     DAY_PRECISION = _specific_value_comp_builder("date_precision", "= 'day'")
+    DATE_NULL = _null_comp_builder("midpoint_day")
     EXACT_AGE = _exact_comp_builder("victim_age")
     AGE_NULL = _null_comp_builder("victim_age")
     AGE_2YEAR = _distance_comp_builder("victim_age", 2)
@@ -57,6 +58,17 @@ class ComparisonComp(StrEnum):
     EXACT_VICTIM_FULLNAME = _exact_comp_builder("victim_fullname_concat")
     VICTIM_EXACT_REVERSED = "victim_forename_norm_l = victim_surname_norm_r " \
                              "AND victim_surname_norm_l = victim_forename_norm_r"
+    OFFENDER_NULL = _null_comp_builder("offender_fullname_concat")
+    OFFENDER_CLOSE = _similarity_comp_builder2(
+        "offender_forename_norm", "offender_surname_norm", 0.85)
+    WEAPON_NULL = _null_comp_builder("weapon") + ' OR ' + \
+        _null_comp_builder("weapon", "= 'unknown'")
+    WEAPON_EXACT = _exact_comp_builder("weapon") + " OR " + \
+        _specific_value_comp_builder(
+            "weapon", "IN ('firearm', 'handgun', 'rifle', 'shotgun')")
+    CIRC_NULL = _null_comp_builder("circumstance") + ' OR ' + \
+        _null_comp_builder("circumstance", "= 'undetermined'")
+    CIRC_EXACT = _exact_comp_builder("circumstance")
 
 @dataclass(frozen=True)
 class ComparisonLevel:
@@ -111,5 +123,122 @@ NAME_COMP = cl.CustomComparison(
             "All other comparisons",
             "ELSE"
         ).to_dict()
+    ]
+)
+
+DATE_COMP = cl.CustomComparison(
+    output_column_name="incident_date",
+    comparison_levels=[
+        NullComparisonLevel(
+            "incident dates NULL",
+            ComparisonComp.DATE_NULL.value
+        ).to_dict(),
+        ComparisonLevel(
+            "exact match incident date",
+            ComparisonComp.EXACT_YEAR_MONTH_DAY.value
+        ).to_dict(),
+        ComparisonLevel(
+            "midpoint within 2 days",
+            _clause_from_comps(
+                ComparisonComp.MIDPOINT_EXISTS,
+                ComparisonComp.MIDPOINT_2DAYS,
+                ComparisonComp.DAY_PRECISION
+            )
+        ).to_dict(),
+        ComparisonLevel(
+            "midpoint within 10 days",
+            _clause_from_comps(
+                ComparisonComp.MIDPOINT_EXISTS,
+                ComparisonComp.MIDPOINT_10DAYS,
+                ComparisonComp.DAY_PRECISION
+            )
+        ).to_dict(),
+        ComparisonLevel(
+            "midpoint within 90 days",
+            _clause_from_comps(
+                ComparisonComp.MIDPOINT_EXISTS,
+                ComparisonComp.MIDPOINT_90DAYS,
+                ComparisonComp.MONTH_PRECISION
+            )
+        ).to_dict(),
+        ComparisonLevel(
+            "midpoint within 7 months",
+            _clause_from_comps(
+                ComparisonComp.MIDPOINT_EXISTS,
+                ComparisonComp.MIDPOINT_7MONTH,
+                ComparisonComp.YEAR_PRECISION
+            )
+        ).to_dict(),
+        cll.ElseLevel()
+    ]
+)
+
+AGE_COMP = cl.CustomComparison(
+    output_column_name="victim_age",
+    comparison_levels=[
+        NullComparisonLevel(
+            "victim ages NULL",
+            ComparisonComp.AGE_NULL.value
+        ).to_dict(),
+        ComparisonLevel(
+            "exact match victim age",
+            ComparisonComp.EXACT_AGE.value
+        ).to_dict(),
+        ComparisonLevel(
+            "victim ages within 2 years",
+            ComparisonComp.AGE_2YEAR.value
+        ).to_dict(),
+        cll.ElseLevel()
+    ]
+)
+
+DIST_COMP = cl.DistanceInKMAtThresholds(
+    lat_col="lat",
+    long_col="lon",
+    km_thresholds=[0.1, 0.5, 1.5],
+)
+
+OFFENDER_COMP = cl.CustomComparison(
+    output_column_name="offender",
+    comparison_levels=[
+        NullComparisonLevel(
+            "offender NULL",
+            ComparisonComp.OFFENDER_NULL.value
+        ).to_dict(),
+        ComparisonLevel(
+            "offender names close",
+            ComparisonComp.OFFENDER_CLOSE.value
+        ).to_dict(),
+        cll.ElseLevel()
+    ]
+)
+
+WEAPON_COMP = cl.CustomComparison(
+    output_column_name="weapon",
+    comparison_levels=[
+        NullComparisonLevel(
+            "weapon NULL",
+            ComparisonComp.WEAPON_NULL.value
+        ).to_dict(),
+        ComparisonLevel(
+            "exact match weapon",
+            ComparisonComp.WEAPON_EXACT.value
+        ).to_dict(),
+        cll.ElseLevel()
+    ]
+)
+
+CIRC_COMP = cl.CustomComparison(
+    output_column_name="circumstance",
+    comparison_levels=[
+        NullComparisonLevel(
+            "circumstance NULL",
+            ComparisonComp.CIRC_NULL.value
+        ).to_dict(),
+        ComparisonLevel(
+            "exact match circumstance",
+            ComparisonComp.CIRC_EXACT.value
+        ).to_dict(),
+        cll.ElseLevel()
     ]
 )

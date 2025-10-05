@@ -4,15 +4,14 @@ Dedupe incident records using Splink.
 
 from itertools import groupby
 import splink.comparison_library as cl
-import splink.comparison_level_library as cll
 
 from blocking import (
     NAMED_VICTIM_BLOCKS,
     NAMED_VICTIM_DETERMINISTIC_BLOCKS,
-    NAMED_VICTIM_BLOCKS_FOR_TRAINING,
-    _clause_from_comps,
+    NAMED_VICTIM_BLOCKS_FOR_TRAINING
 )
-from comparison import NAME_COMP, ComparisonComp
+from comparison import NAME_COMP, DATE_COMP, AGE_COMP, DIST_COMP, OFFENDER_COMP, \
+    WEAPON_COMP, CIRC_COMP
 from menuprompts import NextStep
 from pymonad import (
     Run,
@@ -206,228 +205,15 @@ def _cluster_blocks(rows):
 
 def _settings_for_victim_dedupe() -> dict:
 
-    # Comparisons
-    name_comp = cl.CustomComparison(
-        output_column_name="victim_name",
-        comparison_levels=[
-            # 0) NULL level (same as stock)
-            {
-                "is_null_level": True,
-                "label_for_charts": "victim names NULL",
-                "sql_condition": '("victim_forename_norm_l" IS NULL '
-                'OR "victim_forename_norm_r" IS NULL) '
-                'AND ("victim_surname_norm_l" IS NULL '
-                'OR "victim_surname_norm_r" IS NULL)',
-            },
-            # 1) Exact match on concatenated fullname (with TF)
-            {
-                "label_for_charts": "Exact match victim name",
-                "sql_condition": '"victim_fullname_concat_l" = "victim_fullname_concat_r"',
-                # "tf_adjustment_column": "victim_fullname_concat",
-                # "tf_adjustment_weight": 1.0,
-            },
-            # 2) JW >= 0.96 on both parts (same-direction)
-            {
-                "label_for_charts": "JW >= 0.96 victim names",
-                "sql_condition": "(jaro_winkler_similarity("
-                '"victim_forename_norm_l",'
-                '"victim_forename_norm_r") >= 0.96) '
-                "AND (jaro_winkler_similarity("
-                '"victim_surname_norm_l",'
-                '"victim_surname_norm_r") >= 0.96)',
-            },
-            # 3) MERGED level: (reversed exact)
-            # OR (JW >= 0.92 both parts, same-direction)
-            {
-                "label_for_charts": "Reversed exact OR JW>=0.92 on both parts",
-                "sql_condition": '(("victim_forename_norm_l" = "victim_surname_norm_r" '
-                'AND "victim_forename_norm_r" = "victim_surname_norm_l") '
-                "OR (jaro_winkler_similarity("
-                '"victim_forename_norm_l",'
-                '"victim_forename_norm_r") >= 0.92 '
-                "AND jaro_winkler_similarity("
-                '"victim_surname_norm_l",'
-                '"victim_surname_norm_r") >= 0.92))',
-            },
-            # 4) JW >= 0.80 on both parts (same-direction)
-            {
-                "label_for_charts": "JW victim name >= 0.80",
-                "sql_condition": "(jaro_winkler_similarity("
-                '"victim_forename_norm_l","victim_forename_norm_r") >= 0.80) '
-                "AND (jaro_winkler_similarity("
-                '"victim_surname_norm_l","victim_surname_norm_r") >= 0.80)',
-            },
-            {"label_for_charts": "All other comparisons", "sql_condition": "ELSE"},
-        ],
-    )
-
-    dist_comp = cl.DistanceInKMAtThresholds(
-        lat_col="lat",
-        long_col="lon",
-        km_thresholds=[0.1, 0.5, 1.5],
-    )
-
-    offender_comp = cl.CustomComparison(
-        output_column_name="offender",
-        comparison_levels=[
-            {
-                "is_null_level": True,
-                "label_for_charts": "offender NULL",
-                "sql_condition": '("offender_fullname_concat_l" IS NULL '
-                "OR offender_fullname_concat_r IS NULL) ",
-            },
-            # {
-            #     "label_for_charts": "Exact match offender name",
-            #     "sql_condition":
-            #     '"offender_fullname_concat_l" = "offender_fullname_concat_r"',
-            # },
-            {
-                "label_for_charts": "JW >= 0.85 offender names",
-                "sql_condition": "(jaro_winkler_similarity("
-                '"offender_forename_norm_l",'
-                '"offender_forename_norm_r") >= 0.85) '
-                "AND (jaro_winkler_similarity("
-                '"offender_surname_norm_l",'
-                '"offender_surname_norm_r") >= 0.85)',
-            },
-            cll.ElseLevel(),
-        ],
-    )
-
-    # New comparison: Same article penalty
-    # Same-article heavy penalty using CustomComparison (doc'd)
-    # We force m << u on the "same_article" level to yield a strong negative weight.
-    # same_article_comp = cl.CustomComparison(
-    #     output_column_name="same_article_penalty",
-    #     comparison_levels=[
-    #         {
-    #             "sql_condition": "article_id_l = article_id_r",
-    #             "label_for_charts": "same_article",
-    #             "m_probability": 1e-12,
-    #             "u_probability": 1e-3,
-    #         },
-    #         {
-    #             "sql_condition": "article_id_l IS NULL OR article_id_r IS NULL",
-    #             "label_for_charts": "article_id_null",
-    #             "is_null_level": True,
-    #         },
-    #         cll.ElseLevel(),
-    #     ],
-    # ).configure(term_frequency_adjustments=False)
-
-    date_comp = cl.CustomComparison(
-        output_column_name="date_proximity",
-        comparison_levels=[
-            {
-                "label_for_charts": "Exact match",
-                "sql_condition": ComparisonComp.EXACT_YEAR_MONTH_DAY.value,
-            },
-            {
-                "label_for_charts": "midpoint_day within 2 days",
-                "sql_condition": _clause_from_comps(
-                    ComparisonComp.MIDPOINT_EXISTS,
-                    ComparisonComp.MIDPOINT_2DAYS,
-                    ComparisonComp.DAY_PRECISION,
-                ),
-            },
-            {
-                "label_for_charts": "midpoint_day within 10 days",
-                "sql_condition": _clause_from_comps(
-                    ComparisonComp.MIDPOINT_EXISTS,
-                    ComparisonComp.MIDPOINT_10DAYS,
-                    ComparisonComp.DAY_PRECISION,
-                ),
-            },
-            {
-                "label_for_charts": "midpoint_day within 30 days",
-                "sql_condition": _clause_from_comps(
-                    ComparisonComp.MIDPOINT_EXISTS,
-                    ComparisonComp.MIDPOINT_90DAYS,
-                    ComparisonComp.MONTH_PRECISION,
-                ),
-            },
-            {
-                "label_for_charts": "midpoint_day within 7 months",
-                "sql_condition": _clause_from_comps(
-                    ComparisonComp.MIDPOINT_EXISTS,
-                    ComparisonComp.MIDPOINT_7MONTH,
-                    ComparisonComp.YEAR_PRECISION,
-                ),
-            },
-            {
-                "label_for_charts": "Null dates",
-                "sql_condition": "midpoint_day_l IS NULL OR midpoint_day_r IS NULL",
-                "is_null_level": True,
-            },
-            cll.ElseLevel(),
-        ],
-    )
-
-    age_comp = cl.CustomComparison(
-        output_column_name="age_proximity",
-        comparison_levels=[
-            {
-                "label_for_charts": "Null age",
-                "sql_condition": ComparisonComp.AGE_NULL.value,
-                "is_null_level": True,
-            },
-            {
-                "label_for_charts": "Exact match",
-                "sql_condition": ComparisonComp.EXACT_AGE.value,
-            },
-            {
-                "label_for_charts": "Age within 2 years",
-                "sql_condition": ComparisonComp.AGE_2YEAR.value,
-            },
-            cll.ElseLevel(),
-        ],
-    )
-
-    weapon_comp = cl.CustomComparison(
-        output_column_name="weapon",
-        comparison_levels=[
-            {
-                "label_for_charts": "Null weapon",
-                "sql_condition": "weapon_l IS NULL OR weapon_r IS NULL "
-                "OR weapon_l = 'unknown' OR weapon_r = 'unknown'",
-                "is_null_level": True,
-            },
-            {
-                "label_for_charts": "Exact match",
-                "sql_condition": "weapon_l = weapon_r "
-                "OR (weapon_l IN ('firearm', 'handgun', 'rifle', 'shotgun') "
-                "AND weapon_r IN ('firearm', 'handgun', 'rifle', 'shotgun'))",
-            },
-            cll.ElseLevel(),
-        ],
-    )
-
-    circ_comp = cl.CustomComparison(
-        output_column_name="circumstance",
-        comparison_levels=[
-            {
-                "label_for_charts": "Null circumstance",
-                "sql_condition": "circumstance_l IS NULL OR circumstance_r IS NULL "
-                "OR circumstance_l = 'undetermined' OR circumstance_r = 'undetermined'",
-                "is_null_level": True,
-            },
-            {
-                "label_for_charts": "Exact match",
-                "sql_condition": "circumstance_l = circumstance_r",
-            },
-            cll.ElseLevel(),
-        ],
-    )
-
     comparisons = [
         NAME_COMP,
-        date_comp,
-        age_comp,
-        dist_comp,
+        DATE_COMP,
+        AGE_COMP,
+        DIST_COMP,
         cl.ExactMatch("victim_sex"),
-        offender_comp,
-        weapon_comp,
-        circ_comp,
+        OFFENDER_COMP,
+        WEAPON_COMP,
+        CIRC_COMP,
         # same_article_comp,  # Add the new comparison here
     ]
 
