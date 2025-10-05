@@ -351,7 +351,7 @@ def _settings_for_victim_dedupe() -> dict:
                 "sql_condition": _clause_from_comps(
                     ComparisonComp.MIDPOINT_EXISTS,
                     ComparisonComp.MIDPOINT_7MONTH,
-                    ComparisonComp.MONTH_PRECISION,
+                    ComparisonComp.YEAR_PRECISION,
                 ),
             },
             {

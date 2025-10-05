@@ -43,7 +43,8 @@ class ComparisonComp(StrEnum):
         "date_precision_l" = 'year' OR "date_precision_r" = 'year'
     """
     MONTH_PRECISION = """
-        "date_precision_l" <> 'day' OR "date_precision_r" <> 'day'
+        ("date_precision_l" = 'month' OR "date_precision_r" = 'month')
+        AND ("date_precision_l" <> 'year' AND "date_precision_r" <> 'year')
     """
         # "AND date_precision_l <> 'year' AND date_precision_r <> 'year'"
     DAY_PRECISION = _specific_value_comp_builder("date_precision", "= 'day'")
