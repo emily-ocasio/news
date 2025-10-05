@@ -3,6 +3,8 @@ Intent and smart constructors for Splink
 Uses run_base_effect eliminator with REAL_DISPATCH
 """
 
+from typing import Sequence
+
 from splink.internals.blocking_rule_creator import BlockingRuleCreator
 
 # pylint:disable=W0212
@@ -19,8 +21,8 @@ def splink_dedupe_job(
     pairs_out: str = "incidents_pairs",
     clusters_out: str = "incidents_clusters",
     train_first: bool = False,
-    training_blocking_rules: list[str] | None = None,
-    deterministic_rules: list[str | BlockingRuleCreator] | None = None,
+    training_blocking_rules: Sequence[str] | None = None,
+    deterministic_rules: Sequence[str | BlockingRuleCreator] | None = None,
     deterministic_recall: float = 0.5
 ) -> Run[tuple[str, str]]:
     """

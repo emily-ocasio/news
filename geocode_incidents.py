@@ -29,10 +29,10 @@ from pymonad import (
     Unit,
     unit,
     Array,
+    sql_script
 )
 from incidents_setup import CREATE_VICTIMS_CACHED_ENH_SQL
 from menuprompts import NextStep
-from pymonad.runsql import sql_script
 
 CREATE_CACHE_SQL = SQL(
     r"""

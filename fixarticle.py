@@ -4,11 +4,11 @@ Monadic controller for reviewing and making changes to a single article
 from calculations import single_article_sql
 from pymonad import Run, Namespace, with_namespace, to_prompts, put_line, \
     pure, input_number, PromptKey, sql_query, SQL, SQLParams, throw, \
-    ErrorPayload, set_, view, with_models, rethrow
-from appstate import selected_option
+    ErrorPayload, set_, view, with_models, rethrow, String
+from appstate import selected_option, prompt_key
 from article import Article, Articles, ArticleAppError, from_rows
 from gpt_filtering import GPT_PROMPTS, GPT_MODELS, print_gpt_response, \
-    save_article_fn, filter_article, save_gpt_fn
+    save_article_fn, filter_article, save_gpt_fn, PROMPT_KEY_STR
 from menuprompts import NextStep, MenuPrompts, MenuChoice, input_from_menu
 
 FIX_PROMPTS: dict[str, str | tuple[str,]] = {
@@ -139,7 +139,8 @@ def fix_article() -> Run[NextStep]:
     """
     Fix an article by its record ID.
     """
-    return with_models(GPT_MODELS,
-                with_namespace(Namespace("fix"),
-                to_prompts(FIX_PROMPTS | GPT_PROMPTS),
-                select_fix_article()))
+    return set_(prompt_key, String(PROMPT_KEY_STR)) ^ \
+        with_models(GPT_MODELS,
+        with_namespace(Namespace("fix"),
+        to_prompts(FIX_PROMPTS | GPT_PROMPTS),
+        select_fix_article()))

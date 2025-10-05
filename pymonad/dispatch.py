@@ -3,7 +3,7 @@ Defines functions with side effects and maps them to intents
 """
 
 from dataclasses import dataclass
-from typing import Callable, TypedDict, cast, Any
+from typing import Callable, TypedDict, cast, Any, Sequence
 import json
 import time
 import requests
@@ -65,10 +65,10 @@ class SplinkDedupeJob:
     cluster_threshold: float
     pairs_out: str
     clusters_out: str
-    deterministic_rules: list[str | BlockingRuleCreator]
+    deterministic_rules: Sequence[str | BlockingRuleCreator]
     deterministic_recall: float
     train_first: bool = False
-    training_blocking_rules: list[str] | None = None
+    training_blocking_rules: Sequence[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -122,12 +122,14 @@ def _getline(x: GetLine) -> String:
 @intentdef(SplinkDedupeJob)
 def _splink_dedupe(job: SplinkDedupeJob) -> tuple[str, str]:
     db_api = DuckDBAPI(connection=duckdb.connect(job.duckdb_path))
-    linker = Linker(job.input_table,
-                    job.settings | {'retain_intermediate_calculation_columns': True},
-                    db_api=db_api)
+    linker = Linker(
+        job.input_table,
+        job.settings | {"retain_intermediate_calculation_columns": True},
+        db_api=db_api,
+    )
 
     linker.training.estimate_probability_two_random_records_match(
-        job.deterministic_rules, recall=job.deterministic_recall
+        list(job.deterministic_rules), recall=job.deterministic_recall
     )
     linker.training.estimate_u_using_random_sampling(1e6)
 
@@ -151,15 +153,18 @@ def _splink_dedupe(job: SplinkDedupeJob) -> tuple[str, str]:
     )
     alt.renderers.enable("browser")
     chart = linker.visualisations.match_weights_chart()
-    chart.show() # type: ignore
+    chart.show()  # type: ignore
     mw = chart["data"].to_dict()["values"]
     mw_df = DataFrame(mw)
 
     pd_pairs = df_pairs.as_pandas_dataframe()
-    inspect_df = pd_pairs[(pd_pairs['victim_surname_norm_l'] == 'proctor') & (pd_pairs['victim_surname_norm_r'] == 'proctor')]
-    inspect_dict = cast(list[dict[str, Any]], inspect_df.to_dict(orient='records'))
+    inspect_df = pd_pairs[
+        (pd_pairs["victim_surname_norm_l"] == "goodarzi")
+        & (pd_pairs["victim_surname_norm_r"] == "goodarzi")
+    ]
+    inspect_dict = cast(list[dict[str, Any]], inspect_df.to_dict(orient="records"))
     waterfall = linker.visualisations.waterfall_chart(inspect_dict)
-    waterfall.show() #type: ignore
+    waterfall.show()  # type: ignore
     print(f"number of rows: {len(inspect_dict)}")
 
     # 3) Persist outputs into stable tables in the same DB

@@ -9,7 +9,7 @@ from menuprompts import NextStep
 # --- Victim-level extraction & feature engineering ---
 
 # 1) Explode victim array -> one row per victim mention
-CREATE_VICTIMS_CACHED_SQL = SQL(r"""
+CREATE_VICTIMS_CACHED_SQL = SQL("""
 CREATE OR REPLACE TABLE victims_cached AS
 SELECT
   a.article_id,
@@ -40,7 +40,7 @@ WHERE json_type(CAST(a.incident_json AS JSON), '$.victim') = 'ARRAY';
 
 # 2) Normalize names + sanitize age,
 # add coarse age bucket + parsed forename/surname
-CREATE_VICTIMS_CACHED_ENH_SQL = SQL(r"""
+CREATE_VICTIMS_CACHED_ENH_SQL = SQL(r"""--sql
 CREATE OR REPLACE TABLE victims_cached_enh AS
 WITH norm AS (
   SELECT
@@ -161,14 +161,13 @@ LEFT JOIN incidents_cached i
 """)
 
 COUNT_VICTIMS_SQL  = SQL("SELECT COUNT(*) AS n FROM victims_cached_enh;")
-PREVIEW_VICTIMS_SQL = SQL(r"""
-SELECT article_id, incident_idx, victim_idx, victim_row_id,
+PREVIEW_VICTIMS_SQL = SQL("""SELECT article_id, incident_idx, victim_idx, victim_row_id,
        victim_name_raw, victim_age, victim_sex, victim_race, victim_ethnicity
 FROM victims_cached_enh
 LIMIT 10;
 """)
 # --- Incident-level extraction & feature engineering ---
-CREATE_STG_ARTICLE_INCIDENTS_SQL = SQL(r"""
+CREATE_STG_ARTICLE_INCIDENTS_SQL = SQL("""--sql
 CREATE OR REPLACE VIEW stg_article_incidents AS
 WITH base AS (
   SELECT
@@ -272,14 +271,14 @@ SELECT
 FROM norm;
 """)
 
-CREATE_INCIDENTS_CACHED_SQL = SQL(r"""
+CREATE_INCIDENTS_CACHED_SQL = SQL("""
 CREATE OR REPLACE TABLE incidents_cached AS
 SELECT * FROM stg_article_incidents;
 """)
 
 COUNT_VIEW_SQL    = SQL("SELECT COUNT(*) AS n FROM stg_article_incidents;")
 COUNT_CACHE_SQL   = SQL("SELECT COUNT(*) AS n FROM incidents_cached;")
-PREVIEW_CACHE_SQL = SQL(r"""
+PREVIEW_CACHE_SQL = SQL("""
 SELECT article_id, incident_idx, year, month, day, incident_date,
        event_start_day, event_end_day, weapon, circumstance,
        substr(summary, 1, 80) AS summary_snip
@@ -303,7 +302,7 @@ def build_incident_views() -> Run[NextStep]:
         # (this runs in the existing run_sqlite context) ---
         put_line("[I] Rebuilding SQLite subset table articles_wp_subset…") ^
         sql_exec(SQL("DROP TABLE IF EXISTS articles_wp_subset;")) ^
-        sql_exec(SQL(r"""
+        sql_exec(SQL("""
             CREATE TABLE articles_wp_subset AS
             SELECT RecordId, Publication, PubDate, Title, FullText, gptVictimJson, LastUpdated
             FROM articles
@@ -322,7 +321,7 @@ def build_incident_views() -> Run[NextStep]:
         run_duckdb(
             env.get("duckdb_path", "news.duckdb"),
             (
-                sql_script(SQL(r"""
+                sql_script(SQL("""
                     INSTALL splink_udfs FROM community;
                     LOAD splink_udfs;
                 """)) ^

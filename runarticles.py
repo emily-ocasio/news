@@ -104,4 +104,3 @@ def exit_program() -> None:
 if __name__ == "__main__":
     main()
     exit_program()
-
