@@ -35,6 +35,7 @@ from pymonad import (
     unit,
 )
 
+
 def _create_victims_named_table() -> Run[Unit]:
     """
     Create a table of victims that have name present.
@@ -131,22 +132,18 @@ def _create_cluster_tables() -> Run[Unit]:
     )
 
 
-def dedupe_incidents_with_splink(env) -> Run[NextStep]:
+def _show_initial_clusters() -> Run[Unit]:
     """
-    Deduplicate incident records using Splink.
-    """
+    Show the top victim clusters by member count, with details."""
     return (
-        _create_victims_named_table()
-        ^ _dedupe_named_victims(env)
-        ^ _create_cluster_tables()
-        ^ sql_query(
+        sql_query(
             SQL(
                 """
-            SELECT cluster_id, member_count
-            FROM victim_cluster_counts
-            ORDER BY member_count DESC, cluster_id
-            LIMIT 100;
-        """
+        SELECT cluster_id, member_count
+        FROM victim_cluster_counts
+        ORDER BY member_count DESC, cluster_id
+        LIMIT 100;
+    """
             )
         )
         >> (
@@ -208,8 +205,16 @@ def dedupe_incidents_with_splink(env) -> Run[NextStep]:
                 )
             )
         )
-        # --- Build gold-set representatives (one row per entity) ---
-        ^ sql_exec(
+        ^ pure(unit)
+    )
+
+
+def _build_representative_victims() -> Run[Unit]:
+    """
+    Build a table of representative victims for each cluster.
+    """
+    return (
+        sql_exec(
             SQL(
                 """--sql
             CREATE OR REPLACE VIEW victim_entity_reps AS
@@ -242,6 +247,20 @@ def dedupe_incidents_with_splink(env) -> Run[NextStep]:
         )
         ^ sql_query(SQL("SELECT COUNT(*) AS n FROM victim_entity_reps"))
         >> (lambda rows: put_line(f"[D] victim_entity_reps rows: {rows[0]['n']}"))
+        ^ pure(unit)
+    )
+
+
+def dedupe_incidents_with_splink(env) -> Run[NextStep]:
+    """
+    Deduplicate incident records using Splink.
+    """
+    return (
+        _create_victims_named_table()
+        ^ _dedupe_named_victims(env)
+        ^ _create_cluster_tables()
+        ^ _show_initial_clusters()
+        ^ _build_representative_victims()
         # --- Orphans: non-named victims not already in clusters ---
         ^ sql_exec(
             SQL(
