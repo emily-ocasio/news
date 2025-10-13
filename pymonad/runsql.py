@@ -5,10 +5,15 @@ Intent and eliminator for SQL (database) effects.
 # pylint:disable=W0212
 from dataclasses import dataclass
 from typing import TypeVar
-from typing import Any
+from typing import Any, cast
 
 import sqlite3
+import pandas as pd
 import duckdb
+from openpyxl import load_workbook
+from openpyxl.styles import PatternFill
+from openpyxl.formatting.rule import FormulaRule
+from openpyxl.cell import Cell
 
 from .array import Array
 from .run import Run, _unhandled, ask
@@ -106,6 +111,19 @@ class InTransaction:
     program: Run[Any]  # sub-program run atomically
 
 
+@dataclass(frozen=True)
+class SqlExport:
+    """
+    Intent to export results of a SQL query into a spreadsheet (or fallback CSV),
+    optionally with row-band formatting by group.
+    """
+    sql: SQL
+    filename: str
+    sheet: str | None = None
+    band_by_group_col: str | None = None
+    band_wrap: int = 2  # how many alternating bands/colors
+
+
 def sql_query(sql: SQL, params: SQLParams = SQLParams(())) -> Run[Array]:
     """
     Smart constructor for SQL queries with intent.
@@ -134,8 +152,91 @@ def in_transaction(prog: "Run[A]") -> "Run[A]":
     return Run(lambda self: self._perform(InTransaction(prog), self), _unhandled)
 
 
+def sql_export(
+    sql: SQL,
+    filename: str,
+    sheet: str | None = None,
+    band_by_group_col: str | None = None,
+    band_wrap: int = 2,
+) -> Run[None]:
+    """
+    Smart constructor for exporting SQL query results to a spreadsheet (or CSV).
+    """
+    return Run(
+        lambda self: self._perform(
+            SqlExport(sql, filename, sheet, band_by_group_col, band_wrap),
+            self,
+        ),
+        _unhandled,
+    )
+
+
 A = TypeVar("A")
 
+
+def _apply_band_formatting_xlsx(
+    filename: str, sheet: str, group_col: str, band_wrap: int = 2
+) -> None:
+    """
+    After writing the Excel file, insert a helper “band column” and
+    apply conditional formatting by group (cycling 0..band_wrap-1).
+    """
+    try:
+        wb = load_workbook(filename)
+    except KeyError as e:
+        print(f"[WARN] Cannot load {filename} for band formatting: {e}")
+        return
+    if sheet not in wb.sheetnames:
+        wb.close()
+        return
+    ws = wb[sheet]
+
+    # Read header row
+    header = [cell.value for cell in ws[1]]
+    if group_col not in header:
+        wb.close()
+        return
+
+    grp_idx = header.index(group_col) + 1  # 1-based index
+
+    # Insert helper column at column A
+    ws.insert_cols(1)
+    ws.cell(row=1, column=1, value="_band_helper")
+
+    # After insert, group_col shifts right by one
+    grp_col_letter = cast(Cell, ws.cell(row=1, column=(grp_idx + 1))).column_letter
+    helper_letter = cast(Cell, ws.cell(row=1, column=1)).column_letter
+
+    # Fill helper formulas
+    for row in range(2, ws.max_row + 1):
+        cell = cast(Cell, ws.cell(row=row, column=1))
+        # If same group value as above, carry helper; else increment
+        formula = (
+            f"=MOD(IF(${grp_col_letter}{row} = ${grp_col_letter}{row-1}, "
+            f"${helper_letter}{row-1}, ${helper_letter}{row-1} + 1), {band_wrap})"
+        ) if row > 2 else "=0"
+        cell.value = formula
+
+    # Create a few PatternFill objects (you can customize colors)
+    fill_list = [
+        PatternFill(start_color="FFEEEE", end_color="FFEEEE", fill_type="solid"),
+        PatternFill(start_color="EEFFEE", end_color="EEFFEE", fill_type="solid"),
+        PatternFill(start_color="EEEEFF", end_color="EEEEFF", fill_type="solid"),
+    ]
+
+    max_wrap = min(band_wrap, len(fill_list))
+    # Apply conditional formatting across all columns A -> last column
+    last_col = ws.max_column
+    last_col_letter = cast(Cell, ws.cell(row=1, column=last_col)).column_letter
+    for i in range(max_wrap):
+        formula = f"${helper_letter}2 = {i}"
+        ws.conditional_formatting.add(
+            f"A2:{last_col_letter}{ws.max_row}",
+            FormulaRule(formula=[formula], fill=fill_list[i]),
+        )
+
+    wb.save(filename)
+    wb.close()
 
 def run_sqlite(
     db_path: str,
@@ -186,6 +287,34 @@ def run_sqlite(
                         except Exception as ex:  # noqa: BLE001
                             raise SQLExecutionError(str(sql), None, ex) from ex
 
+                    case SqlExport(sql, filename, sheet, band_by_group_col, band_wrap):
+                        try:
+                            df = pd.read_sql_query(str(sql), con)
+                        except Exception as ex:
+                            raise SQLExecutionError(str(sql), None, ex) from ex
+
+                        try:
+                            with pd.ExcelWriter(filename, engine="openpyxl") as writer:
+                                df.to_excel(
+                                    writer, sheet_name=sheet or "Sheet1", index=False
+                                )
+                        except (
+                            PermissionError,
+                            FileNotFoundError,
+                            OSError,
+                            ValueError,
+                        ):
+                            fallback = (
+                                filename
+                                if filename.lower().endswith(".csv")
+                                else (filename + ".csv")
+                            )
+                            df.to_csv(fallback, index=False)
+
+                        if band_by_group_col and filename.lower().endswith(".xlsx"):
+                            _apply_band_formatting_xlsx(filename, sheet or "Sheet1",
+                                                            band_by_group_col, band_wrap)
+                        return None
                     case InTransaction(subprog):
                         try:
                             result = subprog._step(current)
@@ -262,6 +391,57 @@ def run_duckdb(
                             return None
                         except Exception as ex:  # noqa: BLE001
                             raise SQLExecutionError(str(sql), None, ex) from ex
+
+                    case SqlExport(sql, filename, sheet, band_by_group_col, band_wrap):
+                        # Try native DuckDB Excel export first
+                        try:
+                            raise duckdb.BinderException
+                            con.execute("INSTALL excel;")
+                            con.execute("LOAD excel;")
+                            stmt = f"COPY ({str(sql)}) TO '{filename}' WITH (FORMAT xlsx, HEADER true"
+                            if sheet:
+                                stmt += f", SHEET '{sheet}'"
+                            stmt += ")"
+                            print(stmt)
+                            con.execute(stmt)
+                            # If band formatting requested, apply it
+                            if band_by_group_col and filename.lower().endswith(".xlsx"):
+                                _apply_band_formatting_xlsx(filename, sheet or "Sheet1",
+                                                            band_by_group_col, band_wrap)
+                            return None
+                        except (
+                            duckdb.BinderException,
+                            duckdb.IOException,
+                            duckdb.CatalogException,
+                            duckdb.InternalException,
+                        ) as ex:
+                            # Fallback: materialize in Python and use pandas
+                            df = con.execute(str(sql)).df()
+                            try:
+                                with pd.ExcelWriter(
+                                    filename, engine="openpyxl"
+                                ) as writer:
+                                    df.to_excel(
+                                        writer,
+                                        sheet_name=sheet or "Sheet1",
+                                        index=False,
+                                    )
+                                if band_by_group_col and filename.lower().endswith(".xlsx"):
+                                    _apply_band_formatting_xlsx(filename, sheet or "Sheet1",
+                                                                 band_by_group_col, band_wrap)
+                            except (
+                                PermissionError,
+                                FileNotFoundError,
+                                OSError,
+                                ValueError,
+                            ):
+                                fallback = (
+                                    filename
+                                    if filename.lower().endswith(".csv")
+                                    else (filename + ".csv")
+                                )
+                                df.to_csv(fallback, index=False)
+                            return None
 
                     case InTransaction(subprog):
                         # DuckDB has transactional semantics; use BEGIN/COMMIT

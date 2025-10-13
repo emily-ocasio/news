@@ -23,7 +23,10 @@ def splink_dedupe_job(
     train_first: bool = False,
     training_blocking_rules: Sequence[str] | None = None,
     deterministic_rules: Sequence[str | BlockingRuleCreator] | None = None,
-    deterministic_recall: float = 0.5
+    deterministic_recall: float = 0.5,
+    do_cluster: bool = True,
+    visualize: bool = False
+
 ) -> Run[tuple[str, str]]:
     """
     Smart constructor for SplinkDedupeJob intent.
@@ -43,6 +46,8 @@ def splink_dedupe_job(
                 deterministic_recall,
                 train_first,
                 training_blocking_rules or [],
+                do_cluster,
+                visualize
             ),
             self,
         ),

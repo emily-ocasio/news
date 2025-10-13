@@ -3,7 +3,7 @@ Defines functions with side effects and maps them to intents
 """
 
 from dataclasses import dataclass
-from typing import Callable, TypedDict, cast, Any, Sequence
+from typing import Callable, TypedDict, Sequence
 import json
 import time
 import requests
@@ -68,6 +68,8 @@ class SplinkDedupeJob:
     deterministic_recall: float
     train_first: bool = False
     training_blocking_rules: Sequence[str] | None = None
+    do_cluster: bool = True
+    visualize: bool = False
 
 
 @dataclass(frozen=True)
@@ -146,49 +148,71 @@ def _splink_dedupe(job: SplinkDedupeJob) -> tuple[str, str]:
     df_pairs = linker.inference.predict(
         threshold_match_probability=job.predict_threshold
     )
-    df_clusters = linker.clustering.cluster_pairwise_predictions_at_threshold(
-        df_pairs,
-        threshold_match_probability=job.cluster_threshold,
-    )
-    alt.renderers.enable("browser")
-    chart = linker.visualisations.match_weights_chart()
-    chart.show()  # type: ignore
-    mw = chart["data"].to_dict()["values"]
-    mw_df = DataFrame(mw)
 
-    pd_pairs = df_pairs.as_pandas_dataframe()
-    inspect_df = pd_pairs[
-        (pd_pairs["victim_surname_norm_l"] == "goodarzi")
-        & (pd_pairs["victim_surname_norm_r"] == "goodarzi")
-    ]
-    inspect_dict = cast(list[dict[str, Any]], inspect_df.to_dict(orient="records"))
+    #pd_pairs = df_pairs.as_pandas_dataframe()
+    # inspect_df = pd_pairs[
+    #     (pd_pairs["victim_surname_norm_l"] == "goodarzi")
+    #     & (pd_pairs["victim_surname_norm_r"] == "goodarzi")
+    # ]
+    # inspect_dict = cast(list[dict[str, Any]], inspect_df.to_dict(orient="records"))
     #waterfall = linker.visualisations.waterfall_chart(inspect_dict)
     #waterfall.show()  # type: ignore
-    print(f"number of rows: {len(inspect_dict)}")
 
-    linker.visualisations.comparison_viewer_dashboard(
-        df_pairs,
-        out_path="comparison_viewer.html",
-        overwrite=True,
-        num_example_rows=20)
 
-    # 3) Persist outputs into stable tables in the same DB
+    # Persist outputs into stable tables in the same DB
     con = duckdb.connect(job.duckdb_path)
     try:
         con.execute(
             f"CREATE OR REPLACE TABLE {job.pairs_out} AS "
             f"SELECT * FROM {df_pairs.physical_name}"
         )
-        con.execute(
-            f"CREATE OR REPLACE TABLE {job.clusters_out} AS "
-            f"SELECT * FROM {df_clusters.physical_name}"
-        )
-        con.register("mw_df", mw_df)
-        con.execute("CREATE OR REPLACE TABLE match_weights AS SELECT * FROM mw_df")
+        if job.settings.get("link_type", "dedupe") == "link_only":
+            con.execute(f"""--sql
+                CREATE OR REPLACE TABLE {job.pairs_out}_top1 AS
+                WITH ranked AS (
+                SELECT
+                    *,
+                    ROW_NUMBER() OVER (
+                    PARTITION BY unique_id_r
+                    ORDER BY
+                        match_probability DESC,
+                        -- stable tie-breakers so results are deterministic:
+                        COALESCE(match_weight, 0) DESC,
+                        CAST(unique_id_l AS VARCHAR)
+                    ) AS rn
+                FROM {job.pairs_out}
+                )
+                SELECT * EXCLUDE (rn)
+                FROM ranked
+                WHERE rn = 1;
+                """)
+        clusters_name: str = ""
+        if job.do_cluster:
+            df_clusters = linker.clustering.cluster_pairwise_predictions_at_threshold(
+                df_pairs,
+                threshold_match_probability=job.cluster_threshold,
+            )
+            con.execute(
+                f"CREATE OR REPLACE TABLE {job.clusters_out} AS "
+                f"SELECT * FROM {df_clusters.physical_name}"
+            )
+            clusters_name = job.clusters_out
+        if job.visualize:
+            alt.renderers.enable("browser")
+            chart = linker.visualisations.match_weights_chart()
+            chart.show()  # type: ignore
+            mw = chart["data"].to_dict()["values"]
+            mw_df = DataFrame(mw)
+            linker.visualisations.comparison_viewer_dashboard(
+                df_pairs,
+                out_path="comparison_viewer.html",
+                overwrite=True,
+                num_example_rows=20)
+            con.register("mw_df", mw_df)
+            con.execute("CREATE OR REPLACE TABLE match_weights AS SELECT * FROM mw_df")
     finally:
         con.close()
-
-    return (job.pairs_out, job.clusters_out)
+    return (job.pairs_out, clusters_name)
 
 
 @intentdef(MarGeocode)

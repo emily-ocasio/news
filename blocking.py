@@ -24,9 +24,10 @@ class BlockComp(StrEnum):
     SAME_SURNAME_SOUNDEX = "l.victim_surname_soundex = r.victim_surname_soundex"
     SAME_FORENAME_SOUNDEX = "l.victim_forename_soundex = r.victim_forename_soundex"
     SAME_AGE_SEX = "l.victim_age = r.victim_age AND l.victim_sex = r.victim_sex"
+    SAME_SEX = 'l.victim_sex = r.victim_sex'
     MIDPOINT_30DAYS = "abs(l.midpoint_day - r.midpoint_day) <= 30"
     MIDPOINT_90DAYS = "abs(l.midpoint_day - r.midpoint_day) <= 90"
-    DIFFERENT_ARTICLE = "l.article_id <> r.article_id"
+    DIFFERENT_ARTICLE = "l.exclusion_id <> r.exclusion_id"
     LONG_LAT_EXISTS = (
         "l.lat IS NOT NULL AND r.lat IS NOT NULL "
         "AND l.lon IS NOT NULL AND r.lon IS NOT NULL"
@@ -58,6 +59,8 @@ class TrainBlockRule(StrEnum):
     LOCATION = _train_block_from_comps(BlockComp.LONG_LAT_EXISTS,
                                        BlockComp.CLOSE_LONG_LAT)
     AGE_SEX = _train_block_from_comps(BlockComp.SAME_AGE_SEX)
+    MIDPOINT_7MONTH = _train_block_from_comps(BlockComp.MIDPOINT_EXISTS,
+                                              BlockComp.MIDPOINT_7MONTH)
 
 class DedupBlockRule(StrEnum):
     """
@@ -80,6 +83,11 @@ class DedupBlockRule(StrEnum):
         BlockComp.LONG_LAT_EXISTS,
         BlockComp.CLOSE_LONG_LAT,
         BlockComp.SAME_AGE_SEX)
+    DATE_LOCATION_SEX = _block_from_comps(
+        BlockComp.EXACT_YEAR_MONTH_DAY,
+        BlockComp.LONG_LAT_EXISTS,
+        BlockComp.CLOSE_LONG_LAT,
+        BlockComp.SAME_SEX)
 
 NAMED_VICTIM_BLOCKS = [
     DedupBlockRule.SAME_NAMES,
@@ -100,4 +108,19 @@ NAMED_VICTIM_BLOCKS_FOR_TRAINING = [
 NAMED_VICTIM_DETERMINISTIC_BLOCKS = [
     DedupBlockRule.SAME_NAMES_30DAYS,
     DedupBlockRule.DATE_LOCATION_AGE_SEX
+]
+
+ORPHAN_VICTIM_BLOCKS = [
+    DedupBlockRule.YEAR_MONTH,
+    DedupBlockRule.DATE_LOCATION,
+    DedupBlockRule.AGE_SEX,
+]
+
+ORPHAN_DETERMINISTIC_BLOCKS = [
+    DedupBlockRule.DATE_LOCATION_SEX
+]
+
+ORPHAN_TRAINING_BLOCKS = [
+    TrainBlockRule.LOCATION,
+    TrainBlockRule.MIDPOINT_7MONTH
 ]

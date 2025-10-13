@@ -40,7 +40,8 @@ WHERE json_type(CAST(a.incident_json AS JSON), '$.victim') = 'ARRAY';
 
 # 2) Normalize names + sanitize age,
 # add coarse age bucket + parsed forename/surname
-CREATE_VICTIMS_CACHED_ENH_SQL = SQL(r"""--sql
+CREATE_VICTIMS_CACHED_ENH_SQL = SQL(
+    r"""--sql
 CREATE OR REPLACE TABLE victims_cached_enh AS
 WITH norm AS (
   SELECT
@@ -153,12 +154,16 @@ SELECT
 
   -- Date fields from incidents_cached
   i.date_precision,
-  i.midpoint_day
+  i.midpoint_day,
+
+  -- Unify article ids for blocking/linkage (single-id CSV)
+  CAST(p.article_id AS varchar) AS article_ids_csv
 FROM parts p
 LEFT JOIN incidents_cached i
   ON p.article_id = i.article_id
  AND p.incident_idx = i.incident_idx;
-""")
+"""
+)
 
 COUNT_VICTIMS_SQL  = SQL("SELECT COUNT(*) AS n FROM victims_cached_enh;")
 PREVIEW_VICTIMS_SQL = SQL("""SELECT article_id, incident_idx, victim_idx, victim_row_id,
