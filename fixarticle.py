@@ -4,11 +4,11 @@ Monadic controller for reviewing and making changes to a single article
 from calculations import single_article_sql
 from pymonad import Run, Namespace, with_namespace, to_prompts, put_line, \
     pure, input_number, PromptKey, sql_query, SQL, SQLParams, throw, \
-    ErrorPayload, set_, view, with_models, rethrow, String
+    ErrorPayload, set_, view, with_models, String
 from appstate import selected_option, prompt_key
 from article import Article, Articles, ArticleAppError, from_rows
-from gpt_filtering import GPT_PROMPTS, GPT_MODELS, print_gpt_response, \
-    save_article_fn, filter_article, save_gpt_fn, PROMPT_KEY_STR
+from gpt_filtering import GPT_PROMPTS, GPT_MODELS, \
+    PROMPT_KEY_STR, process_all_articles
 from menuprompts import NextStep, MenuPrompts, MenuChoice, input_from_menu
 
 FIX_PROMPTS: dict[str, str | tuple[str,]] = {
@@ -87,15 +87,19 @@ def second_filter(article: Article) -> Run[Article]:
     """
     Process second filter action for the article.
     """
-    save_article = save_article_fn(article)
-    save_gpt = save_gpt_fn(article)
-    return \
-        filter_article(article) >> \
-        print_gpt_response >> \
-        save_article >> \
-        save_gpt >> \
-        rethrow ^ \
-        pure(article)
+    return (
+        process_all_articles(Articles((article,)))
+        ^ pure(article)
+    )
+    # save_article = save_article_fn(article)
+    # save_gpt = save_gpt_fn(article)
+    # return \
+    #     filter_article(article) >> \
+    #     print_gpt_response >> \
+    #     save_article >> \
+    #     save_gpt >> \
+    #     rethrow ^ \
+    #     pure(article)
 
 def apply_action(article: Article) -> Run[NextStep]:
     """

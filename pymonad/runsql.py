@@ -173,13 +173,16 @@ def sql_export(
 
 A = TypeVar("A")
 
-
 def _apply_band_formatting_xlsx(
     filename: str, sheet: str, group_col: str, band_wrap: int = 2
 ) -> None:
     """
-    After writing the Excel file, insert a helper “band column” and
-    apply conditional formatting by group (cycling 0..band_wrap-1).
+    After writing the Excel file, color rows in bands.
+    Generic behavior:
+      - If `group_col` already contains integer band indices in 0..band_wrap-1,
+        apply conditional formats directly from that column (no helper col).
+      - Otherwise, insert a helper column that alternates a band index whenever
+        the `group_col` value changes (classic grouping bands).
     """
     try:
         wb = load_workbook(filename)
@@ -197,9 +200,55 @@ def _apply_band_formatting_xlsx(
         wb.close()
         return
 
-    grp_idx = header.index(group_col) + 1  # 1-based index
+    # locate the (1-based) column index for the requested group_col
+    grp_idx = header.index(group_col) + 1
 
-    # Insert helper column at column A
+    # Try DIRECT MODE: if the band column already contains explicit integers
+    # within [0, band_wrap), use them as-is and apply per-index formulas.
+    try:
+        grp_col_letter_direct = cast(Cell, ws.cell(row=1, column=grp_idx)).column_letter
+        sample_rows = min(ws.max_row, 101)
+        seen_any = False
+        direct_ok = True
+        for row in range(2, sample_rows + 1):
+            val = ws.cell(row=row, column=grp_idx).value
+            if val is None or val == "":
+                continue
+            seen_any = True
+            try:
+                ival = int(str(val))
+                if ival < 0 or ival >= band_wrap:
+                    direct_ok = False
+                    break
+            except Exception:
+                direct_ok = False
+                break
+        if seen_any and direct_ok:
+            last_col = ws.max_column
+            last_col_letter = cast(Cell, ws.cell(row=1, column=last_col)).column_letter
+            data_range = f"A2:{last_col_letter}{ws.max_row}"
+            # simple 3-color palette; cycles up to band_wrap
+            fill_list = [
+                PatternFill(start_color="FFEEEE", end_color="FFEEEE", fill_type="solid"),
+                PatternFill(start_color="EEFFEE", end_color="EEFFEE", fill_type="solid"),
+                PatternFill(start_color="EEEEFF", end_color="EEEEFF", fill_type="solid"),
+            ]
+            max_wrap = min(band_wrap, len(fill_list))
+            for i in range(max_wrap):
+                formula = f'${grp_col_letter_direct}2 = {i}'
+                ws.conditional_formatting.add(
+                    data_range,
+                    FormulaRule(formula=[formula], fill=fill_list[i]),
+                )
+            wb.save(filename)
+            wb.close()
+            return
+    except Exception:
+        # fall through to helper-based mode
+        pass
+
+    # HELPER MODE: Insert helper column A with a rolling band counter that
+    # increments when group_col value changes (alternating bands by group).
     ws.insert_cols(1)
     ws.cell(row=1, column=1, value="_band_helper")
 
@@ -210,21 +259,20 @@ def _apply_band_formatting_xlsx(
     # Fill helper formulas
     for row in range(2, ws.max_row + 1):
         cell = cast(Cell, ws.cell(row=row, column=1))
-        # If same group value as above, carry helper; else increment
         formula = (
             f"=MOD(IF(${grp_col_letter}{row} = ${grp_col_letter}{row-1}, "
             f"${helper_letter}{row-1}, ${helper_letter}{row-1} + 1), {band_wrap})"
         ) if row > 2 else "=0"
         cell.value = formula
 
-    # Create a few PatternFill objects (you can customize colors)
+    # Pattern fills
     fill_list = [
         PatternFill(start_color="FFEEEE", end_color="FFEEEE", fill_type="solid"),
         PatternFill(start_color="EEFFEE", end_color="EEFFEE", fill_type="solid"),
         PatternFill(start_color="EEEEFF", end_color="EEEEFF", fill_type="solid"),
     ]
-
     max_wrap = min(band_wrap, len(fill_list))
+
     # Apply conditional formatting across all columns A -> last column
     last_col = ws.max_column
     last_col_letter = cast(Cell, ws.cell(row=1, column=last_col)).column_letter
@@ -460,7 +508,15 @@ def run_duckdb(
             inner = Run(prog._step, perform)
             return inner._step(inner)
         finally:
-            con.close()
+            try:
+                # Cleanly detach the SQLite-attached database if present to avoid
+                # "database with name 'sqldb' already exists" on subsequent runs.
+                con.execute("DETACH DATABASE sqldb;")
+            except duckdb.CatalogException:
+                # Ignore if not attached or already detached.
+                pass
+            finally:
+                con.close()
 
     return Run(step, lambda i, c: c._perform(i, c))
 

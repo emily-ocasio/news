@@ -37,7 +37,8 @@ initial_prompts = (
     "Candidate [V]ictim list",
     "Build [I]ncident views (DuckDB)",
     "Run [M]AR geocoding (addresses)",
-    "Run [D]edup incidents (Splink)"
+    "Run [D]edup incidents (Splink)",
+    "Match [U]nnamed victims (Splink)",
 )
 
 label_prompts = (

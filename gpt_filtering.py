@@ -95,7 +95,7 @@ def special_case_validators() -> Array[ArticleValidator]:
         def validator(article: Article) \
             -> Run[V[Array[FailureDetail], Unit]]:
             text = (article.title or '') + ' ' + (article.full_text or '')
-            pattern = fr"\b{re.escape(term)}\b"
+            pattern = fr"\b{re.escape(term)}"
             if re.search(pattern, text, re.IGNORECASE):
                 detail = ArticleFailureDetail(
                     type=ArticleFailureType.CONTAINS_SPECIAL_CASE,
@@ -122,6 +122,7 @@ def filter_article(article: Article) -> Run[GPTFullResponse]:
             FormatType,
             EnvKey(MODEL_KEY_STR)
         ))
+
 type NewGptClass = String | None
 type ArticleClassTuple = Tuple[Article, NewGptClass]
 

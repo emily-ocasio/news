@@ -102,8 +102,7 @@ parts AS (
     END AS victim_surname_norm,
     CASE
       WHEN offender_name IS NULL THEN NULL
-      WHEN offender_name_core LIKE '% %' THEN regexp_extract(offender_name_core, '^([a-z''\-]+)', 1)
-      ELSE NULL
+      ELSE regexp_extract(offender_name_core, '^([a-z''\-]+)', 1)
     END AS offender_forename_norm,
     CASE
       WHEN offender_name IS NULL THEN NULL
@@ -128,6 +127,8 @@ SELECT
   CASE
     WHEN offender_forename_norm IS NOT NULL AND offender_surname_norm IS NOT NULL
       THEN offender_forename_norm || ' ' || offender_surname_norm
+    WHEN offender_forename_norm IS NOT NULL
+      THEN offender_forename_norm
   END AS offender_fullname_concat,
 
   -- Individual-part Soundex (from splink_udfs)

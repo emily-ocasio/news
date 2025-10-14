@@ -9,6 +9,7 @@ from menuprompts import MenuChoice, MenuPrompts, input_from_menu, NextStep
 
 from incidents import gpt_incidents
 from incidents_dedupe import dedupe_incidents
+from unnamed_match import match_unnamed_victims
 from gpt_filtering import second_filter
 from incidents_setup import build_incident_views
 from fixarticle import fix_article
@@ -30,6 +31,7 @@ class MainChoice(Enum):
     INCIDENTS = MenuChoice('I')
     GEOCODE = MenuChoice('M')
     DEDUP = MenuChoice('D')
+    UNNAMED = MenuChoice('U')
     QUIT = MenuChoice('Q')
 
 class AfterTick(Tuple[AppState, NextStep]):
@@ -72,6 +74,8 @@ def dispatch_from_main_menu(choice: MainChoice) \
             return geocode_incidents()
         case MainChoice.DEDUP:
             return dedupe_incidents()
+        case MainChoice.UNNAMED:
+            return match_unnamed_victims()
         case MainChoice.REVIEW \
             | MainChoice.NEW \
             | MainChoice.ASSIGN \
