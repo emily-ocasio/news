@@ -117,6 +117,7 @@ class SqlExport:
     Intent to export results of a SQL query into a spreadsheet (or fallback CSV),
     optionally with row-band formatting by group.
     """
+
     sql: SQL
     filename: str
     sheet: str | None = None
@@ -173,6 +174,7 @@ def sql_export(
 
 A = TypeVar("A")
 
+
 def _apply_band_formatting_xlsx(
     filename: str, sheet: str, group_col: str, band_wrap: int = 2
 ) -> None:
@@ -220,7 +222,7 @@ def _apply_band_formatting_xlsx(
                 if ival < 0 or ival >= band_wrap:
                     direct_ok = False
                     break
-            except Exception:
+            except Exception:   # pylint: disable=W0718
                 direct_ok = False
                 break
         if seen_any and direct_ok:
@@ -229,13 +231,19 @@ def _apply_band_formatting_xlsx(
             data_range = f"A2:{last_col_letter}{ws.max_row}"
             # simple 3-color palette; cycles up to band_wrap
             fill_list = [
-                PatternFill(start_color="FFEEEE", end_color="FFEEEE", fill_type="solid"),
-                PatternFill(start_color="EEFFEE", end_color="EEFFEE", fill_type="solid"),
-                PatternFill(start_color="EEEEFF", end_color="EEEEFF", fill_type="solid"),
+                PatternFill(
+                    start_color="FFEEEE", end_color="FFEEEE", fill_type="solid"
+                ),
+                PatternFill(
+                    start_color="EEFFEE", end_color="EEFFEE", fill_type="solid"
+                ),
+                PatternFill(
+                    start_color="EEEEFF", end_color="EEEEFF", fill_type="solid"
+                ),
             ]
             max_wrap = min(band_wrap, len(fill_list))
             for i in range(max_wrap):
-                formula = f'${grp_col_letter_direct}2 = {i}'
+                formula = f"${grp_col_letter_direct}2 = {i}"
                 ws.conditional_formatting.add(
                     data_range,
                     FormulaRule(formula=[formula], fill=fill_list[i]),
@@ -243,7 +251,7 @@ def _apply_band_formatting_xlsx(
             wb.save(filename)
             wb.close()
             return
-    except Exception:
+    except Exception:  # pylint: disable=W0718
         # fall through to helper-based mode
         pass
 
@@ -253,16 +261,20 @@ def _apply_band_formatting_xlsx(
     ws.cell(row=1, column=1, value="_band_helper")
 
     # After insert, group_col shifts right by one
-    grp_col_letter = cast(Cell, ws.cell(row=1, column=(grp_idx + 1))).column_letter
+    grp_col_letter = cast(Cell, ws.cell(row=1, column=grp_idx + 1)).column_letter
     helper_letter = cast(Cell, ws.cell(row=1, column=1)).column_letter
 
-    # Fill helper formulas
+    # Fill helper formula
     for row in range(2, ws.max_row + 1):
         cell = cast(Cell, ws.cell(row=row, column=1))
         formula = (
-            f"=MOD(IF(${grp_col_letter}{row} = ${grp_col_letter}{row-1}, "
-            f"${helper_letter}{row-1}, ${helper_letter}{row-1} + 1), {band_wrap})"
-        ) if row > 2 else "=0"
+            (
+                f"=MOD(IF(${grp_col_letter}{row} = ${grp_col_letter}{row-1}, "
+                f"${helper_letter}{row-1}, ${helper_letter}{row-1} + 1), {band_wrap})"
+            )
+            if row > 2
+            else "=0"
+        )
         cell.value = formula
 
     # Pattern fills
@@ -285,6 +297,7 @@ def _apply_band_formatting_xlsx(
 
     wb.save(filename)
     wb.close()
+
 
 def run_sqlite(
     db_path: str,
@@ -360,8 +373,12 @@ def run_sqlite(
                             df.to_csv(fallback, index=False)
 
                         if band_by_group_col and filename.lower().endswith(".xlsx"):
-                            _apply_band_formatting_xlsx(filename, sheet or "Sheet1",
-                                                            band_by_group_col, band_wrap)
+                            _apply_band_formatting_xlsx(
+                                filename,
+                                sheet or "Sheet1",
+                                band_by_group_col,
+                                band_wrap,
+                            )
                         return None
                     case InTransaction(subprog):
                         try:
@@ -444,19 +461,26 @@ def run_duckdb(
                         # Try native DuckDB Excel export first
                         try:
                             raise duckdb.BinderException
-                            con.execute("INSTALL excel;")
-                            con.execute("LOAD excel;")
-                            stmt = f"COPY ({str(sql)}) TO '{filename}' WITH (FORMAT xlsx, HEADER true"
-                            if sheet:
-                                stmt += f", SHEET '{sheet}'"
-                            stmt += ")"
-                            print(stmt)
-                            con.execute(stmt)
-                            # If band formatting requested, apply it
-                            if band_by_group_col and filename.lower().endswith(".xlsx"):
-                                _apply_band_formatting_xlsx(filename, sheet or "Sheet1",
-                                                            band_by_group_col, band_wrap)
-                            return None
+                            # DON'T USE DUCKDB EXCEL EXPORT FOR NOW:
+                            # con.execute("INSTALL excel;")
+                            # con.execute("LOAD excel;")
+                            # stmt = f"COPY ({str(sql)}) TO '{filename}' " + \
+                            #   f"WITH (FORMAT xlsx, HEADER true"
+                            # if sheet:
+                            #     stmt += f", SHEET '{sheet}'"
+                            # stmt += ")"
+                            # print(stmt)
+                            # con.execute(stmt)
+                            # # If band formatting requested, apply it
+                            # if band_by_group_col and \
+                            #   filename.lower().endswith(".xlsx"):
+                            #     _apply_band_formatting_xlsx(
+                            #         filename,
+                            #         sheet or "Sheet1",
+                            #         band_by_group_col,
+                            #         band_wrap,
+                            #     )
+                            # return None
                         except (
                             duckdb.BinderException,
                             duckdb.IOException,
@@ -474,9 +498,15 @@ def run_duckdb(
                                         sheet_name=sheet or "Sheet1",
                                         index=False,
                                     )
-                                if band_by_group_col and filename.lower().endswith(".xlsx"):
-                                    _apply_band_formatting_xlsx(filename, sheet or "Sheet1",
-                                                                 band_by_group_col, band_wrap)
+                                if band_by_group_col and filename.lower().endswith(
+                                    ".xlsx"
+                                ):
+                                    _apply_band_formatting_xlsx(
+                                        filename,
+                                        sheet or "Sheet1",
+                                        band_by_group_col,
+                                        band_wrap,
+                                    )
                             except (
                                 PermissionError,
                                 FileNotFoundError,

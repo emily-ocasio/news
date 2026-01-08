@@ -15,6 +15,7 @@ from runinitial import initialize_program
 from appstate import AppState
 from mainmenu import main_menu_tick, AfterTick
 from menuprompts import NextStep
+from st_initialize import SentenceTransformerModel
 from secr_apis.gpt3_key import GPT_API_KEY
 from secr_apis.mar_key import MAR_API_KEY
 
@@ -31,6 +32,7 @@ def main() -> None:
         "openai_models": {},
         "openai_client": lambda: OpenAI(api_key=GPT_API_KEY,
                                         timeout=20.0, max_retries=2),
+        "fasttext_model": SentenceTransformerModel(),
         "mar_key": MAR_API_KEY,
         "extras": {}
     }

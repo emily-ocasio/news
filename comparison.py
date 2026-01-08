@@ -5,8 +5,8 @@ Classes and helper functions for defining comparison levels in Splink
 from enum import StrEnum
 from dataclasses import dataclass, asdict
 
-import splink.comparison_library as cl
-import splink.comparison_level_library as cll
+import splink.internals.comparison_library as cl
+import splink.internals.comparison_level_library as cll
 
 from blocking import _clause_from_comps
 
@@ -56,6 +56,7 @@ class ComparisonComp(StrEnum):
     VICTIM_FORENAME_NULL = _null_comp_builder("victim_forename_norm")
     VICTIM_SURNAME_NULL = _null_comp_builder("victim_surname_norm")
     EXACT_VICTIM_FULLNAME = _exact_comp_builder("victim_fullname_concat")
+    EXACT_VICTIM_SURNAME = _exact_comp_builder("victim_surname_norm")
     VICTIM_EXACT_REVERSED = "victim_forename_norm_l = victim_surname_norm_r " \
                              "AND victim_surname_norm_l = victim_forename_norm_r"
     OFFENDER_NULL = _null_comp_builder("offender_fullname_concat")
@@ -109,13 +110,15 @@ NAME_COMP = cl.CustomComparison(
                 "victim_forename_norm", "victim_surname_norm", 0.96)
         ).to_dict(),
         ComparisonLevel(
-            "Reversed exact or JW >= 0.92 victim names",
+            "Reversed exact or JW >= 0.92 victim names or exact single surname",
             ComparisonComp.VICTIM_EXACT_REVERSED.value + " OR " +
             _similarity_comp_builder2(
-                "victim_forename_norm", "victim_surname_norm", 0.92)
+                "victim_forename_norm", "victim_surname_norm", 0.92) + " OR " +
+            "( " + ComparisonComp.EXACT_VICTIM_SURNAME.value + " AND " +
+                ComparisonComp.VICTIM_FORENAME_NULL.value + " )"
         ).to_dict(),
         ComparisonLevel(
-            "JW >= 0.80 victim names",
+            "JW > 0.80 victim names",
             _similarity_comp_builder2(
                 "victim_forename_norm", "victim_surname_norm", 0.80)
         ).to_dict(),
@@ -241,4 +244,9 @@ CIRC_COMP = cl.CustomComparison(
         ).to_dict(),
         cll.ElseLevel()
     ]
+)
+
+SUMMARY_COMP = cl.CosineSimilarityAtThresholds(
+    col_name="summary_vec",
+    score_threshold_or_thresholds=[0.80, 0.65, 0.50, 0.35]
 )

@@ -4,6 +4,7 @@ Dataclasses and related functions for the Reader environment.
 from collections.abc import Callable, Mapping
 from typing import Any, TypedDict, ReadOnly
 
+from st_initialize import SentenceTransformerModel
 from .dispatch import InputPrompt
 from .openai import GPTPromptTemplate, GPTModel
 from .string import String
@@ -56,6 +57,7 @@ class Environment(TypedDict):
     openai_client: ReadOnly[Callable]
     openai_default_model: ReadOnly[GPTModel]
     openai_models: ReadOnly[dict[EnvKey, GPTModel]]
+    fasttext_model: ReadOnly[SentenceTransformerModel]
     mar_key: ReadOnly[str]
     extras: ReadOnly[Mapping[EnvKey, Any]]
 

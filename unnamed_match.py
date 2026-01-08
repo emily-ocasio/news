@@ -17,6 +17,7 @@ from comparison import (
     OFFENDER_COMP,
     WEAPON_COMP,
     CIRC_COMP,
+    SUMMARY_COMP,
 )
 
 from menuprompts import NextStep
@@ -77,6 +78,7 @@ def _create_linkage_input_tables() -> Run[Unit]:
                     entity_midpoint_day AS midpoint_day,
                     incident_date,
                     entity_date_precision AS date_precision,
+                    summary_vec,
                     -- derived calendar fields for your blocking
                     EXTRACT(
                       YEAR FROM COALESCE(
@@ -138,6 +140,7 @@ def _create_linkage_input_tables() -> Run[Unit]:
                     offender_forename_norm,
                     offender_surname_norm,
                     offender_fullname_concat,
+                    summary_vec,
                     CAST(article_id AS varchar) AS article_ids_csv,
                     '' AS exclusion_id  
                 FROM victims_orphan;
@@ -328,9 +331,10 @@ def _link_orphans_to_entities(env: Environment) -> Run[Unit]:
                 OFFENDER_COMP,
                 WEAPON_COMP,
                 CIRC_COMP,
+                SUMMARY_COMP,
             ],
         },
-        predict_threshold=0.6,
+        predict_threshold=0.00,
         cluster_threshold=0.0,
         pairs_out="orphan_entity_pairs",
         clusters_out="",

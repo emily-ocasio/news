@@ -26,3 +26,5 @@ wp_articleinput.ipynb
 code_analyzer.py
 .codegpt
 *.html
+*.bin
+test_sbert.ipynb

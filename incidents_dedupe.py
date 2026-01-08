@@ -3,7 +3,7 @@ Dedupe incident records using Splink.
 """
 
 from itertools import groupby
-import splink.comparison_library as cl
+import splink.internals.comparison_library as cl
 
 from blocking import (
     NAMED_VICTIM_BLOCKS,
@@ -221,7 +221,8 @@ def _export_top_clusters_excel() -> Run[Unit]:
     """
     return (
         sql_export(
-            SQL("""--sql
+            SQL(
+                """--sql
             WITH top AS (
               SELECT cluster_id
               FROM victim_cluster_counts
@@ -297,7 +298,38 @@ def _build_representative_victims() -> Run[Unit]:
       - offender: pick mode(offender_fullname_concat) and corresponding forename/surname
     """
     return (
-        sql_exec(
+        sql_exec(SQL(
+            """--
+            -- This unnests summary vectors and averages them per component
+            -- to create an entity-level canonical summary vector per victim_entity.
+            CREATE OR REPLACE TABLE entity_summary_vectors AS
+            WITH per_comp AS (
+                SELECT
+                    m.victim_entity_id,
+                    i.generate_series AS comp_idx,
+                    m.summary_vec[i.generate_series] AS val
+                FROM victim_entity_members m
+                CROSS JOIN generate_series(1, 384) AS i
+            ),
+            avg_per_component AS (
+                SELECT
+                    victim_entity_id,
+                    comp_idx,
+                    AVG(val) AS avg_val
+                FROM per_comp
+                GROUP BY victim_entity_id, comp_idx
+            )
+            SELECT
+                victim_entity_id,
+                CAST(
+                  array_agg(avg_val ORDER BY comp_idx)
+                  AS DOUBLE[384]
+                ) AS entity_summary_vec
+            FROM avg_per_component
+            GROUP BY victim_entity_id;
+            """
+        ))
+        ^ sql_exec(
             SQL(
                 """--sql
                 CREATE OR REPLACE TABLE victim_entity_reps AS
@@ -305,6 +337,7 @@ def _build_representative_victims() -> Run[Unit]:
                   SELECT
                     ve.victim_entity_id,
                     ve.city_id,
+                    esv.entity_summary_vec AS summary_vec,
                     ve.min_event_day,
                     ve.max_event_day,
                     -- canonical attributes
@@ -348,8 +381,11 @@ def _build_representative_victims() -> Run[Unit]:
                     count(*) AS cluster_size
                   FROM victim_entities ve
                   JOIN victim_entity_members m USING (victim_entity_id)
+                  LEFT JOIN entity_summary_vectors esv
+                    ON ve.victim_entity_id = esv.victim_entity_id
                   GROUP BY
-                    ve.victim_entity_id, ve.city_id, ve.min_event_day, ve.max_event_day,
+                    ve.victim_entity_id, ve.city_id, esv.entity_summary_vec,
+                    ve.min_event_day, ve.max_event_day,
                     ve.canonical_fullname, ve.canonical_sex, ve.canonical_race,
                     ve.canonical_ethnicity
                 ),
@@ -480,6 +516,7 @@ def _build_representative_victims() -> Run[Unit]:
                   a.city_id,
                   a.min_event_day,
                   a.max_event_day,
+                  a.summary_vec,
 
                   -- choose precision: day > month > year
                   CASE

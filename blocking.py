@@ -33,6 +33,7 @@ class BlockComp(StrEnum):
         "AND l.lon IS NOT NULL AND r.lon IS NOT NULL"
     )
     CLOSE_LONG_LAT = "abs(l.lat - r.lat) <= 0.0045 AND abs(l.lon - r.lon) <= 0.0055"
+    
 
 def _clause_from_comps(*components: StrEnum) -> str:
     return " AND ".join([component.value for component in components])

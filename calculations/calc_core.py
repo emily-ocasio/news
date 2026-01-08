@@ -1,6 +1,8 @@
 """
 Pure functions with no side effects
 """
+from __future__ import annotations
+
 import re
 from sqlite3 import Row
 from datetime import datetime
@@ -9,6 +11,7 @@ import json
 from collections.abc import Iterable
 from typing import Optional, Union
 from functools import reduce
+from sentence_transformers import SentenceTransformer
 
 from flashtext import KeywordProcessor  # type: ignore
 from colorama import Style
@@ -770,3 +773,11 @@ def camel_to_snake(name: str) -> str:
     s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', name)
     s2 = re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1)
     return s2.replace('-', '_').lower()
+
+def sbert_average_vector(st_model: SentenceTransformer, text: str) \
+    -> tuple[float, ...]: # pylint: disable=E1101
+    """
+    Compute the SBERT vector for the given text
+    """
+    vector = st_model.encode(text, normalize_embeddings=True)
+    return tuple(vector.tolist())

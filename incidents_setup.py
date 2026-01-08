@@ -2,8 +2,30 @@
  Set up DuckDB views for incident extraction from gptVictimJson (SQLite).
 """
 from pymonad import Run, pure, put_line, ask, run_duckdb, sql_script, \
-    sql_query, sql_exec, SQL
+    sql_query, sql_exec, SQL, Array, array_traverse, Environment
 from menuprompts import NextStep
+from calculations import sbert_average_vector
+
+def _row_update_run(env: Environment, row) -> Run[None]:
+    """
+    Given an environment and a row dict with article_id,
+    incident_idx, summary_norm, return a Run[None] effect
+    that updates that row’s summary_vec.
+    """
+    # Compute FastText vector
+    vec_vals = sbert_average_vector(env["fasttext_model"].model, row["summary_norm"] or "")
+
+    # Build UPDATE SQL
+    vec_sql = ",".join(str(x) for x in vec_vals)
+    update_sql = SQL(f"""
+    UPDATE incidents_cached
+    SET summary_vec = ARRAY[{vec_sql}]
+    WHERE article_id = {row['article_id']}
+      AND incident_idx = {row['incident_idx']};
+    """)
+
+    # Return the effect that runs the update SQL
+    return sql_script(update_sql)
 
 # --- DuckDB SQL ---
 # --- Victim-level extraction & feature engineering ---
@@ -17,6 +39,7 @@ SELECT
   a.publish_date,
   a.year, a.month, a.day,
   a.incident_idx,
+  a.summary_vec,
   CAST(v.key AS INTEGER) AS victim_idx,
   json_extract_string(v.value, '$.victim_name')      AS victim_name_raw,
   try_cast(json_extract_string(v.value, '$.victim_age') AS INTEGER) AS victim_age_raw,
@@ -71,15 +94,18 @@ WITH norm AS (
 strip AS (
   SELECT
     *,
-    regexp_replace(name_clean, '^(?i)(mr|mrs|ms|miss|dr|rev|ofc|officer)\s+', '', 'g') AS name_no_title,
-    regexp_replace(offender_name_clean, '^(?i)(mr|mrs|ms|miss|dr|rev|ofc|officer)\s+', '', 'g') AS offender_no_title
+    regexp_replace(name_clean, '^(?i)(mr|mrs|ms|miss|dr|rev|ofc|officer)\s+', '', 'g') 
+      AS name_no_title,
+    regexp_replace(offender_name_clean, 
+      '^(?i)(mr|mrs|ms|miss|dr|rev|ofc|officer)\s+', '', 'g') AS offender_no_title
   FROM norm
 ),
 strip2 AS (
   SELECT
     *,
     regexp_replace(name_no_title, '\s+(?i)(jr|sr|ii|iii|iv)\.?$', '', 'g') AS name_core,
-    regexp_replace(offender_no_title, '\s+(?i)(jr|sr|ii|iii|iv)\.?$', '', 'g') AS offender_name_core
+    regexp_replace(offender_no_title, '\s+(?i)(jr|sr|ii|iii|iv)\.?$', '', 'g')
+      AS offender_name_core
   FROM strip
 ),
 parts AS (
@@ -94,11 +120,13 @@ parts AS (
       WHEN victim_name_raw IS NULL THEN NULL
       WHEN name_core LIKE '% %' THEN
         CASE
-          WHEN regexp_matches(name_core, '(?i)(?:^|\s)(?:de la|del|de|van|von|da|di|la|le|st)\s+[a-z''\-]+$')
-            THEN regexp_extract(name_core, '((?i)(?:de la|del|de|van|von|da|di|la|le|st)\s+[a-z''\-]+)$', 1)
+          WHEN regexp_matches(name_core, 
+              '(?i)(?:^|\s)(?:de la|del|de|van|von|da|di|la|le|st)\s+[a-z''\-]+$')
+            THEN regexp_extract(name_core, 
+                '((?i)(?:de la|del|de|van|von|da|di|la|le|st)\s+[a-z''\-]+)$', 1)
           ELSE regexp_extract(name_core, '([a-z''\-]+)$', 1)
         END
-      ELSE NULL
+      ELSE name_core
     END AS victim_surname_norm,
     CASE
       WHEN offender_name IS NULL THEN NULL
@@ -108,8 +136,10 @@ parts AS (
       WHEN offender_name IS NULL THEN NULL
       WHEN offender_name_core LIKE '% %' THEN
         CASE
-          WHEN regexp_matches(offender_name_core, '(?i)(?:^|\s)(?:de la|del|de|van|von|da|di|la|le|st)\s+[a-z''\-]+$')
-            THEN regexp_extract(offender_name_core, '((?i)(?:de la|del|de|van|von|da|di|la|le|st)\s+[a-z''\-]+)$', 1)
+          WHEN regexp_matches(offender_name_core, 
+            '(?i)(?:^|\s)(?:de la|del|de|van|von|da|di|la|le|st)\s+[a-z''\-]+$')
+            THEN regexp_extract(offender_name_core, 
+              '((?i)(?:de la|del|de|van|von|da|di|la|le|st)\s+[a-z''\-]+)$', 1)
           ELSE regexp_extract(offender_name_core, '([a-z''\-]+)$', 1)
         END
       ELSE NULL
@@ -151,7 +181,8 @@ SELECT
 
   -- Age cleanup + buckets
   CASE WHEN victim_age_raw BETWEEN 0 AND 120 THEN victim_age_raw END AS victim_age,
-  CASE WHEN victim_age_raw BETWEEN 0 AND 120 THEN floor(victim_age_raw/5) END AS victim_age_bucket5,
+  CASE WHEN victim_age_raw BETWEEN 0 AND 120 THEN floor(victim_age_raw/5) END
+    AS victim_age_bucket5,
 
   -- Date fields from incidents_cached
   i.date_precision,
@@ -336,12 +367,19 @@ def build_incident_views() -> Run[NextStep]:
                     put_line(f"[I] View rows: {rows[0]['n']}")
                 ) ^
                 sql_script(CREATE_INCIDENTS_CACHED_SQL) ^
-                # (optional) sanity check that column exists
-                sql_query(SQL("PRAGMA table_info('incidents_cached')")) >> \
-                  (lambda rows:
-                    put_line("[I] incidents_cached columns: " +
-                            ", ".join(str(r['name']) for r in rows))
+                sql_script(SQL("""
+                ALTER TABLE incidents_cached
+                ADD COLUMN IF NOT EXISTS summary_vec DOUBLE[384];
+                """)) ^
+                sql_query(SQL("""
+                SELECT article_id, incident_idx, summary_norm
+                FROM incidents_cached;
+                """)) >> (lambda rows:
+                    put_line(f"[I] Retrieved {len(rows)} rows for vectorization…") ^
+                    array_traverse(
+                        Array.make(tuple(rows)), lambda r: _row_update_run(env, r))
                 ) ^
+                put_line("[I] Updated vectorized summary for all incidents.") ^
                 sql_script(CREATE_VICTIMS_CACHED_SQL) ^
                 sql_script(CREATE_VICTIMS_CACHED_ENH_SQL) ^
                 sql_query(COUNT_VICTIMS_SQL) >> (lambda rows:

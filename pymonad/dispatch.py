@@ -3,7 +3,7 @@ Defines functions with side effects and maps them to intents
 """
 
 from dataclasses import dataclass
-from typing import Callable, TypedDict, Sequence
+from typing import Callable, TypedDict, Sequence, cast, Any
 import json
 import time
 import requests
@@ -149,14 +149,19 @@ def _splink_dedupe(job: SplinkDedupeJob) -> tuple[str, str]:
         threshold_match_probability=job.predict_threshold
     )
 
-    #pd_pairs = df_pairs.as_pandas_dataframe()
-    # inspect_df = pd_pairs[
-    #     (pd_pairs["victim_surname_norm_l"] == "goodarzi")
-    #     & (pd_pairs["victim_surname_norm_r"] == "goodarzi")
-    # ]
-    # inspect_dict = cast(list[dict[str, Any]], inspect_df.to_dict(orient="records"))
-    #waterfall = linker.visualisations.waterfall_chart(inspect_dict)
-    #waterfall.show()  # type: ignore
+    if job.visualize:
+        pd_pairs = df_pairs.as_pandas_dataframe()
+        print(len(pd_pairs))
+        inspect_df = pd_pairs[
+            ((pd_pairs["midpoint_day_l"] == 2809)
+                | (pd_pairs["midpoint_day_l"] == 2817))
+                & (pd_pairs["midpoint_day_r"] == 2814)
+        ]
+        print(len(inspect_df))
+        inspect_dict = cast(list[dict[str, Any]], inspect_df.to_dict(orient="records"))
+        alt.renderers.enable("browser")
+        waterfall = linker.visualisations.waterfall_chart(inspect_dict)
+        waterfall.show()  # type: ignore
 
 
     # Persist outputs into stable tables in the same DB
