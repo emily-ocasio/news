@@ -31,7 +31,7 @@ def _row_update_run(env: Environment, row) -> Run[None]:
 # --- Victim-level extraction & feature engineering ---
 
 # 1) Explode victim array -> one row per victim mention
-CREATE_VICTIMS_CACHED_SQL = SQL("""
+CREATE_VICTIMS_CACHED_SQL = SQL("""--sql
 CREATE OR REPLACE TABLE victims_cached AS
 SELECT
   a.article_id,

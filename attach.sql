@@ -1,0 +1,1 @@
+attach 'newarticles.db' as sqldb;
