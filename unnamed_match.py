@@ -146,6 +146,10 @@ def _create_linkage_input_tables() -> Run[Unit]:
                     offender_forename_norm,
                     offender_surname_norm,
                     offender_fullname_concat,
+                    offender_age AS offender_age,
+                    offender_sex AS offender_sex,
+                    offender_race AS offender_race,
+                    offender_ethnicity AS offender_ethnicity,
                     summary_vec,
                     CAST(article_id AS varchar) AS article_ids_csv,
                     '' AS exclusion_id  

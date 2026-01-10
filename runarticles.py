@@ -5,11 +5,9 @@ Monadic version
 import sys
 from typing import cast
 from openai import OpenAI
-
 from pymonad import Run, run_reader, run_state, run_base_effect, run_except, \
     run_sqlite, run_openai, Environment, Namespace, ErrorPayload, \
     REAL_DISPATCH, Left, Right, Either, Tuple, put_line, pure, GPTModel
-
 from article import ArticleAppError
 from runinitial import initialize_program
 from appstate import AppState

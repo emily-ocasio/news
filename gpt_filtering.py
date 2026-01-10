@@ -139,26 +139,6 @@ def save_article_class(article_class_t: ArticleClassTuple) \
         put_line(f"New GPT class saved: {gpt_class}\n") ^ \
         pure(unit)
 
-# def save_json(article_class_t: ArticleClassTuple,
-#               resp_t: GPTResponseTuple) \
-#     -> Run[GPTResponseTuple]:
-#     """
-#     Save the incident JSON to the database if homicide class is 'M'
-#     """
-#     record_id = article_class_t.fst.record_id
-#     gpt_class = article_class_t.snd
-#     if gpt_class != 'M':
-#         return pure(resp_t)
-#     print(cast(FormatType, resp_t.parsed.output).incidents_json)
-#     return \
-#         sql_exec(SQL(gpt_victims_sql()),
-#             SQLParams((
-#                 String(cast(FormatType, resp_t.parsed.output).incidents_json),
-#                 record_id
-#             ))) ^ \
-#         put_line("Saved new GPT Incident JSON:\n") ^ \
-#         pure(resp_t)
-
 def save_filtered_article(article: Article, resp_t: GPTResponseTuple) \
     -> Run[GPTFullResponse]:
     """

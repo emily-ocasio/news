@@ -27,8 +27,9 @@ SPECIAL_PROMPTS: dict[str, str | tuple[str,]] = {
 }
 
 SPECIAL_MENU = (
-    "[N]ext article",
-    "[M]ark as valid homicide",
+    "Next [A]rticle",
+    "Mark as [V]alid homicide",
+    "Mark as [N]ot a homicide",
     "[B]ack to main menu",
     "[Q]uit application",
 )
@@ -59,7 +60,7 @@ def retrieve_special_articles(code: str) -> Run[Articles]:
     """
     sp_code = f"SP_{code.upper()}"
     return from_rows & sql_query(
-        SQL("SELECT * FROM articles WHERE gptClass = ? ORDER BY PubDate"),
+        SQL("SELECT * FROM articles WHERE Dataset = 'CLASS_WP' AND gptClass = ? ORDER BY PubDate"),
             SQLParams((String(sp_code),))
     )
 
@@ -94,7 +95,7 @@ def get_user_choice() -> Run[MenuChoice]:
 
 def mark_as_homicide(article: Article) -> Run[NextStep]:
     """
-    Mark the article as a valid homicide and return to main menu.
+    Mark the article as a valid homicide.
     """
     return (
         sql_exec(
@@ -106,15 +107,31 @@ def mark_as_homicide(article: Article) -> Run[NextStep]:
     )
 
 
+def mark_as_not_homicide(article: Article) -> Run[NextStep]:
+    """
+    Mark the article as not a homicide.
+    """
+    return (
+        sql_exec(
+            SQL("UPDATE articles SET gptClass = 'N_NOHOM' WHERE RecordId = ?"),
+            SQLParams((article.record_id,)),
+        )
+        ^ put_line(f"Article {article.record_id} marked as not a homicide (N_NOHOM).")
+        ^ pure(NextStep.CONTINUE)
+    )
+
+
 def handle_choice(choice: MenuChoice, article: Article) -> Run[NextStep]:
     """
     Handle the user's choice.
     """
     match choice.upper():
-        case "N":
+        case "A":
             return pure(NextStep.CONTINUE)  # Continue to next
-        case "M":
+        case "V":
             return mark_as_homicide(article)
+        case "N":
+            return mark_as_not_homicide(article)
         case "B":
             return pure(NextStep.CONTINUE)  # Back to menu
         case "Q":
@@ -135,7 +152,7 @@ def review_loop(articles: Articles, index: int) -> Run[NextStep]:
 
     def after_choice(choice: MenuChoice, next_step: NextStep) -> Run[NextStep]:
         match next_step:
-            case NextStep.CONTINUE if choice.upper() == "N":
+            case NextStep.CONTINUE if choice.upper() in ("A", "V", "N"):
                 return review_loop(articles, index + 1)
             case NextStep.CONTINUE:
                 return pure(NextStep.CONTINUE)

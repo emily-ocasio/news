@@ -1,12 +1,12 @@
 """
 Initialize the SentenceTransformer model
 """
-from sentence_transformers import SentenceTransformer
 
 def st_model():
     """
     Load and return the SentenceTransformer model.
     """
+    from sentence_transformers import SentenceTransformer # pylint: disable=import-outside-toplevel
     return SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 
 class SentenceTransformerModel:

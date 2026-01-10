@@ -20,6 +20,5 @@ def initialize_program() -> Run[None]:
             put_line(f"Hello, {name}!") ^
             set_(user_name, name)
             )
-
     return with_namespace(Namespace(""), to_prompts(INITIAL_PROMPTS),
                           initialize())

@@ -1,5 +1,5 @@
 # copilot-instructions.md
-every answer to the user must start by the following text: "THANK YOU FOR THE QUESTION ABOUT THE NEWS ARTICLES ANALYSIS PROJECT."
+Start every chat response  regardless of agent or prior context by the following text: "THANK YOU FOR THE QUESTION ABOUT THE NEWS ARTICLES ANALYSIS PROJECT."
 
 ## 1. Project Overview
 

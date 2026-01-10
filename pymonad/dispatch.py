@@ -14,7 +14,6 @@ from pandas import DataFrame
 from splink import Linker, DuckDBAPI
 from splink.internals.blocking_rule_creator import BlockingRuleCreator
 
-
 from .string import String
 
 

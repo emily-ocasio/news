@@ -185,6 +185,18 @@ SELECT
   CASE WHEN victim_age_raw BETWEEN 0 AND 120 THEN floor(victim_age_raw/5) END
     AS victim_age_bucket5,
 
+  -- Offender age from incidents
+  i.offender_age,
+
+  -- Offender sex from incidents
+  i.offender_sex,
+
+  -- Offender race from incidents
+  i.offender_race,
+
+  -- Offender ethnicity from incidents
+  i.offender_ethnicity,
+
   -- Date fields from incidents_cached
   i.date_precision,
   i.midpoint_day,
