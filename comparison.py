@@ -70,6 +70,16 @@ class ComparisonComp(StrEnum):
     CIRC_NULL = _null_comp_builder("circumstance") + ' OR ' + \
         _null_comp_builder("circumstance", "= 'undetermined'")
     CIRC_EXACT = _exact_comp_builder("circumstance")
+    EXACT_OFFENDER_AGE = _exact_comp_builder("offender_age")
+    OFFENDER_AGE_NULL = _null_comp_builder("offender_age")
+    OFFENDER_AGE_2YEAR = _distance_comp_builder("offender_age", 2)
+    OFFENDER_AGE_5YEARS = _distance_comp_builder("offender_age", 5)
+    EXACT_OFFENDER_SEX = _exact_comp_builder("offender_sex")
+    OFFENDER_SEX_NULL = _null_comp_builder("offender_sex")
+    EXACT_OFFENDER_RACE = _exact_comp_builder("offender_race")
+    OFFENDER_RACE_NULL = _null_comp_builder("offender_race")
+    EXACT_OFFENDER_ETHNICITY = _exact_comp_builder("offender_ethnicity")
+    OFFENDER_ETHNICITY_NULL = _null_comp_builder("offender_ethnicity")
 
 @dataclass(frozen=True)
 class ComparisonLevel:
@@ -176,6 +186,55 @@ DATE_COMP = cl.CustomComparison(
     ]
 )
 
+
+DATE_COMP_ORPHAN = cl.CustomComparison(
+    output_column_name="incident_date",
+    comparison_levels=[
+        NullComparisonLevel(
+            "incident dates NULL",
+            ComparisonComp.DATE_NULL.value
+        ).to_dict(),
+        ComparisonLevel(
+            "exact match incident date",
+            ComparisonComp.EXACT_YEAR_MONTH_DAY.value
+        ).to_dict(),
+        ComparisonLevel(
+            "midpoint within 2 days",
+            _clause_from_comps(
+                ComparisonComp.MIDPOINT_EXISTS,
+                ComparisonComp.MIDPOINT_2DAYS,
+                ComparisonComp.DAY_PRECISION
+            )
+        ).to_dict(),
+        ComparisonLevel(
+            "midpoint within 10 days",
+            _clause_from_comps(
+                ComparisonComp.MIDPOINT_EXISTS,
+                ComparisonComp.MIDPOINT_10DAYS,
+                ComparisonComp.DAY_PRECISION
+            )
+        ).to_dict(),
+        ComparisonLevel(
+            "midpoint within 90 days",
+            _clause_from_comps(
+                ComparisonComp.MIDPOINT_EXISTS,
+                ComparisonComp.MIDPOINT_90DAYS,
+                ComparisonComp.MONTH_PRECISION
+            )
+        ).to_dict(),
+        # ComparisonLevel(
+        #     "midpoint within 7 months",
+        #     _clause_from_comps(
+        #         ComparisonComp.MIDPOINT_EXISTS,
+        #         ComparisonComp.MIDPOINT_7MONTH,
+        #         ComparisonComp.YEAR_PRECISION
+        #     )
+        # ).to_dict(),
+        cll.ElseLevel()
+    ]
+)
+
+
 AGE_COMP = cl.CustomComparison(
     output_column_name="victim_age",
     comparison_levels=[
@@ -187,6 +246,25 @@ AGE_COMP = cl.CustomComparison(
             "exact match victim age",
             ComparisonComp.EXACT_AGE.value
         ).to_dict(),
+        ComparisonLevel(
+            "victim ages within 2 years",
+            ComparisonComp.AGE_2YEAR.value
+        ).to_dict(),
+        cll.ElseLevel()
+    ]
+)
+
+AGE_COMP_ORPHAN = cl.CustomComparison(
+    output_column_name="victim_age",
+    comparison_levels=[
+        NullComparisonLevel(
+            "victim ages NULL",
+            ComparisonComp.AGE_NULL.value
+        ).to_dict(),
+        # ComparisonLevel(
+        #     "exact match victim age",
+        #     ComparisonComp.EXACT_AGE.value
+        # ).to_dict(),
         ComparisonLevel(
             "victim ages within 2 years",
             ComparisonComp.AGE_2YEAR.value
@@ -241,6 +319,70 @@ CIRC_COMP = cl.CustomComparison(
         ComparisonLevel(
             "exact match circumstance",
             ComparisonComp.CIRC_EXACT.value
+        ).to_dict(),
+        cll.ElseLevel()
+    ]
+)
+
+OFFENDER_AGE_COMP = cl.CustomComparison(
+    output_column_name="offender_age",
+    comparison_levels=[
+        NullComparisonLevel(
+            "offender ages NULL",
+            ComparisonComp.OFFENDER_AGE_NULL.value
+        ).to_dict(),
+        ComparisonLevel(
+            "exact match offender age",
+            ComparisonComp.EXACT_OFFENDER_AGE.value
+        ).to_dict(),
+        ComparisonLevel(
+            "offender ages within 2 years",
+            ComparisonComp.OFFENDER_AGE_2YEAR.value
+        ).to_dict(),
+        cll.ElseLevel()
+    ]
+)
+
+OFFENDER_SEX_COMP = cl.CustomComparison(
+    output_column_name="offender_sex",
+    comparison_levels=[
+        NullComparisonLevel(
+            "offender sex NULL",
+            ComparisonComp.OFFENDER_SEX_NULL.value
+        ).to_dict(),
+        ComparisonLevel(
+            "exact match offender sex",
+            ComparisonComp.EXACT_OFFENDER_SEX.value
+        ).to_dict(),
+        cll.ElseLevel()
+    ]
+)
+
+OFFENDER_RACE_COMP = cl.CustomComparison(
+    output_column_name="offender_race",
+    comparison_levels=[
+        NullComparisonLevel(
+            "offender race NULL",
+            ComparisonComp.OFFENDER_RACE_NULL.value
+        ).to_dict(),
+        ComparisonLevel(
+            "exact match offender race",
+            ComparisonComp.EXACT_OFFENDER_RACE.value
+        ).to_dict(),
+        cll.ElseLevel()
+    ]
+)
+
+OFFENDER_ETHNICITY_COMP = cl.CustomComparison(
+    output_column_name="offender_ethnicity",
+    comparison_levels=[
+        NullComparisonLevel(
+            "offender ethnicity NULL",
+            ComparisonComp.OFFENDER_ETHNICITY_NULL.value
+        ).to_dict(),
+        ComparisonLevel(
+            "exact match offender ethnicity",
+            ComparisonComp.EXACT_OFFENDER_ETHNICITY.value
         ).to_dict(),
         cll.ElseLevel()
     ]

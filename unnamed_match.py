@@ -11,8 +11,8 @@ from blocking import (
 )
 
 from comparison import (
-    DATE_COMP,
-    AGE_COMP,
+    DATE_COMP_ORPHAN,
+    AGE_COMP_ORPHAN,
     DIST_COMP,
     OFFENDER_COMP,
     WEAPON_COMP,
@@ -101,6 +101,10 @@ def _create_linkage_input_tables() -> Run[Unit]:
                     canonical_race AS victim_race,
                     canonical_ethnicity AS victim_ethnicity,
                     canonical_fullname AS victim_fullname_norm,  -- Added: victim fullname from entities
+                    canonical_offender_age AS offender_age,
+                    canonical_offender_sex AS offender_sex,
+                    canonical_offender_race AS offender_race,
+                    canonical_offender_ethnicity AS offender_ethnicity,
                     mode_weapon AS weapon,
                     mode_circumstance AS circumstance,
                     offender_forename AS offender_forename_norm,
@@ -326,8 +330,8 @@ def _link_orphans_to_entities(env: Environment) -> Run[Unit]:
             "unique_id_column_name": "unique_id",
             "blocking_rules_to_generate_predictions": ORPHAN_VICTIM_BLOCKS,
             "comparisons": [
-                DATE_COMP,
-                AGE_COMP,
+                DATE_COMP_ORPHAN,
+                AGE_COMP_ORPHAN,
                 DIST_COMP,
                 cl.ExactMatch("victim_sex"),
                 OFFENDER_COMP,

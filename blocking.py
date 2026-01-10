@@ -33,7 +33,7 @@ class BlockComp(StrEnum):
         "AND l.lon IS NOT NULL AND r.lon IS NOT NULL"
     )
     CLOSE_LONG_LAT = "abs(l.lat - r.lat) <= 0.0045 AND abs(l.lon - r.lon) <= 0.0055"
-    
+    CLOSE_SUMMARY = "array_cosine_similarity(l.summary_vec, r.summary_vec) >= 0.5"
 
 def _clause_from_comps(*components: StrEnum) -> str:
     return " AND ".join([component.value for component in components])
@@ -62,6 +62,7 @@ class TrainBlockRule(StrEnum):
     AGE_SEX = _train_block_from_comps(BlockComp.SAME_AGE_SEX)
     MIDPOINT_7MONTH = _train_block_from_comps(BlockComp.MIDPOINT_EXISTS,
                                               BlockComp.MIDPOINT_7MONTH)
+    SUMMARY = _train_block_from_comps(BlockComp.CLOSE_SUMMARY)
 
 class DedupBlockRule(StrEnum):
     """
@@ -89,6 +90,8 @@ class DedupBlockRule(StrEnum):
         BlockComp.LONG_LAT_EXISTS,
         BlockComp.CLOSE_LONG_LAT,
         BlockComp.SAME_SEX)
+
+
 
 NAMED_VICTIM_BLOCKS = [
     DedupBlockRule.SAME_NAMES,
@@ -123,5 +126,6 @@ ORPHAN_DETERMINISTIC_BLOCKS = [
 
 ORPHAN_TRAINING_BLOCKS = [
     TrainBlockRule.LOCATION,
-    TrainBlockRule.MIDPOINT_7MONTH
+    TrainBlockRule.MIDPOINT_7MONTH,
+    TrainBlockRule.SUMMARY
 ]

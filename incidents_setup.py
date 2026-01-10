@@ -13,7 +13,8 @@ def _row_update_run(env: Environment, row) -> Run[None]:
     that updates that row’s summary_vec.
     """
     # Compute FastText vector
-    vec_vals = sbert_average_vector(env["fasttext_model"].model, row["summary_norm"] or "")
+    vec_vals = sbert_average_vector(
+        env["fasttext_model"].model, row["summary_norm"] or "")
 
     # Build UPDATE SQL
     vec_sql = ",".join(str(x) for x in vec_vals)

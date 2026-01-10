@@ -31,6 +31,7 @@ initial_prompts = (
     "Enter [N]ew labels",
     "[A]uto categorize by date",
     "[S]econd filtering via GPT",
+    "[P]review special case articles",
     "[G]PT extraction of incident details",
     "Assign articles to [H]omicides",
     "Determine humani[Z]ing coverage",
@@ -39,6 +40,7 @@ initial_prompts = (
     "Run [M]AR geocoding (addresses)",
     "Run [D]edup incidents (Splink)",
     "Match [U]nnamed victims (Splink)",
+    "[L]ink to SHR victims (Splink)",
 )
 
 label_prompts = (

@@ -345,7 +345,11 @@ def _build_representative_victims() -> Run[Unit]:
                     ve.canonical_sex,
                     ve.canonical_race,
                     ve.canonical_ethnicity,
-
+                    -- canonical offender attributes
+                    mode(m.offender_age) FILTER (WHERE m.offender_age IS NOT NULL) AS canonical_offender_age,
+                    mode(m.offender_sex) FILTER (WHERE m.offender_sex IS NOT NULL) AS canonical_offender_sex,
+                    mode(m.offender_race) FILTER (WHERE m.offender_race IS NOT NULL) AS canonical_offender_race,
+                    mode(m.offender_ethnicity) FILTER (WHERE m.offender_ethnicity IS NOT NULL) AS canonical_offender_ethnicity,
                     -- counts by precision
                     count_if(m.date_precision = 'day')   AS n_day,
                     count_if(m.date_precision = 'month') AS n_month,
@@ -387,7 +391,8 @@ def _build_representative_victims() -> Run[Unit]:
                     ve.victim_entity_id, ve.city_id, esv.entity_summary_vec,
                     ve.min_event_day, ve.max_event_day,
                     ve.canonical_fullname, ve.canonical_sex, ve.canonical_race,
-                    ve.canonical_ethnicity
+                    ve.canonical_ethnicity, ve.canonical_offender_age, ve.canonical_offender_sex,
+                    ve.canonical_offender_race, ve.canonical_offender_ethnicity
                 ),
 
                 -- -------- Weapon grouped-mode logic --------
@@ -544,6 +549,12 @@ def _build_representative_victims() -> Run[Unit]:
                   a.canonical_sex,
                   a.canonical_race,
                   a.canonical_ethnicity,
+
+                  -- canonical offender attributes
+                  a.canonical_offender_age,
+                  a.canonical_offender_sex,
+                  a.canonical_offender_race,
+                  a.canonical_offender_ethnicity,
 
                   -- location/age
                   a.lat_centroid,
