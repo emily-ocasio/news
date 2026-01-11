@@ -27,4 +27,5 @@ code_analyzer.py
 .codegpt
 *.html
 *.bin
+*.xlsx
 test_sbert.ipynb
