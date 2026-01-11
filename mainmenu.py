@@ -17,6 +17,7 @@ from fixarticle import fix_article
 from geocode_incidents import geocode_incidents
 from shr_match import match_article_to_shr_victims
 from special_case_review import review_special_cases
+from special_add import add_special_articles
 
 
 class MainChoice(Enum):
@@ -39,6 +40,7 @@ class MainChoice(Enum):
     UNNAMED = MenuChoice("U")
     LINK = MenuChoice("L")
     SPECIAL = MenuChoice("P")
+    SPECIAL_ADD = MenuChoice("X")
     QUIT = MenuChoice("Q")
 
 
@@ -89,6 +91,8 @@ def dispatch_from_main_menu(choice: MainChoice) -> Run[NextStep]:
             return match_article_to_shr_victims()
         case MainChoice.SPECIAL:
             return review_special_cases()
+        case MainChoice.SPECIAL_ADD:
+            return add_special_articles()
         case (
             MainChoice.REVIEW
             | MainChoice.NEW

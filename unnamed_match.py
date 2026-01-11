@@ -804,7 +804,7 @@ def _export_orphan_matches_debug_excel() -> Run[Unit]:
     )
 
 
-def _export_final_victim_entities_excel() -> Run[Unit]:
+def export_final_victim_entities_excel() -> Run[Unit]:
     """
     Export the final victim_entity_reps_new table to Excel with color coding:
     - 0: unmatched entities (original entities not matched to orphans)
@@ -861,7 +861,7 @@ def match_orphans_with_splink(env: Environment) -> Run[NextStep]:
         ^ _link_orphans_to_entities(env)
         ^ _integrate_orphan_matches()
         ^ _export_orphan_matches_debug_excel()
-        ^ _export_final_victim_entities_excel()
+        ^ export_final_victim_entities_excel()
         ^ pure(NextStep.CONTINUE)
     )
 
