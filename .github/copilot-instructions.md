@@ -1,5 +1,5 @@
 # copilot-instructions.md
-Start every chat response  with the following text: "THANK YOU FOR THE QUESTION ABOUT THE NEWS ARTICLES ANALYSIS PROJECT."
+Start every chat response to questions about this program with the following text: "THANK YOU FOR THE QUESTION ABOUT THE NEWS ARTICLES ANALYSIS PROJECT."
 
 ## 1. Project Overview
 
@@ -28,6 +28,8 @@ This project is a terminal-based tool for managing, analyzing, and interacting w
   - DEDUP (D): `dedupe_incidents()` in [incidents_dedupe.py](../incidents_dedupe.py) - Deduplicates incidents using Splink.
   - UNNAMED (U): `match_unnamed_victims()` in [unnamed_match.py](../unnamed_match.py) - Matches unnamed victims using Splink.
   - LINK (L): `match_article_to_shr_victims()` in [shr_match.py](../shr_match.py) - Links articles to SHR victims using Splink.
+  - SPECIAL (P): `review_special_cases()` in [special_case_review.py](../special_case_review.py) - Reviews special case articles.
+  - SPECIAL_ADD (Y): `add_special_articles()` in [special_add.py](../special_add.py) - Adds special case articles to the entities.
   - Other options (REVIEW, NEW, etc.) are placeholders that log and continue to menu.
 
 ### 2.3.2 Run Effects Usage

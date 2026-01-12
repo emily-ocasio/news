@@ -137,7 +137,7 @@ def articles_to_classify_sql():
     """
     SQL statement to return articles to auto-classify based on date priority
     """
-    return article_type_join_sql() + """
+    return article_type_join_sql() + """--sql
         WHERE PubDate IN (
             SELECT PubDate p2
             FROM dates

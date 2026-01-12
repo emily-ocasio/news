@@ -41,7 +41,7 @@ initial_prompts = (
     "Run [D]edup incidents (Splink)",
     "Match [U]nnamed victims (Splink)",
     "[L]ink to SHR victims (Splink)",
-    "Add special articles to entit[X]",
+    "Add special articles to entit[Y]",
 )
 
 label_prompts = (

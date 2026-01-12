@@ -40,7 +40,7 @@ class MainChoice(Enum):
     UNNAMED = MenuChoice("U")
     LINK = MenuChoice("L")
     SPECIAL = MenuChoice("P")
-    SPECIAL_ADD = MenuChoice("X")
+    SPECIAL_ADD = MenuChoice("Y")
     QUIT = MenuChoice("Q")
 
 

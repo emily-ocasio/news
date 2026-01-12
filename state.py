@@ -144,6 +144,8 @@ class Weapon(str, Enum):
     DRUGS = "drugs"
     EXPLOSIVES = "explosives"
     DROWNING = "drowning"
+    POISON = "poison"
+    PUSHED_FROM_HEIGHT = "pushed from height"
     OTHER = "other"
     UNKNOWN = "unknown"
 

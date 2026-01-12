@@ -78,6 +78,8 @@
                 "drugs",
                 "explosives",
                 "drowning",
+                "pushed from height",
+                "poison",
                 "other",
                 "unknown"
               ],
