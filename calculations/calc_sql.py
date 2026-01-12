@@ -136,6 +136,11 @@ def passed_articles_sql() -> str:
 def articles_to_classify_sql():
     """
     SQL statement to return articles to auto-classify based on date priority
+    Date priority is a random ordering so we can use to select random subsets
+    for testing and validation.
+    At this point we are only considering articles in NOCLASS_WP dataset
+    which means they are from Washington Post and not yet classified
+    After classification they will be moved to CLASS_WP dataset
     """
     return article_type_join_sql() + """--sql
         WHERE PubDate IN (
@@ -327,8 +332,14 @@ def update_note_sql() -> str:
 def cleanup_sql() -> str:
     """
     SQL Statement to update dates that have been completely autoclassified
+    It checks which dates have all their articles classified (in CLASS_WP)
+    and no articles remaining in NOCLASS_WP
+    and marks those dates as Complete = 1
+
+    The purpose is to avoid re-selecting those dates
+    the next time Auto-classify is selected
     """
-    return """
+    return """--sql
         WITH datelist AS MATERIALIZED (
             SELECT DISTINCT PubDate
             FROM articles

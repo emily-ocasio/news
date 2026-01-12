@@ -150,7 +150,14 @@ for keyword in townlist:
 dc_keywords = tuple([
     'washington', 'district', 'DC', 'D.C', 'NW', 'NE', 'SE', 'SW',
     'northwest', 'northeast', 'southeast', 'southwest', 'capitol hill',
-    'embassy row', 'this city'
+    'embassy row', 'this city', 'our nation\'s capital', 'georgetown',
+    'adams morgan', 'dupont circle', 'foggy bottom', 'capitol hill',
+    'anacostia', 'columbia heights', 'tenleytown', 'woodley park',
+    'penn quarter', 'logan circle', 'navy yard', 'ledroit park',
+    'mclean gardens', 'cathedral heights', 'glover park',
+    'petworth', 'kalorama', 'vernon square', 'buzzard point',
+    'eckington', 'lanier heights', 'randle highlands',
+    'marshall heights'
 ])
 dc_regex = re.compile(any_word_regex_string(dc_keywords), re.IGNORECASE)
 

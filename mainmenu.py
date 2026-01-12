@@ -12,6 +12,7 @@ from incidents import gpt_incidents
 from incidents_dedupe import dedupe_incidents
 from unnamed_match import match_unnamed_victims
 from gpt_filtering import second_filter
+from first_filter import first_filter
 from incidents_setup import build_incident_views
 from fixarticle import fix_article
 from geocode_incidents import geocode_incidents
@@ -73,6 +74,8 @@ def dispatch_from_main_menu(choice: MainChoice) -> Run[NextStep]:
     Dispatch the 'tock' action based on the main result.
     """
     match choice:
+        case MainChoice.AUTO:
+            return first_filter()
         case MainChoice.GPT:
             return second_filter()
         case MainChoice.FIX:
@@ -97,7 +100,6 @@ def dispatch_from_main_menu(choice: MainChoice) -> Run[NextStep]:
             MainChoice.REVIEW
             | MainChoice.NEW
             | MainChoice.ASSIGN
-            | MainChoice.AUTO
             | MainChoice.HUMANIZE
             | MainChoice.VICTIM
         ):
