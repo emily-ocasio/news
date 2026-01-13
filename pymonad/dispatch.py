@@ -152,9 +152,9 @@ def _splink_dedupe(job: SplinkDedupeJob) -> tuple[str, str]:
         pd_pairs = df_pairs.as_pandas_dataframe()
         print(len(pd_pairs))
         inspect_df = pd_pairs[
-            ((pd_pairs["midpoint_day_l"] == 2809)
-                | (pd_pairs["midpoint_day_l"] == 2817))
-                & (pd_pairs["midpoint_day_r"] == 2814)
+            ((pd_pairs["midpoint_day_l"] == 2624)
+                | (pd_pairs["midpoint_day_l"] == 2624))
+                & (pd_pairs["midpoint_day_r"] == 2624)
         ]
         print(len(inspect_df))
         inspect_dict = cast(list[dict[str, Any]], inspect_df.to_dict(orient="records"))
@@ -171,7 +171,7 @@ def _splink_dedupe(job: SplinkDedupeJob) -> tuple[str, str]:
             f"SELECT * FROM {df_pairs.physical_name}"
         )
         if job.settings.get("link_type", "dedupe") == "link_only":
-            con.execute(f"""--sql
+            con.execute(f"""
                 CREATE OR REPLACE TABLE {job.pairs_out}_top1 AS
                 WITH ranked AS (
                 SELECT

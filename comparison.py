@@ -31,6 +31,8 @@ class ComparisonComp(StrEnum):
     Components that can be used in building comparison clauses for deduplication.
     """
     EXACT_YEAR_MONTH_DAY = _exact_comp_builder("incident_date")
+    EXACT_YEAR_MONTH = \
+        f"{_exact_comp_builder('year')} AND {_exact_comp_builder('month')}"
     MIDPOINT_EXISTS = _specific_value_comp_builder("midpoint_day", "IS NOT NULL")
     MIDPOINT_2DAYS = _distance_comp_builder("midpoint_day", 2)
     MIDPOINT_7DAYS = _distance_comp_builder("midpoint_day", 7)
@@ -230,6 +232,45 @@ DATE_COMP_ORPHAN = cl.CustomComparison(
         #         ComparisonComp.YEAR_PRECISION
         #     )
         # ).to_dict(),
+        cll.ElseLevel()
+    ]
+)
+
+DATE_COMP_SHR = cl.CustomComparison(
+    output_column_name="incident_date",
+    comparison_levels=[
+        NullComparisonLevel(
+            "incident dates NULL",
+            ComparisonComp.DATE_NULL.value
+        ).to_dict(),
+        ComparisonLevel(
+            "exact match year-month",
+            ComparisonComp.EXACT_YEAR_MONTH.value
+        ).to_dict(),
+        ComparisonLevel(
+            "midpoint within 30 days",
+            _clause_from_comps(
+                ComparisonComp.MIDPOINT_EXISTS,
+                ComparisonComp.MIDPOINT_30DAYS,
+                ComparisonComp.MONTH_PRECISION
+            )
+        ).to_dict(),
+        ComparisonLevel(
+            "midpoint within 90 days",
+            _clause_from_comps(
+                ComparisonComp.MIDPOINT_EXISTS,
+                ComparisonComp.MIDPOINT_90DAYS,
+                ComparisonComp.MONTH_PRECISION
+            )
+        ).to_dict(),
+        ComparisonLevel(
+            "midpoint within 7 months",
+            _clause_from_comps(
+                ComparisonComp.MIDPOINT_EXISTS,
+                ComparisonComp.MIDPOINT_7MONTH,
+                ComparisonComp.YEAR_PRECISION
+            )
+        ).to_dict(),
         cll.ElseLevel()
     ]
 )

@@ -154,47 +154,63 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
 
         # Happy path for a single address
         def happy(addr_key: str) -> Run[None]:
-            return sql_query(CACHE_GET_SQL, SQLParams((String(addr_key),))) >> (
-                lambda rs:
-                # cached -> done
-                (
-                    put_line(f"[GEO]  Already cached: {addr_key}\n") ^ pure(None)
-                    if len(rs) > 0
-                    else
-                    # not cached -> geocode and insert
-                    put_line(f"[GEO] MAR: {addr_key}")
-                    ^ geocode_address(addr_key, env["mar_key"])
-                    >> (
-                        lambda g: (
-                            # If MAR didn't return an OK candidate, fail this item
-                            # by throwing; process_all will re-render it via `render`.
-                            throw(
-                                ErrorPayload(
-                                    String(f"Error during match for '{addr_key}'"),
-                                    app=g.get("raw_json", {}).get(
-                                        "message", "no details"
+            if addr_key.lower() == "unknown":
+                # Special case: set lon/lat to null
+                return put_line(f"[GEO] Special case 'unknown': {addr_key}\n") ^ \
+                    sql_exec(
+                        INSERT_CACHE_SQL,
+                        SQLParams(
+                            (
+                                String(addr_key),
+                                String(""),
+                                None,  # x_lon null
+                                None,  # y_lat null
+                                String(json.dumps({})),
+                            )
+                        ),
+                    ) ^ pure(None)
+            else:
+                return sql_query(CACHE_GET_SQL, SQLParams((String(addr_key),))) >> (
+                    lambda rs:
+                    # cached -> done
+                    (
+                        put_line(f"[GEO]  Already cached: {addr_key}\n") ^ pure(None)
+                        if len(rs) > 0
+                        else
+                        # not cached -> geocode and insert
+                        put_line(f"[GEO] MAR: {addr_key}")
+                        ^ geocode_address(addr_key, env["mar_key"])
+                        >> (
+                            lambda g: (
+                                # If MAR didn't return an OK candidate, fail this item
+                                # by throwing; process_all will re-render it via `render`.
+                                throw(
+                                    ErrorPayload(
+                                        String(f"Error during match for '{addr_key}'"),
+                                        app=g.get("raw_json", {}).get(
+                                            "message", "no details"
+                                        ),
+                                    )
+                                )
+                                if not g.get("ok")
+                                else sql_exec(
+                                    INSERT_CACHE_SQL,
+                                    SQLParams(
+                                        (
+                                            String(addr_key),
+                                            String(g.get("matched_address", "")),
+                                            g.get("x_lon", 0),
+                                            g.get("y_lat", 0),
+                                            String(json.dumps(g.get("raw_json", {}))),
+                                        )
                                     ),
                                 )
+                                ^ put_line(f"[GEO] MAR response: {g}")
+                                ^ pure(None)
                             )
-                            if not g.get("ok")
-                            else sql_exec(
-                                INSERT_CACHE_SQL,
-                                SQLParams(
-                                    (
-                                        String(addr_key),
-                                        String(g.get("matched_address", "")),
-                                        g.get("x_lon", 0),
-                                        g.get("y_lat", 0),
-                                        String(json.dumps(g.get("raw_json", {}))),
-                                    )
-                                ),
-                            )
-                            ^ put_line(f"[GEO] MAR response: {g}")
-                            ^ pure(None)
                         )
                     )
                 )
-            )
 
         # Process all with applicative accumulation (keeps going after failures)
         return process_all(

@@ -350,6 +350,10 @@ def build_incident_views() -> Run[NextStep]:
     return ask() >> (lambda env:
         # --- 1) Rebuild subset in SQLite
         # (this runs in the existing run_sqlite context) ---
+        # For now, just articles labeled 'M' in CLASS_WP
+        # which represents the articles from Washington Post
+        # in future, we will include other newspapers
+        # and set up city_id appropriately
         put_line("[I] Rebuilding SQLite subset table articles_wp_subset…") ^
         sql_exec(SQL("DROP TABLE IF EXISTS articles_wp_subset;")) ^
         sql_exec(SQL("""

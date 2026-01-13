@@ -43,7 +43,7 @@ GPT_MODELS = {
 FormatType = WashingtonPostArticleHomicideClassification
 PROMPT_KEY_STR = "classify_only_filter_dc"
 MODEL_KEY_STR = "filter"
-SPECIAL_CASE_TERMS = ('Hanafi',)
+SPECIAL_CASE_TERMS = ('Hanafi','Urgo')
 
 print_gpt_response = bind_first(response_message, \
         lambda parsed_output: cast(FormatType, parsed_output).result_str)

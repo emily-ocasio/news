@@ -168,6 +168,8 @@ class Circumstance(str, Enum):
     LOVERS_TRIANGLE = "lover's triangle"
     CHILD_KILLED_BY_BABYSITTER = "child killed by babysitter"
     NEGLIGENCE = "negligence"
+    NARCOTICS_RELATED = "narcotics related"
+    OTHER_FELONY_RELATED = "other felony related"
     OTHER = "other"
     UNDETERMINED = "undetermined"
 

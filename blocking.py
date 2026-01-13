@@ -53,7 +53,7 @@ def _train_block_from_comps(
 
 class TrainBlockRule(StrEnum):
     """
-    Predefined blocking rules for training
+    Predefined blocking rules for training (no article exclusion)
     """
     YEAR_MONTH = _train_block_from_comps(BlockComp.EXACT_YEAR_MONTH)
     SAME_NAMES = _train_block_from_comps(BlockComp.SAME_NAMES)
@@ -63,10 +63,14 @@ class TrainBlockRule(StrEnum):
     MIDPOINT_7MONTH = _train_block_from_comps(BlockComp.MIDPOINT_EXISTS,
                                               BlockComp.MIDPOINT_7MONTH)
     SUMMARY = _train_block_from_comps(BlockComp.CLOSE_SUMMARY)
+    MONTH_AGE_SEX = _train_block_from_comps(
+        BlockComp.EXACT_YEAR_MONTH,
+        BlockComp.SAME_AGE_SEX
+    )
 
 class DedupBlockRule(StrEnum):
     """
-    Predefined blocking rules for deduplication
+    Predefined blocking rules for deduplication (with article exclusion)
     """
     YEAR_MONTH = _block_from_comps(BlockComp.EXACT_YEAR_MONTH)
     YEAR_MONTH_DAY = _block_from_comps(BlockComp.EXACT_YEAR_MONTH_DAY)
@@ -128,4 +132,13 @@ ORPHAN_TRAINING_BLOCKS = [
     TrainBlockRule.LOCATION,
     TrainBlockRule.MIDPOINT_7MONTH,
     TrainBlockRule.SUMMARY
+]
+
+SHR_OVERALL_BLOCKS = [
+    TrainBlockRule.MIDPOINT_7MONTH,
+    TrainBlockRule.AGE_SEX,
+]
+
+SHR_DETERMINISTIC_BLOCKS = [
+    TrainBlockRule.MONTH_AGE_SEX
 ]
