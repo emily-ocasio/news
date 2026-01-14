@@ -16,8 +16,8 @@ def splink_dedupe_job(
     duckdb_path: str,
     input_table: str | list[str],
     settings: dict,
-    predict_threshold: float,
-    cluster_threshold: float,
+    predict_threshold: float = 0.05,
+    cluster_threshold: float = 0,
     pairs_out: str = "incidents_pairs",
     clusters_out: str = "incidents_clusters",
     train_first: bool = False,
@@ -25,7 +25,10 @@ def splink_dedupe_job(
     deterministic_rules: Sequence[str | BlockingRuleCreator] | None = None,
     deterministic_recall: float = 0.5,
     do_cluster: bool = True,
-    visualize: bool = False
+    visualize: bool = False,
+    unique_matching: bool = False,
+    unique_pairs_table: str = "unique_pairs"
+
 
 ) -> Run[tuple[str, str]]:
     """
@@ -47,7 +50,9 @@ def splink_dedupe_job(
                 train_first,
                 training_blocking_rules or [],
                 do_cluster,
-                visualize
+                visualize,
+                unique_matching,
+                unique_pairs_table,
             ),
             self,
         ),

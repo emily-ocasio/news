@@ -13,6 +13,7 @@ import duckdb
 from pandas import DataFrame
 from splink import Linker, DuckDBAPI
 from splink.internals.blocking_rule_creator import BlockingRuleCreator
+import networkx as nx
 
 from .string import String
 
@@ -69,6 +70,8 @@ class SplinkDedupeJob:
     training_blocking_rules: Sequence[str] | None = None
     do_cluster: bool = True
     visualize: bool = False
+    unique_matching: bool = False
+    unique_pairs_table: str = ""
 
 
 @dataclass(frozen=True)
@@ -190,6 +193,32 @@ def _splink_dedupe(job: SplinkDedupeJob) -> tuple[str, str]:
                 FROM ranked
                 WHERE rn = 1;
                 """)
+        if job.unique_matching and job.unique_pairs_table:
+            # Query all pairs with match_probability > 0
+            pairs = con.execute(f"SELECT unique_id_l, unique_id_r, match_probability FROM {job.pairs_out} WHERE match_probability > 0").fetchall()
+            # Create bipartite graph
+            G: nx.Graph = nx.Graph() #pylint: disable=C0103
+            # Add edges with weights
+            for row in pairs:
+                G.add_edge(row[0], row[1], weight=row[2])
+            # Compute maximum weight matching
+            matching = nx.max_weight_matching(G)
+            # Extract matched pairs
+            matched_pairs = []
+            seen = set()
+            for u, v in matching:
+                if u not in seen and v not in seen:
+                    weight = G[u][v]['weight']
+                    matched_pairs.append((u, v, weight))
+                    seen.add(u)
+                    seen.add(v)
+            # Persist to unique_pairs_table
+            if matched_pairs:
+                values_str = ', '.join(f"({repr(u)}, {repr(v)}, {w})" for u, v, w in matched_pairs)
+                con.execute(f"CREATE OR REPLACE TABLE {job.unique_pairs_table} AS SELECT * FROM (VALUES {values_str}) AS t(unique_id_l, unique_id_r, match_probability)")
+            else:
+                # Create empty table
+                con.execute(f"CREATE OR REPLACE TABLE {job.unique_pairs_table} (unique_id_l VARCHAR, unique_id_r VARCHAR, match_probability DOUBLE)")
         if job.do_cluster:
             df_clusters = linker.clustering.cluster_pairwise_predictions_at_threshold(
                 df_pairs,
@@ -212,7 +241,7 @@ def _splink_dedupe(job: SplinkDedupeJob) -> tuple[str, str]:
                 num_example_rows=20)
             con.register("mw_df", mw_df)
             con.execute("CREATE OR REPLACE TABLE match_weights AS SELECT * FROM mw_df")
-    return (job.pairs_out, job.clusters_out if job.do_cluster else "")
+    return (job.unique_pairs_table if job.unique_matching and job.unique_pairs_table else job.pairs_out, job.clusters_out if job.do_cluster else "")
 
 
 @intentdef(MarGeocode)

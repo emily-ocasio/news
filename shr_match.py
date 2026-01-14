@@ -238,7 +238,7 @@ def _export_shr_debug_matches_excel() -> Run[Unit]:
               shr_offender_race,
               entity_offender_ethnicity,
               shr_offender_ethnicity
-            FROM combined2
+            FROM combined
             ORDER BY
               CASE rec_type WHEN 'match' THEN 0 WHEN 'entity' THEN 1 ELSE 2 END,
               entity_uid, match_probability DESC, shr_uid
@@ -376,26 +376,26 @@ def match_article_to_shr_victims() -> Run[NextStep]:
             duckdb_path=env["duckdb_path"],
             input_table=["article_victims", "shr_cached"],
             settings=shr_linkage_settings,
-            predict_threshold=0.01,
-            cluster_threshold=0.65,
+            predict_threshold=0.05,
             deterministic_rules=SHR_DETERMINISTIC_BLOCKS,
-            deterministic_recall=0.01,
+            deterministic_recall=0.8,
             pairs_out="shr_link_pairs",
-            clusters_out="shr_link_clusters",
+            do_cluster=False,
+            unique_matching=True,
+            unique_pairs_table="shr_max_weight_matches"
         ) >>
         (lambda pairs_clusters: put_line(
             f"Linkage complete. Pairs table: {pairs_clusters[0]}, Clusters table: {pairs_clusters[1]}"
         ) ^
         sql_exec(
             SQL(
-                """
+                f"""
                 CREATE OR REPLACE TABLE shr_entity_matches AS
                 SELECT
                     unique_id_l AS entity_uid,
                     unique_id_r AS shr_id,
                     match_probability
-                FROM shr_link_pairs
-                WHERE match_probability >= 0.5
+                FROM {pairs_clusters[0]}
                 """
             )
         ) ^
