@@ -174,6 +174,34 @@ def sql_export(
 
 A = TypeVar("A")
 
+def _sql_export(df: pd.DataFrame, filename, sheet, band_by_group_col, band_wrap):
+    try:
+        with pd.ExcelWriter(filename, engine="openpyxl") as writer:
+            df.to_excel(writer, sheet_name=sheet or "Sheet1", index=False)
+        # Apply formatting immediately after successful Excel write
+        if band_by_group_col:
+            _apply_band_formatting_xlsx(
+                filename,
+                sheet or "Sheet1",
+                band_by_group_col,
+                band_wrap,
+            )
+        else:
+            _set_freeze_panes_xlsx(filename, sheet or "Sheet1")
+    except (
+        PermissionError,
+        FileNotFoundError,
+        OSError,
+        ValueError,
+    ):
+        # Fallback to CSV if Excel write fails
+        fallback = (
+            filename
+            if filename.lower().endswith(".csv")
+            else (filename + ".csv")
+        )
+        df.to_csv(fallback, index=False)
+
 
 def _apply_band_formatting_xlsx(
     filename: str, sheet: str, group_col: str, band_wrap: int = 2
@@ -248,6 +276,7 @@ def _apply_band_formatting_xlsx(
                     data_range,
                     FormulaRule(formula=[formula], fill=fill_list[i]),
                 )
+            ws.freeze_panes = 'A2'
             wb.save(filename)
             wb.close()
             return
@@ -295,8 +324,22 @@ def _apply_band_formatting_xlsx(
             FormulaRule(formula=[formula], fill=fill_list[i]),
         )
 
+    ws.freeze_panes = 'A2'
     wb.save(filename)
     wb.close()
+
+
+def _set_freeze_panes_xlsx(filename: str, sheet: str) -> None:
+    try:
+        wb = load_workbook(filename)
+        if sheet in wb.sheetnames:
+            ws = wb[sheet]
+            ws.freeze_panes = 'A2'  # Freeze the first row
+            wb.save(filename)
+        wb.close()
+    except Exception as e:
+        print(f"[WARN] Could not set freeze panes: {e}")
+        raise e
 
 
 def run_sqlite(
@@ -353,33 +396,9 @@ def run_sqlite(
                             df = pd.read_sql_query(str(sql), con)
                         except Exception as ex:
                             raise SQLExecutionError(str(sql), None, ex) from ex
-
-                        try:
-                            with pd.ExcelWriter(filename, engine="openpyxl") as writer:
-                                df.to_excel(
-                                    writer, sheet_name=sheet or "Sheet1", index=False
-                                )
-                        except (
-                            PermissionError,
-                            FileNotFoundError,
-                            OSError,
-                            ValueError,
-                        ):
-                            fallback = (
-                                filename
-                                if filename.lower().endswith(".csv")
-                                else (filename + ".csv")
-                            )
-                            df.to_csv(fallback, index=False)
-
-                        if band_by_group_col and filename.lower().endswith(".xlsx"):
-                            _apply_band_formatting_xlsx(
-                                filename,
-                                sheet or "Sheet1",
-                                band_by_group_col,
-                                band_wrap,
-                            )
+                        _sql_export(df, filename, sheet, band_by_group_col, band_wrap)
                         return None
+
                     case InTransaction(subprog):
                         try:
                             result = subprog._step(current)
@@ -458,70 +477,14 @@ def run_duckdb(
                             raise SQLExecutionError(str(sql), None, ex) from ex
 
                     case SqlExport(sql, filename, sheet, band_by_group_col, band_wrap):
-                        # Try native DuckDB Excel export first
-                        #try:
-                            #raise duckdb.BinderException
-                            # DON'T USE DUCKDB EXCEL EXPORT FOR NOW:
-                            # con.execute("INSTALL excel;")
-                            # con.execute("LOAD excel;")
-                            # stmt = f"COPY ({str(sql)}) TO '{filename}' " + \
-                            #   f"WITH (FORMAT xlsx, HEADER true"
-                            # if sheet:
-                            #     stmt += f", SHEET '{sheet}'"
-                            # stmt += ")"
-                            # print(stmt)
-                            # con.execute(stmt)
-                            # # If band formatting requested, apply it
-                            # if band_by_group_col and \
-                            #   filename.lower().endswith(".xlsx"):
-                            #     _apply_band_formatting_xlsx(
-                            #         filename,
-                            #         sheet or "Sheet1",
-                            #         band_by_group_col,
-                            #         band_wrap,
-                            #     )
-                            # return None
-                        # except (
-                        #     duckdb.BinderException,
-                        #     duckdb.IOException,
-                        #     duckdb.CatalogException,
-                        #     duckdb.InternalException,
-                        # ) as ex:
-
-
-                        # Fallback: materialize in Python and use pandas
                         df = con.execute(str(sql)).df()
-                        try:
-                            with pd.ExcelWriter(
-                                filename, engine="openpyxl"
-                            ) as writer:
-                                df.to_excel(
-                                    writer,
-                                    sheet_name=sheet or "Sheet1",
-                                    index=False,
-                                )
-                            if band_by_group_col and filename.lower().endswith(
-                                ".xlsx"
-                            ):
-                                _apply_band_formatting_xlsx(
-                                    filename,
-                                    sheet or "Sheet1",
-                                    band_by_group_col,
-                                    band_wrap,
-                                )
-                        except (
-                            PermissionError,
-                            FileNotFoundError,
-                            OSError,
-                            ValueError,
-                        ):
-                            fallback = (
-                                filename
-                                if filename.lower().endswith(".csv")
-                                else (filename + ".csv")
-                            )
-                            df.to_csv(fallback, index=False)
-                        return None
+                        return _sql_export(
+                            df=df,
+                            filename=filename,
+                            sheet=sheet,
+                            band_by_group_col=band_by_group_col,
+                            band_wrap=band_wrap
+                        )
 
                     case InTransaction(subprog):
                         # DuckDB has transactional semantics; use BEGIN/COMMIT
