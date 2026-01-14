@@ -417,8 +417,8 @@ def run_duckdb(
 
     def step(self_run: Run[Any]) -> A:
         parent = self_run._perform
-        con = duckdb.connect(db_path)
-        try:
+        #con = duckdb.connect(db_path)
+        with duckdb.connect(db_path) as con:
             # Optional: attach SQLite
             if attach_sqlite_path:
                 con.execute("INSTALL sqlite_scanner;")
@@ -459,8 +459,8 @@ def run_duckdb(
 
                     case SqlExport(sql, filename, sheet, band_by_group_col, band_wrap):
                         # Try native DuckDB Excel export first
-                        try:
-                            raise duckdb.BinderException
+                        #try:
+                            #raise duckdb.BinderException
                             # DON'T USE DUCKDB EXCEL EXPORT FOR NOW:
                             # con.execute("INSTALL excel;")
                             # con.execute("LOAD excel;")
@@ -481,45 +481,47 @@ def run_duckdb(
                             #         band_wrap,
                             #     )
                             # return None
-                        except (
-                            duckdb.BinderException,
-                            duckdb.IOException,
-                            duckdb.CatalogException,
-                            duckdb.InternalException,
-                        ) as ex:
-                            # Fallback: materialize in Python and use pandas
-                            df = con.execute(str(sql)).df()
-                            try:
-                                with pd.ExcelWriter(
-                                    filename, engine="openpyxl"
-                                ) as writer:
-                                    df.to_excel(
-                                        writer,
-                                        sheet_name=sheet or "Sheet1",
-                                        index=False,
-                                    )
-                                if band_by_group_col and filename.lower().endswith(
-                                    ".xlsx"
-                                ):
-                                    _apply_band_formatting_xlsx(
-                                        filename,
-                                        sheet or "Sheet1",
-                                        band_by_group_col,
-                                        band_wrap,
-                                    )
-                            except (
-                                PermissionError,
-                                FileNotFoundError,
-                                OSError,
-                                ValueError,
-                            ):
-                                fallback = (
-                                    filename
-                                    if filename.lower().endswith(".csv")
-                                    else (filename + ".csv")
+                        # except (
+                        #     duckdb.BinderException,
+                        #     duckdb.IOException,
+                        #     duckdb.CatalogException,
+                        #     duckdb.InternalException,
+                        # ) as ex:
+
+
+                        # Fallback: materialize in Python and use pandas
+                        df = con.execute(str(sql)).df()
+                        try:
+                            with pd.ExcelWriter(
+                                filename, engine="openpyxl"
+                            ) as writer:
+                                df.to_excel(
+                                    writer,
+                                    sheet_name=sheet or "Sheet1",
+                                    index=False,
                                 )
-                                df.to_csv(fallback, index=False)
-                            return None
+                            if band_by_group_col and filename.lower().endswith(
+                                ".xlsx"
+                            ):
+                                _apply_band_formatting_xlsx(
+                                    filename,
+                                    sheet or "Sheet1",
+                                    band_by_group_col,
+                                    band_wrap,
+                                )
+                        except (
+                            PermissionError,
+                            FileNotFoundError,
+                            OSError,
+                            ValueError,
+                        ):
+                            fallback = (
+                                filename
+                                if filename.lower().endswith(".csv")
+                                else (filename + ".csv")
+                            )
+                            df.to_csv(fallback, index=False)
+                        return None
 
                     case InTransaction(subprog):
                         # DuckDB has transactional semantics; use BEGIN/COMMIT
@@ -537,16 +539,17 @@ def run_duckdb(
 
             inner = Run(prog._step, perform)
             return inner._step(inner)
-        finally:
-            try:
-                # Cleanly detach the SQLite-attached database if present to avoid
-                # "database with name 'sqldb' already exists" on subsequent runs.
-                con.execute("DETACH DATABASE sqldb;")
-            except duckdb.CatalogException:
-                # Ignore if not attached or already detached.
-                pass
-            finally:
-                con.close()
+        #finally:
+            # try:
+            #     # Cleanly detach the SQLite-attached database if present to avoid
+            #     # "database with name 'sqldb' already exists" on subsequent runs.
+            #     #con.execute("DETACH DATABASE sqldb;")
+            #     pass
+            # except duckdb.CatalogException:
+            #     # Ignore if not attached or already detached.
+            #     pass
+            # finally:
+            #     con.close()
 
     return Run(step, lambda i, c: c._perform(i, c))
 

@@ -56,10 +56,13 @@ def build_tick(env: Environment, state0: AppState)\
     # (so you can inspect what happened)
     wrapped = run_reader(env,
                 run_except(
-                run_sqlite(env['db_path'],
-                run_openai(env["openai_client"],
-                run_state(state0, tick) # Run[Either e (AppState, NextAction)]
-                ))))
+                    run_sqlite(env['db_path'],
+                        run_openai(env["openai_client"],
+                            run_state(state0, tick) # Run[Either e (AppState, NextAction)]
+                        )
+                    )
+                )
+            )
 
     # Map Either to always produce AfterTick = (AppState, NextStep),
     # deciding what to do on errors

@@ -101,11 +101,13 @@ class Run[A](Functor[A], Applicative[A]):
     """
     _step: Callable[["Run[Any]"], A]
     _perform: Callable[[Any, "Run[Any]"], Any]
+    _frames: Any = None
 
     def __init__(self, step: Callable[[Run[Any]], A],
                  perform: Callable[[Any, Run[Any]], Any]):
         object.__setattr__(self, "_step", step)
         object.__setattr__(self, "_perform", perform)
+        object.__setattr__(self, "_frames", traceback.extract_stack()[:-1])  # Exclude current frame
 
     def __rand__(self, f: Callable[[A], B]) -> Run[B]:
         """
@@ -306,6 +308,29 @@ def run_except(prog: Run[A]) -> Run[Either[ErrorPayload, A]]:
             # Default ErrorPayload carries only a diagnostic message;
             # applications can create ErrorPayload[MyError](msg, app_err)
             # where needed.
+
+
+            #######
+            # Traceback capture testing
+            tb = ex.__traceback__
+            print("TRACEBACK DEBUG INFO:\n")
+            while tb is not None:
+                frame = tb.tb_frame
+                co_name = frame.f_code.co_name
+                instance = frame.f_locals.get("self", None)
+                if isinstance(instance, Run) \
+                    and co_name != "_bind" and co_name != "step":
+                    stack = list(reversed(instance._frames))
+                    name = stack[0].name
+                    if name not in ("step", "_bind"):
+                        print(f"\n  Run instance stack trace for {name}:\n")
+                        for f in reversed(stack[:5]):
+                            print(f"  at {f.filename}:{f.lineno} in {f.name}")
+                tb = tb.tb_next
+            print("END TRACEBACK DEBUG INFO\n")
+
+
+            #######
             return Left(ErrorPayload(f"Unhandled exception: {ex}\n{tb_str}"))
     return Run(step, lambda i, c: c._perform(i, c))
 

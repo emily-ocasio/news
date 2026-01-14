@@ -238,7 +238,7 @@ def _export_shr_debug_matches_excel() -> Run[Unit]:
               shr_offender_race,
               entity_offender_ethnicity,
               shr_offender_ethnicity
-            FROM combined
+            FROM combined2
             ORDER BY
               CASE rec_type WHEN 'match' THEN 0 WHEN 'entity' THEN 1 ELSE 2 END,
               entity_uid, match_probability DESC, shr_uid
