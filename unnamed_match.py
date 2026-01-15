@@ -2,7 +2,7 @@
 Match unnamed (orphan) victims to previously deduped victim clusters.
 """
 
-from splink import comparison_library as cl
+from splink.internals import comparison_library as cl
 
 from blocking import (
     ORPHAN_VICTIM_BLOCKS,
