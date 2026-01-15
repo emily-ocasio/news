@@ -477,7 +477,10 @@ def run_duckdb(
                             raise SQLExecutionError(str(sql), None, ex) from ex
 
                     case SqlExport(sql, filename, sheet, band_by_group_col, band_wrap):
-                        df = con.execute(str(sql)).df()
+                        try:
+                            df = con.execute(str(sql)).df()
+                        except Exception as ex:  # noqa: BLE001
+                            raise SQLExecutionError(str(sql), None, ex) from ex
                         return _sql_export(
                             df=df,
                             filename=filename,

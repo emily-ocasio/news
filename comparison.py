@@ -53,8 +53,10 @@ class ComparisonComp(StrEnum):
     DATE_NULL = _null_comp_builder("midpoint_day")
     EXACT_AGE = _exact_comp_builder("victim_age")
     AGE_NULL = _null_comp_builder("victim_age")
+    AGE_1YEAR = _distance_comp_builder("victim_age", 1)
     AGE_2YEAR = _distance_comp_builder("victim_age", 2)
     AGE_5YEARS = _distance_comp_builder("victim_age", 5)
+    AGE_10YEARS = _distance_comp_builder("victim_age", 10)
     VICTIM_FORENAME_NULL = _null_comp_builder("victim_forename_norm")
     VICTIM_SURNAME_NULL = _null_comp_builder("victim_surname_norm")
     EXACT_VICTIM_FULLNAME = _exact_comp_builder("victim_fullname_concat")
@@ -69,6 +71,8 @@ class ComparisonComp(StrEnum):
     WEAPON_EXACT = _exact_comp_builder("weapon") + " OR " + \
         _specific_value_comp_builder(
             "weapon", "IN ('firearm', 'handgun', 'rifle', 'shotgun')")
+    WEAPON_FIREARM = _specific_value_comp_builder(
+        "weapon", "IN ('firearm', 'handgun', 'rifle', 'shotgun')")
     CIRC_NULL = _null_comp_builder("circumstance") + ' OR ' + \
         _null_comp_builder("circumstance", "= 'undetermined'")
     CIRC_EXACT = _exact_comp_builder("circumstance")
@@ -101,6 +105,16 @@ class NullComparisonLevel(ComparisonLevel):
     Comparison level for null values
     """
     is_null_level: bool = True
+
+@dataclass(frozen=True)
+class TFComparisonLevel(ComparisonLevel):
+    """
+    Comparison level for term frequency-adjusted comparisons
+    """
+    tf_adjustment_column: str
+    tf_adjustment_weight: float = 0.5
+    tf_minimum_u_value: float = 0.001
+
 
 NAME_COMP = cl.CustomComparison(
     output_column_name="victim_name",
@@ -244,8 +258,20 @@ DATE_COMP_SHR = cl.CustomComparison(
             ComparisonComp.DATE_NULL.value
         ).to_dict(),
         ComparisonLevel(
-            "exact match year-month",
-            ComparisonComp.EXACT_YEAR_MONTH.value
+            "midpoint within 10 days",
+            _clause_from_comps(
+                ComparisonComp.MIDPOINT_EXISTS,
+                ComparisonComp.MIDPOINT_10DAYS,
+                ComparisonComp.MONTH_PRECISION
+            )
+        ).to_dict(),
+        ComparisonLevel(
+            "midpoint within 20 days",
+            _clause_from_comps(
+                ComparisonComp.MIDPOINT_EXISTS,
+                ComparisonComp.MIDPOINT_20DAYS,
+                ComparisonComp.MONTH_PRECISION
+            )
         ).to_dict(),
         ComparisonLevel(
             "midpoint within 30 days",
@@ -263,14 +289,14 @@ DATE_COMP_SHR = cl.CustomComparison(
                 ComparisonComp.MONTH_PRECISION
             )
         ).to_dict(),
-        ComparisonLevel(
-            "midpoint within 7 months",
-            _clause_from_comps(
-                ComparisonComp.MIDPOINT_EXISTS,
-                ComparisonComp.MIDPOINT_7MONTH,
-                ComparisonComp.YEAR_PRECISION
-            )
-        ).to_dict(),
+        # ComparisonLevel(
+        #     "midpoint within 7 months",
+        #     _clause_from_comps(
+        #         ComparisonComp.MIDPOINT_EXISTS,
+        #         ComparisonComp.MIDPOINT_7MONTH,
+        #         ComparisonComp.YEAR_PRECISION
+        #     )
+        # ).to_dict(),
         cll.ElseLevel()
     ]
 )
@@ -290,6 +316,33 @@ AGE_COMP = cl.CustomComparison(
         ComparisonLevel(
             "victim ages within 2 years",
             ComparisonComp.AGE_2YEAR.value
+        ).to_dict(),
+        cll.ElseLevel()
+    ]
+)
+
+AGE_COMP_SHR = cl.CustomComparison(
+    output_column_name="victim_age",
+    comparison_levels=[
+        NullComparisonLevel(
+            "victim ages NULL",
+            ComparisonComp.AGE_NULL.value
+        ).to_dict(),
+        ComparisonLevel(
+            "exact match victim age",
+            ComparisonComp.EXACT_AGE.value
+        ).to_dict(),
+        ComparisonLevel(
+            "victim ages within 1 year",
+            ComparisonComp.AGE_1YEAR.value
+        ).to_dict(),
+        ComparisonLevel(
+            "victim ages within 2 years",
+            ComparisonComp.AGE_2YEAR.value
+        ).to_dict(),
+         ComparisonLevel(
+            "victim ages within 10 years",
+            ComparisonComp.AGE_10YEARS.value
         ).to_dict(),
         cll.ElseLevel()
     ]
@@ -345,6 +398,25 @@ WEAPON_COMP = cl.CustomComparison(
         ComparisonLevel(
             "exact match weapon",
             ComparisonComp.WEAPON_EXACT.value
+        ).to_dict(),
+        cll.ElseLevel()
+    ]
+)
+
+TF_WEAPON_COMP = cl.CustomComparison(
+    output_column_name="weapon",
+    comparison_levels=[
+        NullComparisonLevel(
+            "weapon NULL",
+            ComparisonComp.WEAPON_NULL.value
+        ).to_dict(),
+        cll.ExactMatchLevel("weapon").configure(
+            tf_adjustment_column="weapon",
+            tf_adjustment_weight=0.5,
+            tf_minimum_u_value=0.001),
+        ComparisonLevel(
+            "firearm class weapon match",
+            ComparisonComp.WEAPON_FIREARM.value
         ).to_dict(),
         cll.ElseLevel()
     ]

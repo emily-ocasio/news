@@ -18,16 +18,18 @@ from pymonad import (
 from menuprompts import NextStep
 from comparison import (
     DATE_COMP_SHR,
-    AGE_COMP,
+    AGE_COMP_SHR,
     #DIST_COMP,
-    WEAPON_COMP,
+    TF_WEAPON_COMP,
     CIRC_COMP,
     OFFENDER_AGE_COMP,
     OFFENDER_SEX_COMP,
-    OFFENDER_RACE_COMP,
-    OFFENDER_ETHNICITY_COMP,
 )
-from blocking import SHR_OVERALL_BLOCKS, SHR_DETERMINISTIC_BLOCKS
+from blocking import (
+    SHR_OVERALL_BLOCKS,
+    SHR_DETERMINISTIC_BLOCKS,
+    SHR_TRAINING_BLOCKS,
+)
 
 
 # Define linkage settings for SHR matching
@@ -35,21 +37,225 @@ shr_linkage_settings = {
     "link_type": "link_only",
     "comparisons": [
         DATE_COMP_SHR,
-        AGE_COMP,
+        AGE_COMP_SHR,
         OFFENDER_AGE_COMP,
         OFFENDER_SEX_COMP,
-        OFFENDER_RACE_COMP,
-        OFFENDER_ETHNICITY_COMP,
         #DIST_COMP,  - no location in SHR for DC
-        WEAPON_COMP,
+        TF_WEAPON_COMP,
         CIRC_COMP,
         cl.ExactMatch("victim_sex"),
         cl.ExactMatch("victim_race"),
-        cl.ExactMatch("victim_ethnicity"),
+        #cl.ExactMatch("victim_ethnicity"),
     ],
     "blocking_rules_to_generate_predictions": SHR_OVERALL_BLOCKS,
     "unique_id_column_name": "unique_id",  # for both tables
 }
+
+
+def _export_shr_final_matches_excel() -> Run[Unit]:
+    """
+    Build a single worksheet that lists every article victim entity and every SHR record,
+    using only the unique matches from shr_max_weight_matches.
+
+    Matching logic:
+      - Assumes unique_id_l is always from entities, unique_id_r from SHR.
+      - For SHR linkage, assume one-to-one; no per-article uniqueness needed.
+      - Only includes the single best match per entity/SHR combination from unique matching.
+
+    Output:
+      - Exactly one row per entity, one per SHR record.
+      - match_id = 'match_<entity_uid>' for matched groups, otherwise 'entity_<...>' or 'shr_<...>'.
+      - band_key = 0 (unmatched entity), 1 (unmatched SHR), 2 (matched group).
+      - Ordering uses the entity midpoint for matched groups; otherwise row’s own midpoint.
+    """
+    return (
+        sql_export(
+            SQL(
+                """--sql
+            -- Extract pairs directly (assuming l=entity, r=SHR) - using unique matches only
+            WITH pairs_raw AS (
+              SELECT
+                unique_id_l AS entity_uid,
+                unique_id_r AS shr_uid,
+                match_probability
+              FROM shr_max_weight_matches
+            ),
+            combined AS (
+              -- Matched pairs
+              SELECT
+                'match' AS rec_type,
+                av.midpoint_day AS entity_midpoint_day,
+                av.date_precision AS entity_date_precision,
+                av.year AS entity_year, av.month AS entity_month,
+                av.victim_age, av.victim_sex, av.victim_race, av.victim_ethnicity,
+                av.weapon, av.circumstance,
+                av.offender_age, av.offender_sex, av.offender_race, av.offender_ethnicity,
+                pr.match_probability,
+                pr.entity_uid,
+                pr.shr_uid,
+                av.victim_age AS entity_victim_age,
+                av.victim_sex AS entity_victim_sex,
+                av.victim_race AS entity_victim_race,
+                av.victim_ethnicity AS entity_victim_ethnicity,
+                av.weapon AS entity_weapon,
+                av.circumstance AS entity_circumstance,
+                av.offender_age AS entity_offender_age,
+                av.offender_sex AS entity_offender_sex,
+                av.offender_race AS entity_offender_race,
+                av.offender_ethnicity AS entity_offender_ethnicity,
+                sc.victim_age AS shr_victim_age,
+                sc.victim_sex AS shr_victim_sex,
+                sc.victim_race AS shr_victim_race,
+                sc.victim_ethnicity AS shr_victim_ethnicity,
+                sc.weapon AS shr_weapon,
+                sc.circumstance AS shr_circumstance,
+                sc.offender_age AS shr_offender_age,
+                sc.offender_sex AS shr_offender_sex,
+                sc.offender_race AS shr_offender_race,
+                sc.offender_ethnicity AS shr_offender_ethnicity,
+                sc.year AS shr_year,
+                sc.month AS shr_month,
+                sc.date_precision AS shr_date_precision,
+                sc.midpoint_day AS shr_midpoint_day
+              FROM pairs_raw pr
+              JOIN article_victims av ON pr.entity_uid = av.unique_id
+              JOIN shr_cached sc ON pr.shr_uid = sc.unique_id
+
+              UNION ALL
+
+              -- Unmatched entities
+              SELECT
+            
+                'entity' AS rec_type,
+                av.midpoint_day AS entity_midpoint_day,
+                av.date_precision AS entity_date_precision,
+                av.year AS entity_year, av.month AS entity_month,
+                av.victim_age, av.victim_sex, av.victim_race, av.victim_ethnicity,
+                av.weapon, av.circumstance,
+                av.offender_age, av.offender_sex, av.offender_race, av.offender_ethnicity,
+                CAST(NULL AS DOUBLE) AS match_probability,
+                av.unique_id AS entity_uid,
+                CAST(NULL AS VARCHAR) AS shr_uid,
+                av.victim_age AS entity_victim_age,
+                av.victim_sex AS entity_victim_sex,
+                av.victim_race AS entity_victim_race,
+                av.victim_ethnicity AS entity_victim_ethnicity,
+                av.weapon AS entity_weapon,
+                av.circumstance AS entity_circumstance,
+                av.offender_age AS entity_offender_age,
+                av.offender_sex AS entity_offender_sex,
+                av.offender_race AS entity_offender_race,
+                av.offender_ethnicity AS entity_offender_ethnicity,
+                CAST(NULL AS INTEGER) AS shr_victim_age,
+                CAST(NULL AS VARCHAR) AS shr_victim_sex,
+                CAST(NULL AS VARCHAR) AS shr_victim_race,
+                CAST(NULL AS VARCHAR) AS shr_victim_ethnicity,
+                CAST(NULL AS VARCHAR) AS shr_weapon,
+                CAST(NULL AS VARCHAR) AS shr_circumstance,
+                CAST(NULL AS INTEGER) AS shr_offender_age,
+                CAST(NULL AS VARCHAR) AS shr_offender_sex,
+                CAST(NULL AS VARCHAR) AS shr_offender_race,
+                CAST(NULL AS VARCHAR) AS shr_offender_ethnicity,
+                CAST(NULL AS INTEGER) AS shr_year,
+                CAST(NULL AS INTEGER) AS shr_month,
+                CAST(NULL AS VARCHAR) AS shr_date_precision,
+                CAST(NULL AS DOUBLE) AS shr_midpoint_day
+              FROM article_victims av
+              WHERE av.unique_id NOT IN (SELECT entity_uid FROM pairs_raw)
+
+              UNION ALL
+
+              -- Unmatched SHR
+              SELECT
+                'shr' AS rec_type,
+                CAST(NULL AS DOUBLE) AS entity_midpoint_day,
+                CAST(NULL AS VARCHAR) AS entity_date_precision,
+                CAST(NULL AS INTEGER) AS entity_year, CAST(NULL AS INTEGER) AS entity_month,
+                sc.victim_age, sc.victim_sex, sc.victim_race, sc.victim_ethnicity,
+                sc.weapon, sc.circumstance,
+                sc.offender_age, sc.offender_sex, sc.offender_race, sc.offender_ethnicity,
+                CAST(NULL AS DOUBLE) AS match_probability,
+                CAST(NULL AS VARCHAR) AS entity_uid,
+                sc.unique_id AS shr_uid,
+                CAST(NULL AS INTEGER) AS entity_victim_age,
+                CAST(NULL AS VARCHAR) AS entity_victim_sex,
+                CAST(NULL AS VARCHAR) AS entity_victim_race,
+                CAST(NULL AS VARCHAR) AS entity_victim_ethnicity,
+                CAST(NULL AS VARCHAR) AS entity_weapon,
+                CAST(NULL AS VARCHAR) AS entity_circumstance,
+                CAST(NULL AS INTEGER) AS entity_offender_age,
+                CAST(NULL AS VARCHAR) AS entity_offender_sex,
+                CAST(NULL AS VARCHAR) AS entity_offender_race,
+                CAST(NULL AS VARCHAR) AS entity_offender_ethnicity,
+                sc.victim_age AS shr_victim_age,
+                sc.victim_sex AS shr_victim_sex,
+                sc.victim_race AS shr_victim_race,
+                sc.victim_ethnicity AS shr_victim_ethnicity,
+                sc.weapon AS shr_weapon,
+                sc.circumstance AS shr_circumstance,
+                sc.offender_age AS shr_offender_age,
+                sc.offender_sex AS shr_offender_sex,
+                sc.offender_race AS shr_offender_race,
+                sc.offender_ethnicity AS shr_offender_ethnicity,
+                sc.year AS shr_year,
+                sc.month AS shr_month,
+                sc.date_precision AS shr_date_precision,
+                sc.midpoint_day AS shr_midpoint_day
+              FROM shr_cached sc
+              WHERE CAST(sc.unique_id as VARCHAR) NOT IN (SELECT shr_uid FROM pairs_raw)
+            )
+            SELECT
+              rec_type,
+              entity_uid AS e_uid,
+              shr_uid AS s_uid,
+              match_probability AS prob,
+              entity_year AS e_year,
+              shr_year AS s_year,
+              entity_month AS e_mon,
+              shr_month AS s_mon,
+              entity_date_precision AS e_prec,
+              shr_date_precision AS s_prec,
+              entity_midpoint_day AS e_mid,
+              shr_midpoint_day AS s_mid,
+              entity_victim_age AS e_vage,
+              shr_victim_age AS s_vage,
+              entity_victim_sex AS e_vsex,
+              shr_victim_sex AS s_vsex,
+              entity_victim_race AS e_vrac,
+              shr_victim_race AS s_vrac,
+              entity_victim_ethnicity AS e_veth,
+              shr_victim_ethnicity AS s_veth,
+              entity_weapon AS e_weap,
+              shr_weapon AS s_weap,
+              entity_circumstance AS e_circ,
+              shr_circumstance AS s_circ,
+              entity_offender_age AS e_oage,
+              shr_offender_age AS s_oage,
+              entity_offender_sex AS e_osex,
+              shr_offender_sex AS s_osex,
+              entity_offender_race AS e_orac,
+              shr_offender_race AS s_orac,
+              entity_offender_ethnicity AS e_oeth,
+              shr_offender_ethnicity AS s_oeth,
+              CASE WHEN rec_type = 'match' THEN 2
+                  WHEN rec_type = 'entity' THEN 0
+                  ELSE 1
+              END AS band_key
+            FROM combined
+            ORDER BY
+              COALESCE(entity_midpoint_day, shr_midpoint_day),
+              CASE rec_type WHEN 'match' THEN 0 WHEN 'entity' THEN 1 ELSE 2 END,
+              entity_uid, match_probability DESC, shr_uid
+            """
+            ),
+            "shr_matches.xlsx",
+            "Matches",
+            band_by_group_col="band_key",
+            band_wrap=3,
+        )
+        ^ put_line("[SHR] Wrote shr_matches.xlsx (final entities + SHR records with unique matches).")
+        ^ pure(unit)
+    )
 
 
 def _export_shr_debug_matches_excel() -> Run[Unit]:
@@ -240,6 +446,7 @@ def _export_shr_debug_matches_excel() -> Run[Unit]:
               END AS band_key
             FROM combined
             ORDER BY
+              COALESCE(entity_midpoint_day, shr_midpoint_day),
               CASE rec_type WHEN 'match' THEN 0 WHEN 'entity' THEN 1 ELSE 2 END,
               entity_uid, match_probability DESC, shr_uid
             """
@@ -327,10 +534,11 @@ def match_article_to_shr_victims() -> Run[NextStep]:
                     END AS circumstance,
                     'month' AS date_precision,
                     CASE WHEN YearMonth IS NOT NULL THEN
-                        floor((
-                            date_diff('day', DATE '1970-01-01', make_date(CAST(substring(YearMonth, 1, 4) AS BIGINT), CAST(substring(YearMonth, 6, 2) AS BIGINT), 1)) +
-                            date_diff('day', DATE '1970-01-01', (make_date(CAST(substring(YearMonth, 1, 4) AS BIGINT), CAST(substring(YearMonth, 6, 2) AS BIGINT), 1) + INTERVAL 1 MONTH - INTERVAL 1 DAY))
-                        ) / 2)
+                        ROUND(
+                            date_diff('day', DATE '1970-01-01', make_date(CAST(substring(YearMonth, 1, 4) AS BIGINT), CAST(substring(YearMonth, 6, 2) AS BIGINT), 1)) - 1 +
+                            Incident * day(make_date(CAST(substring(YearMonth, 1, 4) AS BIGINT), CAST(substring(YearMonth, 6, 2) AS BIGINT), 1) + INTERVAL 1 MONTH - INTERVAL 1 DAY) /
+                            COUNT(*) OVER (PARTITION BY YearMonth)
+                        )
                     ELSE NULL END AS midpoint_day,
                     CAST(substring(YearMonth, 1, 4) AS INTEGER) AS year,
                     CAST(substring(YearMonth, 6, 2) AS INTEGER) AS month,
@@ -339,6 +547,7 @@ def match_article_to_shr_victims() -> Run[NextStep]:
                     2 AS city_id  -- Corresponds to DC (PublicationID of Washi Post)
                 FROM sqldb.shr
                 WHERE State = 'District of Columbia' -- Only DC for now
+                AND Year = 1977 -- Limit to 1977 for now
                 """
             )
         ) ^
@@ -376,13 +585,16 @@ def match_article_to_shr_victims() -> Run[NextStep]:
             duckdb_path=env["duckdb_path"],
             input_table=["article_victims", "shr_cached"],
             settings=shr_linkage_settings,
-            predict_threshold=0.05,
+            predict_threshold=0.1,
             deterministic_rules=SHR_DETERMINISTIC_BLOCKS,
             deterministic_recall=0.8,
             pairs_out="shr_link_pairs",
             do_cluster=False,
+            train_first=True,
+            training_blocking_rules=SHR_TRAINING_BLOCKS,
             unique_matching=True,
-            unique_pairs_table="shr_max_weight_matches"
+            unique_pairs_table="shr_max_weight_matches",
+            visualize=True
         ) >>
         (lambda pairs_clusters: put_line(
             f"Linkage complete. Pairs table: {pairs_clusters[0]}, Clusters table: {pairs_clusters[1]}"
@@ -399,32 +611,7 @@ def match_article_to_shr_victims() -> Run[NextStep]:
                 """
             )
         ) ^
-        sql_export(
-            SQL(
-                """
-                SELECT
-                    sem.entity_uid,
-                    sem.shr_id,
-                    sem.match_probability,
-                    ver.canonical_fullname,
-                    ver.canonical_age,
-                    ver.canonical_sex,
-                    ver.canonical_race,
-                    ver.article_ids_csv,
-                    sc.Year,
-                    sc.YearMonth,
-                    sc.VicAge AS shr_victim_age,
-                    sc.VicSex AS shr_victim_sex,
-                    sc.VicRace AS shr_victim_race
-                FROM shr_entity_matches sem
-                JOIN victim_entity_reps_new ver ON sem.entity_uid = ver.victim_entity_id
-                JOIN sqldb.shr sc ON sem.shr_id = sc.ID
-                ORDER BY sem.match_probability DESC
-                """
-            ),
-            "shr_matches.xlsx",
-            "SHR_Matches",
-        ) ^
+        _export_shr_final_matches_excel() ^
         _export_shr_debug_matches_excel() ^
         put_line("Exported SHR matches to shr_matches.xlsx.") ^
         pure(NextStep.CONTINUE)))

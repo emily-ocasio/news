@@ -156,9 +156,10 @@ def _splink_dedupe(job: SplinkDedupeJob) -> tuple[str, str]:
             pd_pairs = df_pairs.as_pandas_dataframe()
             print(len(pd_pairs))
             inspect_df = pd_pairs[
-                ((pd_pairs["midpoint_day_l"] == 2624)
-                    | (pd_pairs["midpoint_day_l"] == 2624))
-                    & (pd_pairs["midpoint_day_r"] == 2624)
+                # ((pd_pairs["midpoint_day_l"] == 2624)
+                #     | (pd_pairs["midpoint_day_l"] == 2624))
+                #     & (pd_pairs["midpoint_day_r"] == 2624)
+                pd_pairs["unique_id_l"] == "100050465:0:0"
             ]
             print(len(inspect_df))
             inspect_dict = cast(list[dict[str, Any]], inspect_df.to_dict(orient="records"))
@@ -200,7 +201,11 @@ def _splink_dedupe(job: SplinkDedupeJob) -> tuple[str, str]:
             G: nx.Graph = nx.Graph() #pylint: disable=C0103
             # Add edges with weights
             for row in pairs:
-                G.add_edge(row[0], row[1], weight=row[2])
+                G.add_edge(
+                    f"l_{row[0]}",
+                    f"r_{row[1]}",
+                    weight=row[2]
+                )
             # Compute maximum weight matching
             matching = nx.max_weight_matching(G)
             # Extract matched pairs
@@ -209,7 +214,9 @@ def _splink_dedupe(job: SplinkDedupeJob) -> tuple[str, str]:
             for u, v in matching:
                 if u not in seen and v not in seen:
                     weight = G[u][v]['weight']
-                    matched_pairs.append((u, v, weight))
+                    if u.startswith("r_"):
+                        u, v = v, u
+                    matched_pairs.append((u[2:], v[2:], weight))
                     seen.add(u)
                     seen.add(v)
             # Persist to unique_pairs_table

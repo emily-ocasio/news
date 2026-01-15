@@ -10,11 +10,14 @@ from article import Article, Articles, ArticleAppError, from_rows
 from gpt_filtering import GPT_PROMPTS, GPT_MODELS, \
     PROMPT_KEY_STR, process_all_articles
 from menuprompts import NextStep, MenuPrompts, MenuChoice, input_from_menu
+from incidents import process_all_articles as extract_process_all_articles, \
+    GPT_PROMPTS as INCIDENTS_GPT_PROMPTS, PROMPT_KEY_STR as INCIDENTS_PROMPT_KEY_STR
 
 FIX_PROMPTS: dict[str, str | tuple[str,]] = {
     "record_id": "Please enter the record ID of the article you want to fix: ",
 }
 ARTICLE_PROMPT = ("Apply [S]econd filter via GPT",
+                  "Extract incident via [G]PT",
                   "[C]ontinue to select another article",
                   "Go back to [M]ain menu")
 
@@ -72,7 +75,7 @@ def input_desired_action(article) -> Run[Article]:
 
     def validate_choice(choice: MenuChoice) -> Run[Article]:
         match x:=choice.upper():
-            case 'S' | 'Q' | 'M' | 'C':
+            case 'S' | 'Q' | 'M' | 'G' |'C':
                 return \
                     set_(selected_option, x) ^ \
                     pure(article)
@@ -110,8 +113,16 @@ def apply_action(article: Article) -> Run[NextStep]:
             case 'S':
                 return \
                     put_line("Dispatching to second filter...") ^ \
+                    set_(prompt_key, String(PROMPT_KEY_STR)) ^ \
                     pure(article) >> second_filter >> \
                     input_desired_action >> apply_action
+            case 'G':
+                return (
+                    set_(prompt_key, String(INCIDENTS_PROMPT_KEY_STR)) ^
+                    extract_process_all_articles(Articles((article,)))
+                    ^ pure(article)
+                    >> input_desired_action >> apply_action
+                )
             case 'Q':
                 return pure(NextStep.QUIT)
             case 'C':
@@ -146,5 +157,5 @@ def fix_article() -> Run[NextStep]:
     return set_(prompt_key, String(PROMPT_KEY_STR)) ^ \
         with_models(GPT_MODELS,
         with_namespace(Namespace("fix"),
-        to_prompts(FIX_PROMPTS | GPT_PROMPTS),
+        to_prompts(FIX_PROMPTS | GPT_PROMPTS | INCIDENTS_GPT_PROMPTS),
         select_fix_article()))

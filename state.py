@@ -254,7 +254,7 @@ class Incident(BaseModel):
     """
     model_config = ConfigDict(extra="forbid")
     year: int
-    month: int
+    month: int| None
     day: int | None
     location: str | None
     circumstance: Circumstance
