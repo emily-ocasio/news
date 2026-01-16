@@ -7,10 +7,10 @@ from datetime import datetime
 import json
 import re
 
-from appstate import user_name, prompt_key
+from appstate import user_name
 from pymonad import Run, with_namespace, to_prompts, Namespace, EnvKey, \
     PromptKey, pure, put_line, sql_query, SQL, SQLParams, Right, \
-    GPTModel, with_models, response_with_gpt_prompt, set_, \
+    GPTModel, with_models, response_with_gpt_prompt, \
     to_gpt_tuple, response_message, to_json, rethrow, from_either, sql_exec, \
     GPTResponseTuple, GPTFullResponse, String, input_number, throw, \
     ErrorPayload, Tuple, resolve_prompt_template, GPTPromptTemplate, wal, ask, \
@@ -114,18 +114,18 @@ def filter_article(article: Article) -> Run[GPTFullResponse]:
     Filter a single article using GPT
     """
     variables = variables_dict(article)
-    return \
-        view(prompt_key) >> (lambda pk: \
+    return (
+        #view(prompt_key) >> (lambda pk: \
         to_gpt_tuple & response_with_gpt_prompt(
-            PromptKey(pk),
+            PromptKey(PROMPT_KEY_STR),
             variables,
             FormatType,
             EnvKey(MODEL_KEY_STR)
-        ))
+        )
+    )
 
 type NewGptClass = String | None
 type ArticleClassTuple = Tuple[Article, NewGptClass]
-
 def save_article_class(article_class_t: ArticleClassTuple) \
     -> Run[Unit]:
     """
@@ -162,72 +162,70 @@ def save_article_fn(article: Article) -> GPTFullKreisli:
     # from_either lifts it to (GPTFullResponse) -> Run[GPTFullResponse]
     return bind_first(from_either, bind_filtered)
 
-def save_gpt_result(article: Article, resp_t: GPTResponseTuple) \
-    -> Run[GPTFullResponse]:
-    """
-    Insert a row into gptResults for this article/filter run.
-    """
-    timestamp = String(datetime.now().isoformat())
-    record_id = article.record_id or 0
-    model = String(resp_t.parsed.usage.model_used.value \
-        if resp_t.parsed.usage.model_used else '')
-    format_type_name = String(str(FormatType))
-    variables = variables_dict(article)
-    variables_json = String(json.dumps(variables, default=str, indent=2))
-    parsed = resp_t.parsed.output
-    output_json = String(parsed.model_dump_json(indent=2))
-    usage = resp_t.parsed.usage
-    total_input_tokens = usage.input_tokens
-    cached_input_tokens = usage.cached_tokens
-    total_output_tokens = usage.output_tokens
-    reasoning_tokens = usage.reasoning_tokens
-    reasoning = resp_t.parsed.reasoning
-    cost = resp_t.parsed.usage.cost()
-
-    return \
-        view(user_name) >> (lambda user: \
-        view(prompt_key) >> (lambda pk: \
-        ask() >> (lambda env: \
-        resolve_prompt_template(env, PromptKey(pk)) >> \
-        (lambda _prompt_template: wal( \
-            (prompt_template:=cast(GPTPromptTemplate, _prompt_template)), \
-            (prompt_id:=prompt_template.id),
-            (prompt_version:=prompt_template.version),
-        sql_exec(SQL(insert_gptresults_sql()),
-            SQLParams((
-                record_id,
-                String(user),
-                timestamp,
-                String(pk),
-                String(prompt_id),
-                String(prompt_version) if prompt_version is not None else None,
-                variables_json,
-                model,
-                format_type_name,
-                output_json,
-                reasoning,
-                total_input_tokens,
-                cached_input_tokens,
-                total_output_tokens,
-                reasoning_tokens,
-                cost
-            )))))))) ^ \
-                put_line("Saved GPT result to gptResults.\n") ^ \
-                _to_full(resp_t)
-
-def save_gpt_fn(article: Article) -> GPTFullKreisli:
+def save_gpt_fn(article: Article, prompt_key: PromptKey) -> GPTFullKreisli:
     """
     Adapter to plug save_gpt_result into the monadic chain via from_either
     """
-    bind_save = bind_first(save_gpt_result, article)
-    return bind_first(from_either, bind_save)
+    def save_gpt_result(resp_t: GPTResponseTuple) \
+        -> Run[GPTFullResponse]:
+        """
+        Insert a row into gptResults for this article/filter run.
+        """
+        timestamp = String(datetime.now().isoformat())
+        record_id = article.record_id or 0
+        model = String(resp_t.parsed.usage.model_used.value \
+            if resp_t.parsed.usage.model_used else '')
+        format_type_name = String(str(FormatType))
+        variables = variables_dict(article)
+        variables_json = String(json.dumps(variables, default=str, indent=2))
+        parsed = resp_t.parsed.output
+        output_json = String(parsed.model_dump_json(indent=2))
+        usage = resp_t.parsed.usage
+        total_input_tokens = usage.input_tokens
+        cached_input_tokens = usage.cached_tokens
+        total_output_tokens = usage.output_tokens
+        reasoning_tokens = usage.reasoning_tokens
+        reasoning = resp_t.parsed.reasoning
+        cost = resp_t.parsed.usage.cost()
+
+        return \
+            view(user_name) >> (lambda user: \
+            ask() >> (lambda env: \
+            resolve_prompt_template(env, prompt_key) >> \
+            (lambda _prompt_template: wal( \
+                (prompt_template:=cast(GPTPromptTemplate, _prompt_template)), \
+                (prompt_id:=prompt_template.id),
+                (prompt_version:=prompt_template.version),
+            sql_exec(SQL(insert_gptresults_sql()),
+                SQLParams((
+                    record_id,
+                    String(user),
+                    timestamp,
+                    String(prompt_key),
+                    String(prompt_id),
+                    String(prompt_version) if prompt_version is not None else None,
+                    variables_json,
+                    model,
+                    format_type_name,
+                    output_json,
+                    reasoning,
+                    total_input_tokens,
+                    cached_input_tokens,
+                    total_output_tokens,
+                    reasoning_tokens,
+                    cost
+                ))))))) ^ \
+                    put_line("Saved GPT result to gptResults.\n") ^ \
+                    _to_full(resp_t)
+
+    return bind_first(from_either, save_gpt_result)
 
 def filter_single_article(article: Article) -> Run[Article]:
     """
     Filter a single article, returning the article on success.
     """
     save_article= save_article_fn(article)
-    save_gpt = save_gpt_fn(article)
+    save_gpt = save_gpt_fn(article, PromptKey(PROMPT_KEY_STR))
     return \
         put_line(f"Processing article {article}...\n") ^ \
         filter_article(article) >> \
@@ -343,8 +341,13 @@ def second_filter() -> Run[NextStep]:
             retrieve_articles >> \
             process_all_articles
 
-    return \
-        set_(prompt_key, String(PROMPT_KEY_STR)) ^ \
-        with_models(GPT_MODELS,
-            with_namespace(Namespace("gpt"), to_prompts(GPT_PROMPTS),
-                _second_filter()))
+    return (
+        with_models(
+            GPT_MODELS,
+            with_namespace(
+                Namespace("gpt"),
+                to_prompts(GPT_PROMPTS),
+                _second_filter()
+            )
+        )
+    )

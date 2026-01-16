@@ -73,6 +73,7 @@ def response_with_gpt_prompt(prompt_key: PromptKey,
     def resolve_prompt(env: Environment) -> Run[GPTPrompt]:
         return \
             resolve_prompt_template(env, prompt_key) >> (lambda template: \
+            put_line(f"Resolved GPT prompt template for {prompt_key}:\n{template}") ^ \
             pure(GPTPrompt(template, var_dict)))
 
     def resolve_model(env: Environment) -> GPTModel:

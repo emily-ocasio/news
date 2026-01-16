@@ -3,13 +3,12 @@ Controller for GPT extraction of incident details
 """
 from typing import cast
 
-from appstate import prompt_key
 from pymonad import Run, with_namespace, to_prompts, Namespace, EnvKey, \
     PromptKey, pure, put_line, sql_query, SQL, SQLParams, \
     GPTModel, with_models, response_with_gpt_prompt, to_json,\
-    to_gpt_tuple, rethrow, from_either, sql_exec, set_, \
+    to_gpt_tuple, rethrow, from_either, sql_exec, \
     GPTResponseTuple, GPTFullResponse, String, input_number, throw, \
-    ErrorPayload, Tuple, array_sequence, Unit, unit, view, \
+    ErrorPayload, Tuple, array_sequence, Unit, unit, \
     bind_first, process_all, Array, V, Valid, Invalid, Validator
 from menuprompts import NextStep
 from article import Article, Articles, ArticleAppError, from_rows
@@ -74,15 +73,16 @@ def extract_article(article: Article) -> Run[GPTFullResponse]:
     Extract incident information from a single article using GPT
     """
     variables = variables_dict(article)
-    return \
-        view(prompt_key) >> (lambda pk: \
+    return (
+        #view(prompt_key) >> (lambda pk: \
         to_gpt_tuple & response_with_gpt_prompt(
-            PromptKey(pk),
+            PromptKey(PROMPT_KEY_STR),
             variables,
             FormatType,
             EnvKey(MODEL_KEY_STR),
             effort="medium"
-        ))
+        )
+    )
 
 def save_json(article_class_t: ArticleClassTuple,
               resp_t: GPTResponseTuple) \
@@ -132,9 +132,9 @@ def extract_single_article(article: Article) -> Run[Article]:
     returning the article on success.
     """
     save_article= save_article_fn(article)
-    save_gpt = save_gpt_fn(article)
+    save_gpt = save_gpt_fn(article, PromptKey(PROMPT_KEY_STR))
     return \
-        put_line(f"Extracting incident data from article {article}...\n") ^ \
+        put_line(f"Extracting incident data from article {article.record_id}...\n") ^ \
         extract_article(article) >> \
         print_gpt_response >> \
         save_article >> \
@@ -204,8 +204,13 @@ def gpt_incidents() -> Run[NextStep]:
             retrieve_articles >> \
             process_all_articles
 
-    return \
-        set_(prompt_key, String(PROMPT_KEY_STR)) ^ \
-        with_models(GPT_MODELS,
-            with_namespace(Namespace("gpt"), to_prompts(GPT_PROMPTS),
-                _extract()))
+    return (
+        with_models(
+            GPT_MODELS,
+            with_namespace(
+                Namespace("gpt"),
+                to_prompts(GPT_PROMPTS),
+                _extract()
+            )
+        )
+    )
