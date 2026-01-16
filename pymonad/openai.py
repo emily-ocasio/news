@@ -226,6 +226,7 @@ def to_gpt_tuple(resp: Response) -> GPTFullResponse:
         case ParsedResponse():
             output = resp.output_parsed
             if output is None:
+                print(f"DEBUG: Raw GPT output_text: {resp.output_text}")
                 return Left(GPTError.NOT_PARSED)
         case Response():
             output = PlainText(output_text = resp.output_text)

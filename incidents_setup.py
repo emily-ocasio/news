@@ -236,7 +236,7 @@ WITH base AS (
 
     json_extract_string(i.value,'$.location')       AS location_raw,
     json_extract_string(i.value,'$.circumstance')   AS circumstance,
-    json_extract_string(i.value,'$.weapon')         AS weapon,
+    CASE WHEN COALESCE(json_extract_string(i.value,'$.killing_method'), json_extract_string(i.value,'$.weapon')) = 'beating' THEN 'personal weapon' ELSE COALESCE(json_extract_string(i.value,'$.killing_method'), json_extract_string(i.value,'$.weapon')) END AS weapon,
     try_cast(json_extract_string(i.value,'$.offender_count') AS INTEGER) AS offender_count,
     json_extract_string(i.value,'$.offender_name')  AS offender_name,
     try_cast(json_extract_string(i.value,'$.offender_age')  AS INTEGER) AS offender_age,
@@ -318,7 +318,8 @@ SELECT
   offender_count, offender_name, offender_age,
   offender_sex, offender_race, offender_ethnicity,
   victim_count, summary, summary_norm
-FROM norm;
+FROM norm
+WHERE year_raw >= 1977;
 """)
 
 CREATE_INCIDENTS_CACHED_SQL = SQL("""

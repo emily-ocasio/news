@@ -15,8 +15,15 @@
               "type": "integer"
             },
             "month": {
-              "title": "Month",
-              "type": "integer"
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Month"
             },
             "day": {
               "anyOf": [
@@ -80,8 +87,8 @@
                 "drugs",
                 "explosives",
                 "drowning",
-                "pushed from height",
                 "poison",
+                "pushed from height",
                 "other",
                 "unknown"
               ],

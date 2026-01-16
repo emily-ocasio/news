@@ -129,7 +129,7 @@ class Ethnicity(str, Enum):
     HISPANIC = "Hispanic"
     NON_HISPANIC = "Non-Hispanic"
 
-class Weapon(str, Enum):
+class KillingMethod(str, Enum):
     """ Enum for weapon """
     SHOTGUN = "shotgun"
     RIFLE = "rifle"
@@ -137,7 +137,7 @@ class Weapon(str, Enum):
     FIREARM = "firearm"
     KNIFE = "knife"
     BLUNT_OBJECT = "blunt object"
-    BEATING = "personal weapon"
+    BEATING = "beating"
     FIRE = "fire"
     STRANGULATION = "strangulation"
     ASPHYXIATION = "asphyxiation"
@@ -222,7 +222,7 @@ class VictimBase(BaseModel):
                                     default=None)
     date_of_death: str | None = Field(
         description="Approximate date that victim was found dead (YYYY-MM-DD)")
-    weapon: Weapon | None = Field(
+    killing_method: KillingMethod | None = Field(
         description="Type of weapon used to kill victim",
         default=None)
     relationship: Relationship | None = Field(
@@ -258,7 +258,7 @@ class Incident(BaseModel):
     day: int | None
     location: str | None
     circumstance: Circumstance
-    weapon: Weapon
+    killing_method: KillingMethod
     offender_count: int | None
     offender_name: str | None
     offender_age: int | None
