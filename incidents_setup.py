@@ -1,38 +1,94 @@
 """
- Set up DuckDB views for incident extraction from gptVictimJson (SQLite).
+Set up DuckDB views for incident extraction from gptVictimJson (SQLite).
 """
-from pymonad import Run, pure, put_line, ask, run_duckdb, sql_script, \
-    sql_query, sql_exec, SQL, Array, array_traverse, Environment
+
+from pymonad import (
+    Run,
+    pure,
+    put_line,
+    ask,
+    run_duckdb,
+    sql_script,
+    sql_query,
+    sql_exec,
+    SQL,
+    Array,
+    array_traverse,
+    Environment,
+    SQLParams,
+    String,
+)
 from menuprompts import NextStep
 from calculations import sbert_average_vector
+
 
 def _row_update_run(env: Environment, row) -> Run[None]:
     """
     Given an environment and a row dict with article_id,
     incident_idx, summary_norm, return a Run[None] effect
     that updates that row’s summary_vec.
+
+    Uses `summary_norm` as the cache key. Key is parameterized to avoid
+    quoting issues when the normalized text contains quotes.
     """
-    # Compute FastText vector
-    vec_vals = sbert_average_vector(
-        env["fasttext_model"].model, row["summary_norm"] or "")
+    key = (row.get("summary_norm") or "").strip()
 
-    # Build UPDATE SQL
-    vec_sql = ",".join(str(x) for x in vec_vals)
-    update_sql = SQL(f"""
-    UPDATE incidents_cached
-    SET summary_vec = ARRAY[{vec_sql}]
-    WHERE article_id = {row['article_id']}
-      AND incident_idx = {row['incident_idx']};
-    """)
+    if key == "":
+        return sql_exec(
+            SQL(
+                f"""
+        UPDATE incidents_cached
+        SET summary_vec = NULL
+        WHERE article_id = {row['article_id']}
+          AND incident_idx = {row['incident_idx']};
+        """
+            )
+        )
 
-    # Return the effect that runs the update SQL
-    return sql_script(update_sql)
+    # Check cache first (parameterized)
+    return sql_query(
+        SQL("SELECT vec FROM sbert_cache WHERE input_text = ?;"),
+        SQLParams((String(key),)),
+    ) >> (
+        lambda rows: (
+            (
+                put_line(
+                    f"[I] Using cached vector for summary (len={len(rows)}): {key[:60]}"
+                )
+                ^ sql_exec(
+                    SQL(
+                        "UPDATE incidents_cached SET summary_vec = (SELECT vec FROM sbert_cache WHERE input_text = ?) WHERE article_id = ? AND incident_idx = ?;"
+                    ),
+                    SQLParams((String(key), row["article_id"], row["incident_idx"])),
+                )
+            )
+            if len(rows) > 0
+            else (
+                (
+                    lambda vec_vals: sql_exec(
+                        SQL(
+                            f"INSERT INTO sbert_cache (input_text, vec) VALUES (?, ARRAY[{','.join(format(x, '.17g') for x in vec_vals)}]);"
+                        ),
+                        SQLParams((String(key),)),
+                    )
+                    ^ sql_exec(
+                        SQL(
+                            f"UPDATE incidents_cached SET summary_vec = ARRAY[{','.join(format(x, '.17g') for x in vec_vals)}] WHERE article_id = ? AND incident_idx = ?;"
+                        ),
+                        SQLParams((row["article_id"], row["incident_idx"])),
+                    )
+                )(sbert_average_vector(env["fasttext_model"].model, key))
+            )
+        )
+    )
+
 
 # --- DuckDB SQL ---
 # --- Victim-level extraction & feature engineering ---
 
 # 1) Explode victim array -> one row per victim mention
-CREATE_VICTIMS_CACHED_SQL = SQL("""--sql
+CREATE_VICTIMS_CACHED_SQL = SQL(
+    """--sql
 CREATE OR REPLACE TABLE victims_cached AS
 SELECT
   a.article_id,
@@ -60,7 +116,8 @@ SELECT
 FROM incidents_cached a
 CROSS JOIN json_each(CAST(a.incident_json AS JSON), '$.victim') AS v
 WHERE json_type(CAST(a.incident_json AS JSON), '$.victim') = 'ARRAY';
-""")
+"""
+)
 
 # 2) Normalize names + sanitize age,
 # add coarse age bucket + parsed forename/surname
@@ -210,14 +267,17 @@ LEFT JOIN incidents_cached i
 """
 )
 
-COUNT_VICTIMS_SQL  = SQL("SELECT COUNT(*) AS n FROM victims_cached_enh;")
-PREVIEW_VICTIMS_SQL = SQL("""SELECT article_id, incident_idx, victim_idx, victim_row_id,
+COUNT_VICTIMS_SQL = SQL("SELECT COUNT(*) AS n FROM victims_cached_enh;")
+PREVIEW_VICTIMS_SQL = SQL(
+    """SELECT article_id, incident_idx, victim_idx, victim_row_id,
        victim_name_raw, victim_age, victim_sex, victim_race, victim_ethnicity
 FROM victims_cached_enh
 LIMIT 10;
-""")
+"""
+)
 # --- Incident-level extraction & feature engineering ---
-CREATE_STG_ARTICLE_INCIDENTS_SQL = SQL("""--sql
+CREATE_STG_ARTICLE_INCIDENTS_SQL = SQL(
+    """--sql
 CREATE OR REPLACE VIEW stg_article_incidents AS
 WITH base AS (
   SELECT
@@ -301,7 +361,7 @@ norm AS (
     *,
     ((event_start_day IS NOT NULL) AND (event_end_day IS NOT NULL)) AS has_incident_date,
     (event_end_day - event_start_day) AS interval_span_days,
-    lower(regexp_replace(coalesce(summary, ''), '[^a-z0-9 ]', '', 'g')) AS summary_norm
+    trim(regexp_replace(regexp_replace(coalesce(summary, ''), '[[:cntrl:]]+', '', 'g'), '[[:space:]]+', ' ', 'g')) AS summary_norm
   FROM norm_dates
 )
 SELECT
@@ -320,22 +380,27 @@ SELECT
   victim_count, summary, summary_norm
 FROM norm
 WHERE year_raw >= 1977;
-""")
+"""
+)
 
-CREATE_INCIDENTS_CACHED_SQL = SQL("""
+CREATE_INCIDENTS_CACHED_SQL = SQL(
+    """
 CREATE OR REPLACE TABLE incidents_cached AS
 SELECT * FROM stg_article_incidents;
-""")
+"""
+)
 
-COUNT_VIEW_SQL    = SQL("SELECT COUNT(*) AS n FROM stg_article_incidents;")
-COUNT_CACHE_SQL   = SQL("SELECT COUNT(*) AS n FROM incidents_cached;")
-PREVIEW_CACHE_SQL = SQL("""
+COUNT_VIEW_SQL = SQL("SELECT COUNT(*) AS n FROM stg_article_incidents;")
+COUNT_CACHE_SQL = SQL("SELECT COUNT(*) AS n FROM incidents_cached;")
+PREVIEW_CACHE_SQL = SQL(
+    """
 SELECT article_id, incident_idx, year, month, day, incident_date,
        event_start_day, event_end_day, weapon, circumstance,
        substr(summary, 1, 80) AS summary_snip
 FROM incidents_cached
 LIMIT 10;
-""")
+"""
+)
 
 
 def build_incident_views() -> Run[NextStep]:
@@ -348,74 +413,101 @@ def build_incident_views() -> Run[NextStep]:
       env["db_path"]      -> SQLite path
       env["duckdb_path"]  -> DuckDB persistent DB path
     """
-    return ask() >> (lambda env:
+    return ask() >> (
+        lambda env:
         # --- 1) Rebuild subset in SQLite
         # (this runs in the existing run_sqlite context) ---
         # For now, just articles labeled 'M' in CLASS_WP
         # which represents the articles from Washington Post
         # in future, we will include other newspapers
         # and set up city_id appropriately
-        put_line("[I] Rebuilding SQLite subset table articles_wp_subset…") ^
-        sql_exec(SQL("DROP TABLE IF EXISTS articles_wp_subset;")) ^
-        sql_exec(SQL("""
+        put_line("[I] Rebuilding SQLite subset table articles_wp_subset…")
+        ^ sql_exec(SQL("DROP TABLE IF EXISTS articles_wp_subset;"))
+        ^ sql_exec(
+            SQL(
+                """
             CREATE TABLE articles_wp_subset AS
             SELECT RecordId, Publication, PubDate, Title, FullText, gptVictimJson, LastUpdated
             FROM articles
             WHERE Dataset='CLASS_WP' AND gptClass='M';
-        """)) ^
-        sql_exec(SQL(
-            "CREATE INDEX IF NOT EXISTS idx_articles_wp_subset_pk "
-            "ON articles_wp_subset(RecordId);")) ^
-        sql_query(SQL("SELECT COUNT(*) AS n FROM articles_wp_subset;")) >> \
-            (lambda rows:
-            put_line(f"[I] SQLite subset rows: {rows[0]['n']}")
-        ) ^
-
+        """
+            )
+        )
+        ^ sql_exec(
+            SQL(
+                "CREATE INDEX IF NOT EXISTS idx_articles_wp_subset_pk "
+                "ON articles_wp_subset(RecordId);"
+            )
+        )
+        ^ sql_query(SQL("SELECT COUNT(*) AS n FROM articles_wp_subset;"))
+        >> (lambda rows: put_line(f"[I] SQLite subset rows: {rows[0]['n']}"))
+        ^
         # --- 2) Build DuckDB view + materialized cache from the subset ---
-        put_line("[I] Building DuckDB view and materialized cache…") ^
-        run_duckdb(
+        put_line("[I] Building DuckDB view and materialized cache…")
+        ^ run_duckdb(
             env.get("duckdb_path", "news.duckdb"),
             (
-                sql_script(SQL("""
+                sql_script(
+                    SQL(
+                        """
                     INSTALL splink_udfs FROM community;
                     LOAD splink_udfs;
-                """)) ^
-                sql_script(CREATE_STG_ARTICLE_INCIDENTS_SQL) ^
-                sql_query(COUNT_VIEW_SQL) >> (lambda rows:
-                    put_line(f"[I] View rows: {rows[0]['n']}")
-                ) ^
-                sql_script(CREATE_INCIDENTS_CACHED_SQL) ^
-                sql_script(SQL("""
+                """
+                    )
+                )
+                ^ sql_script(CREATE_STG_ARTICLE_INCIDENTS_SQL)
+                ^ sql_query(COUNT_VIEW_SQL)
+                >> (lambda rows: put_line(f"[I] View rows: {rows[0]['n']}"))
+                ^ sql_script(CREATE_INCIDENTS_CACHED_SQL)
+                ^ sql_script(
+                    SQL(
+                        """
                 ALTER TABLE incidents_cached
                 ADD COLUMN IF NOT EXISTS summary_vec DOUBLE[384];
-                """)) ^
-                sql_query(SQL("""
+                """
+                    )
+                )
+                ^ sql_query(
+                    SQL(
+                        """
                 SELECT article_id, incident_idx, summary_norm
                 FROM incidents_cached;
-                """)) >> (lambda rows:
-                    put_line(f"[I] Retrieved {len(rows)} rows for vectorization…") ^
-                    array_traverse(
-                        Array.make(tuple(rows)), lambda r: _row_update_run(env, r))
-                ) ^
-                put_line("[I] Updated vectorized summary for all incidents.") ^
-                sql_script(CREATE_VICTIMS_CACHED_SQL) ^
-                sql_script(CREATE_VICTIMS_CACHED_ENH_SQL) ^
-                sql_query(COUNT_VICTIMS_SQL) >> (lambda rows:
-                    put_line(f"[I] victims_cached_enh rows: {rows[0]['n']}")
-                ) ^
-                sql_query(PREVIEW_VICTIMS_SQL) >> (lambda rows:
-                    put_line("[I] Preview victims_cached_enh (first 10):") ^
-                    put_line("\n".join(
-                        f"  art={r['article_id']} inc={r['incident_idx']} "
-                        f"vic={r['victim_idx']} id={r['victim_row_id']} "
-                        f"name='{r['victim_name_raw']}' age={r['victim_age']} "
-                        f"sex={r['victim_sex']} race={r['victim_race']}"
-                        for r in rows
-                    ))
+                """
+                    )
+                )
+                >> (
+                    lambda rows: put_line(
+                        f"[I] Retrieved {len(rows)} rows for vectorization…"
+                    )
+                    ^ array_traverse(
+                        Array.make(tuple(rows)), lambda r: _row_update_run(env, r)
+                    )
+                )
+                ^ put_line("[I] Updated vectorized summary for all incidents.")
+                ^ sql_script(CREATE_VICTIMS_CACHED_SQL)
+                ^ sql_script(CREATE_VICTIMS_CACHED_ENH_SQL)
+                ^ sql_query(COUNT_VICTIMS_SQL)
+                >> (
+                    lambda rows: put_line(
+                        f"[I] victims_cached_enh rows: {rows[0]['n']}"
+                    )
+                )
+                ^ sql_query(PREVIEW_VICTIMS_SQL)
+                >> (
+                    lambda rows: put_line("[I] Preview victims_cached_enh (first 10):")
+                    ^ put_line(
+                        "\n".join(
+                            f"  art={r['article_id']} inc={r['incident_idx']} "
+                            f"vic={r['victim_idx']} id={r['victim_row_id']} "
+                            f"name='{r['victim_name_raw']}' age={r['victim_age']} "
+                            f"sex={r['victim_sex']} race={r['victim_race']}"
+                            for r in rows
+                        )
+                    )
                 )
             ),
             attach_sqlite_path=env["db_path"],
-        ) ^
-        put_line("[I] Done.") ^
-        pure(NextStep.CONTINUE)
+        )
+        ^ put_line("[I] Done.")
+        ^ pure(NextStep.CONTINUE)
     )

@@ -49,11 +49,14 @@ CREATE TABLE IF NOT EXISTS mar_cache (
 # Pick your address source; here I’m using stg_article_incidents.location_raw.
 # You can switch to a more precise field if your GPT already gives a full address.
 SELECT_ADDRESSES_SQL = SQL(
-    r"""
-SELECT DISTINCT
-  trim(coalesce(location_raw,'')) AS addr_raw
+        r"""
+SELECT
+    trim(coalesce(location_raw,'')) AS addr_raw,
+    -- aggregate distinct article ids per address so we can log them on failures
+    string_agg(DISTINCT cast(article_id AS VARCHAR), ',') AS article_ids
 FROM stg_article_incidents
-WHERE trim(coalesce(location_raw,'')) <> '';
+WHERE trim(coalesce(location_raw,'')) <> ''
+GROUP BY trim(coalesce(location_raw,''));
 """
 )
 
@@ -121,9 +124,13 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
         def normalize_for_mar(a: str) -> str:
             return dc_suffix_re.sub("", (a or "").strip())
 
-        # Turn the row dicts into the MAR-safe address keys (Array[str])
-        addr_items: Array[str] = (
-            lambda r: normalize_for_mar(cast(str, r["addr_raw"]))
+        # Turn the row dicts into MAR-safe (addr_key, article_ids) pairs
+        # article_ids is a CSV of distinct article IDs for that address
+        addr_items: Array[tuple[str, str]] = (
+            lambda r: (
+                normalize_for_mar(cast(str, r["addr_raw"])),
+                cast(str, r.get("article_ids") or ""),
+            )
         ) & rows
 
         # --- Validation wiring (empty validators) ---
@@ -153,10 +160,11 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
             return put_line("[GEO] MAR error:") ^ put_line(f"  {err}\n") ^ pure(unit)
 
         # Happy path for a single address
-        def happy(addr_key: str) -> Run[None]:
+        def happy(item: tuple[str, str]) -> Run[None]:
+            addr_key, article_ids = item
             if addr_key.lower() == "unknown":
                 # Special case: set lon/lat to null
-                return put_line(f"[GEO] Special case 'unknown': {addr_key}\n") ^ \
+                return put_line(f"[GEO] Special case 'unknown': {addr_key} articles={article_ids}\n") ^ \
                     sql_exec(
                         INSERT_CACHE_SQL,
                         SQLParams(
@@ -172,28 +180,20 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
             else:
                 return sql_query(CACHE_GET_SQL, SQLParams((String(addr_key),))) >> (
                     lambda rs:
-                    # cached -> done
+                    # cached -> done (log differently for cached permanent failures)
                     (
-                        put_line(f"[GEO]  Already cached: {addr_key}\n") ^ pure(None)
+                        put_line(f"[GEO] Already cached (permanent failure): {addr_key} articles={article_ids}\n") ^ pure(None)
+                        if len(rs) > 0 and rs[0]["x_lon"] is None
+                        else put_line(f"[GEO] Already cached (success): {addr_key}\n") ^ pure(None)
                         if len(rs) > 0
                         else
                         # not cached -> geocode and insert
-                        put_line(f"[GEO] MAR: {addr_key}")
+                        put_line(f"[GEO] MAR: {addr_key} articles={article_ids}")
                         ^ geocode_address(addr_key, env["mar_key"])
                         >> (
                             lambda g: (
-                                # If MAR didn't return an OK candidate, fail this item
-                                # by throwing; process_all will re-render it via `render`.
-                                throw(
-                                    ErrorPayload(
-                                        String(f"Error during match for '{addr_key}'"),
-                                        app=g.get("raw_json", {}).get(
-                                            "message", "no details"
-                                        ),
-                                    )
-                                )
-                                if not g.get("ok")
-                                else sql_exec(
+                                # If MAR returned OK, cache success
+                                sql_exec(
                                     INSERT_CACHE_SQL,
                                     SQLParams(
                                         (
@@ -207,6 +207,35 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
                                 )
                                 ^ put_line(f"[GEO] MAR response: {g}")
                                 ^ pure(None)
+                                if g.get("ok")
+                                else
+                                # If not OK but "No Result present", cache failure (permanent)
+                                sql_exec(
+                                    INSERT_CACHE_SQL,
+                                    SQLParams(
+                                        (
+                                            String(addr_key),
+                                            String(""),
+                                            None,  # x_lon null
+                                            None,  # y_lat null
+                                            String(json.dumps(g.get("raw_json", {}))),
+                                        )
+                                    ),
+                                )
+                                ^ put_line(f"[GEO] Cached permanent failure: {g} articles={article_ids}")
+                                ^ pure(None)
+                                if g.get("raw_json", {}).get("message") == "No Result present"
+                                else
+                                # Other failures: log and throw for retry
+                                (put_line(f"[GEO] MAR transient failure for {addr_key} articles={article_ids}: {g}") ^
+                                 throw(
+                                    ErrorPayload(
+                                        String(f"Error during match for '{addr_key}'"),
+                                        app=g.get("raw_json", {}).get(
+                                            "message", "no details"
+                                        ),
+                                    )
+                                ))
                             )
                         )
                     )

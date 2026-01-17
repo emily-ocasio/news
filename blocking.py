@@ -15,6 +15,7 @@ class BlockComp(StrEnum):
         "floor(l.midpoint_day/213) = floor(r.midpoint_day/213) "
         "AND floor((l.midpoint_day+106)/213) = floor((r.midpoint_day+106)/213)"
     )
+    EXACT_YEAR = "l.year = r.year"
     EXACT_YEAR_MONTH = "l.year = r.year AND l.month = r.month"
     EXACT_YEAR_MONTH_DAY = "l.incident_date = r.incident_date"
     SAME_NAMES = (
@@ -55,6 +56,7 @@ class TrainBlockRule(StrEnum):
     """
     Predefined blocking rules for training (no article exclusion)
     """
+    YEAR = _train_block_from_comps(BlockComp.EXACT_YEAR)
     YEAR_MONTH = _train_block_from_comps(BlockComp.EXACT_YEAR_MONTH)
     SAME_NAMES = _train_block_from_comps(BlockComp.SAME_NAMES)
     LOCATION = _train_block_from_comps(BlockComp.LONG_LAT_EXISTS,

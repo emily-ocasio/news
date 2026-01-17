@@ -18,6 +18,7 @@ from comparison import (
     OFFENDER_COMP,
     WEAPON_COMP,
     CIRC_COMP,
+    SUMMARY_COMP
 )
 from menuprompts import NextStep
 from pymonad import (
@@ -71,7 +72,7 @@ def _dedupe_named_victims(env: Environment) -> Run[Unit]:
         duckdb_path=env["duckdb_path"],
         input_table="victims_named",
         settings=_settings_for_victim_dedupe(),
-        predict_threshold=0.0,
+        predict_threshold=0.1,
         cluster_threshold=0.65,
         pairs_out="victim_pairs",
         clusters_out="victim_clusters",
@@ -79,6 +80,7 @@ def _dedupe_named_victims(env: Environment) -> Run[Unit]:
         training_blocking_rules=NAMED_VICTIM_BLOCKS_FOR_TRAINING,
         deterministic_rules=NAMED_VICTIM_DETERMINISTIC_BLOCKS,
         deterministic_recall=0.8,
+        visualize=True
     ) >> (
         lambda outnames: put_line(
             f"[D] Wrote {outnames[0]} and {outnames[1]} in DuckDB."
@@ -643,6 +645,7 @@ def _settings_for_victim_dedupe() -> dict:
         OFFENDER_COMP,
         WEAPON_COMP,
         CIRC_COMP,
+        SUMMARY_COMP
         # same_article_comp,  # Add the new comparison here
     ]
 

@@ -148,6 +148,16 @@ NAME_COMP = cl.CustomComparison(
             _similarity_comp_builder2(
                 "victim_forename_norm", "victim_surname_norm", 0.80)
         ).to_dict(),
+        # ComparisonLevel(
+        #     "JW > 0.60 victim names",
+        #     _similarity_comp_builder2(
+        #         "victim_forename_norm", "victim_surname_norm", 0.40)
+        # ).to_dict(),
+        # ComparisonLevel(
+        #     "JW > 0.20 victim names",
+        #     _similarity_comp_builder2(
+        #         "victim_forename_norm", "victim_surname_norm", 0.20)
+        # ).to_dict(),
         ComparisonLevel(
             "All other comparisons",
             "ELSE"

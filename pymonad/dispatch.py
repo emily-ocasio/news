@@ -92,6 +92,142 @@ class Sleep:
 
 REAL_DISPATCH: dict[type, Callable] = {}
 
+def _cluster_counts_table_name(clusters_table: str) -> str:
+    # Most of the pipeline expects e.g. victim_clusters -> victim_cluster_counts
+    if "clusters" in clusters_table:
+        return clusters_table.replace("clusters", "cluster_counts")
+    return f"{clusters_table}_counts"
+
+
+def _constrained_greedy_clusters(
+    *,
+    con: duckdb.DuckDBPyConnection,
+    input_table: str,
+    unique_id_column_name: str,
+    exclusion_id_column_name: str,
+    pairs_table: str,
+    match_probability_threshold: float,
+) -> DataFrame:
+    """
+    Build clusters using a greedy union-find over pairwise edges, with a hard constraint:
+    no resulting cluster may contain two rows with the same exclusion id (e.g. article id).
+    """
+    # Load all nodes and their exclusion ids so we can ensure singleton clusters exist.
+    try:
+        nodes = con.execute(
+            f"""
+            SELECT
+              CAST({unique_id_column_name} AS VARCHAR) AS unique_id,
+              CAST({exclusion_id_column_name} AS VARCHAR) AS exclusion_id
+            FROM {input_table}
+            """
+        ).fetchall()
+    except duckdb.Error as e:
+        raise RuntimeError(
+            "Constrained clustering requires an exclusion id column on the input table; "
+            f"failed selecting ({unique_id_column_name}, {exclusion_id_column_name}) from {input_table}."
+        ) from e
+
+    unique_ids: list[str] = []
+    exclusion_by_id: dict[str, str] = {}
+    for uid, excl in nodes:
+        uid_str = "" if uid is None else str(uid)
+        excl_str = "" if excl is None else str(excl)
+        unique_ids.append(uid_str)
+        exclusion_by_id[uid_str] = excl_str
+
+    parent: dict[str, str] = {uid: uid for uid in unique_ids}
+    size: dict[str, int] = {uid: 1 for uid in unique_ids}
+    exclusions_in_component: dict[str, set[str]] = {}
+    for uid in unique_ids:
+        excl = exclusion_by_id.get(uid, "")
+        exclusions_in_component[uid] = set([excl]) if excl not in ("", "None") else set()
+
+    pair_cols = {
+        r[0]
+        for r in con.execute(
+            f"SELECT name FROM pragma_table_info('{pairs_table}')"
+        ).fetchall()
+    }
+    left_id_col = f"{unique_id_column_name}_l"
+    right_id_col = f"{unique_id_column_name}_r"
+    if left_id_col in pair_cols and right_id_col in pair_cols:
+        pass
+    elif "unique_id_l" in pair_cols and "unique_id_r" in pair_cols:
+        left_id_col, right_id_col = "unique_id_l", "unique_id_r"
+    else:
+        raise RuntimeError(
+            f"Constrained clustering cannot find id columns in {pairs_table}. "
+            f"Expected ({left_id_col}, {right_id_col}) or (unique_id_l, unique_id_r)."
+        )
+
+    def find(x: str) -> str:
+        # Path compression
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def can_union(a: str, b: str) -> bool:
+        ra, rb = find(a), find(b)
+        if ra == rb:
+            return False
+        sa = exclusions_in_component[ra]
+        sb = exclusions_in_component[rb]
+        return len(sa.intersection(sb)) == 0
+
+    def union(a: str, b: str) -> bool:
+        if not can_union(a, b):
+            return False
+        ra, rb = find(a), find(b)
+        if size[ra] < size[rb]:
+            ra, rb = rb, ra
+        parent[rb] = ra
+        size[ra] += size[rb]
+        exclusions_in_component[ra].update(exclusions_in_component[rb])
+        return True
+
+    # Greedily merge edges by descending match probability.
+    edges = con.execute(
+        f"""
+        SELECT
+          CAST({left_id_col} AS VARCHAR) AS uid_l,
+          CAST({right_id_col} AS VARCHAR) AS uid_r,
+          match_probability
+        FROM {pairs_table}
+        WHERE match_probability >= {match_probability_threshold}
+        ORDER BY
+          match_probability DESC,
+          CAST({left_id_col} AS VARCHAR),
+          CAST({right_id_col} AS VARCHAR)
+        """
+    ).fetchall()
+
+    # Ensure we don't error if an edge references a missing node (shouldn't happen).
+    known = set(parent.keys())
+    for u, v, _p in edges:
+        if u in known and v in known:
+            union(u, v)
+
+    # Materialize components (including singletons) deterministically.
+    components: dict[str, list[str]] = {}
+    for uid in unique_ids:
+        root = find(uid)
+        components.setdefault(root, []).append(uid)
+    members_sorted = []
+    for members in components.values():
+        members.sort()
+        members_sorted.append(members)
+    members_sorted.sort(key=lambda ms: ms[0] if ms else "")
+
+    rows: list[dict[str, str]] = []
+    for i, members in enumerate(members_sorted, start=1):
+        cluster_id = str(i)
+        for uid in members:
+            rows.append({"cluster_id": cluster_id, unique_id_column_name: uid})
+
+    return DataFrame(rows, columns=["cluster_id", unique_id_column_name])
+
 
 def intentdef(intent: type) -> Callable[[Callable], Callable]:
     """
@@ -159,7 +295,7 @@ def _splink_dedupe(job: SplinkDedupeJob) -> tuple[str, str]:
                 # ((pd_pairs["midpoint_day_l"] == 2624)
                 #     | (pd_pairs["midpoint_day_l"] == 2624))
                 #     & (pd_pairs["midpoint_day_r"] == 2624)
-                pd_pairs["unique_id_l"] == "100050465:0:0"
+                pd_pairs["victim_fullname_concat_l"] == "alexis goodarzi"
             ]
             print(len(inspect_df))
             inspect_dict = cast(list[dict[str, Any]], inspect_df.to_dict(orient="records"))
@@ -227,13 +363,45 @@ def _splink_dedupe(job: SplinkDedupeJob) -> tuple[str, str]:
                 # Create empty table
                 con.execute(f"CREATE OR REPLACE TABLE {job.unique_pairs_table} (unique_id_l VARCHAR, unique_id_r VARCHAR, match_probability DOUBLE)")
         if job.do_cluster:
-            df_clusters = linker.clustering.cluster_pairwise_predictions_at_threshold(
-                df_pairs,
-                threshold_match_probability=job.cluster_threshold,
+            if not isinstance(job.input_table, str):
+                raise RuntimeError(
+                    "Constrained clustering currently requires a single input table name "
+                    f"(got {type(job.input_table).__name__})."
+                )
+
+            unique_id_col = cast(str, job.settings.get("unique_id_column_name", "unique_id"))
+            clusters_df = _constrained_greedy_clusters(
+                con=con,
+                input_table=job.input_table,
+                unique_id_column_name=unique_id_col,
+                exclusion_id_column_name="exclusion_id",
+                pairs_table=job.pairs_out,
+                match_probability_threshold=job.cluster_threshold,
             )
+            con.register("_constrained_clusters_df", clusters_df)
             con.execute(
                 f"CREATE OR REPLACE TABLE {job.clusters_out} AS "
-                f"SELECT * FROM {df_clusters.physical_name}"
+                "SELECT * FROM _constrained_clusters_df"
+            )
+
+            counts_table = _cluster_counts_table_name(job.clusters_out)
+            # Some downstream code creates `{x}_cluster_counts` as a VIEW; ensure
+            # we don't fail if the object exists with a different type.
+            try:
+                con.execute(f"DROP VIEW IF EXISTS {counts_table}")
+            except duckdb.Error:
+                pass
+            try:
+                con.execute(f"DROP TABLE IF EXISTS {counts_table}")
+            except duckdb.Error:
+                pass
+            con.execute(
+                f"""
+                CREATE OR REPLACE TABLE {counts_table} AS
+                SELECT cluster_id, COUNT(*)::BIGINT AS member_count
+                FROM {job.clusters_out}
+                GROUP BY cluster_id
+                """
             )
         if job.visualize:
             alt.renderers.enable("browser")
@@ -319,6 +487,7 @@ def _mar_geocode(x: MarGeocode) -> GeocodeResult:
                 raw_json={"message": j.get("message", "Success= False")},
             )
         result = j.get("Result", {})
+        # This is what happens when MAR cannot recognize the address
         if not result:
             return GeocodeResult(
                 ok=False,
