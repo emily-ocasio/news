@@ -25,6 +25,10 @@ class BlockComp(StrEnum):
     SAME_SURNAME_SOUNDEX = "l.victim_surname_soundex = r.victim_surname_soundex"
     SAME_FORENAME_SOUNDEX = "l.victim_forename_soundex = r.victim_forename_soundex"
     SAME_AGE_SEX = "l.victim_age = r.victim_age AND l.victim_sex = r.victim_sex"
+    AGE_DIFF2_SEX = (
+        "abs(l.victim_age - r.victim_age) <= 2 "
+        "AND l.victim_sex = r.victim_sex"
+    )
     SAME_SEX = 'l.victim_sex = r.victim_sex'
     MIDPOINT_30DAYS = "abs(l.midpoint_day - r.midpoint_day) <= 30"
     MIDPOINT_90DAYS = "abs(l.midpoint_day - r.midpoint_day) <= 90"
@@ -62,6 +66,7 @@ class TrainBlockRule(StrEnum):
     LOCATION = _train_block_from_comps(BlockComp.LONG_LAT_EXISTS,
                                        BlockComp.CLOSE_LONG_LAT)
     AGE_SEX = _train_block_from_comps(BlockComp.SAME_AGE_SEX)
+    AGE_DIFF2_SEX = _train_block_from_comps(BlockComp.AGE_DIFF2_SEX)
     MIDPOINT_7MONTH = _train_block_from_comps(BlockComp.MIDPOINT_EXISTS,
                                               BlockComp.MIDPOINT_7MONTH)
     SUMMARY = _train_block_from_comps(BlockComp.CLOSE_SUMMARY)
@@ -147,5 +152,5 @@ SHR_DETERMINISTIC_BLOCKS = [
 
 SHR_TRAINING_BLOCKS = [
     TrainBlockRule.MIDPOINT_7MONTH,
-    TrainBlockRule.AGE_SEX
+    TrainBlockRule.AGE_DIFF2_SEX
 ]

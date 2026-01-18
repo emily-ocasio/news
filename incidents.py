@@ -27,11 +27,11 @@ GPT_PROMPTS: dict[str, str | tuple[str,]] = {
         'pmpt_68c8d0edb59c8193920e0e6428d01e3a0902d4a752062094',)
 }
 GPT_MODELS = {
-    EnvKey("filter"): GPTModel.GPT_5_NANO
+    EnvKey("extract"): GPTModel.GPT_5_MINI
 }
 FormatType = WashingtonPostArticleIncidentExtraction
 PROMPT_KEY_STR = "extract_incidents_dc"
-MODEL_KEY_STR = "filter"
+MODEL_KEY_STR = "extract"
 
 def input_number_to_extract() -> Run[int]:
     """
@@ -80,7 +80,8 @@ def extract_article(article: Article) -> Run[GPTFullResponse]:
             variables,
             FormatType,
             EnvKey(MODEL_KEY_STR),
-            effort="medium"
+            effort="medium",
+            stream=False  ## stream not working for now
         )
     )
 

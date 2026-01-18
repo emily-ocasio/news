@@ -221,8 +221,10 @@ def _constrained_greedy_clusters(
     members_sorted.sort(key=lambda ms: ms[0] if ms else "")
 
     rows: list[dict[str, str]] = []
-    for i, members in enumerate(members_sorted, start=1):
-        cluster_id = str(i)
+    for members in members_sorted:
+        # Match Splink's default connected-components behavior where cluster_id is the
+        # lexicographically smallest member id in the cluster.
+        cluster_id = members[0] if members else ""
         for uid in members:
             rows.append({"cluster_id": cluster_id, unique_id_column_name: uid})
 
@@ -291,11 +293,12 @@ def _splink_dedupe(job: SplinkDedupeJob) -> tuple[str, str]:
         if job.visualize:
             pd_pairs = df_pairs.as_pandas_dataframe()
             print(len(pd_pairs))
-            inspect_df = pd_pairs[
+            inspect_df = pd_pairs
+            inspect_df = inspect_df[
                 # ((pd_pairs["midpoint_day_l"] == 2624)
                 #     | (pd_pairs["midpoint_day_l"] == 2624))
                 #     & (pd_pairs["midpoint_day_r"] == 2624)
-                pd_pairs["victim_fullname_concat_l"] == "alexis goodarzi"
+                inspect_df["victim_age_l"] == 36
             ]
             print(len(inspect_df))
             inspect_dict = cast(list[dict[str, Any]], inspect_df.to_dict(orient="records"))

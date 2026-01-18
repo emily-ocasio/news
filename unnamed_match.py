@@ -353,7 +353,7 @@ def _link_orphans_to_entities(env: Environment) -> Run[Unit]:
         train_first=True,
         training_blocking_rules=ORPHAN_TRAINING_BLOCKS,
         do_cluster=False,
-        visualize=True,
+        visualize=False,
     ) >> (lambda outnames: put_line(f"[D] Wrote {outnames[0]} in DuckDB.")) ^ pure(unit)
 
 

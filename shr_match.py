@@ -43,7 +43,7 @@ shr_linkage_settings = {
         #DIST_COMP,  - no location in SHR for DC
         TF_WEAPON_COMP,
         CIRC_COMP,
-        cl.ExactMatch("victim_sex"),
+        cl.ExactMatch("victim_sex").configure(term_frequency_adjustments=True),
         cl.ExactMatch("victim_race"),
         #cl.ExactMatch("victim_ethnicity"),
     ],
@@ -585,7 +585,7 @@ def match_article_to_shr_victims() -> Run[NextStep]:
             duckdb_path=env["duckdb_path"],
             input_table=["article_victims", "shr_cached"],
             settings=shr_linkage_settings,
-            predict_threshold=0.1,
+            predict_threshold=0.01,
             deterministic_rules=SHR_DETERMINISTIC_BLOCKS,
             deterministic_recall=0.8,
             pairs_out="shr_link_pairs",

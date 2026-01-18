@@ -150,12 +150,12 @@ def articles_to_classify_sql():
             AND p2 IN (
                 SELECT DISTINCT PubDate p3
                 FROM articles
-                WHERE Dataset = "NOCLASS_WP"
+                WHERE Dataset = 'NOCLASS_WP'
                 )
             ORDER BY Priority
             LIMIT ?
         )
-        AND a.Dataset = "NOCLASS_WP"
+        AND a.Dataset = 'NOCLASS_WP'
         AND a.AutoClass IS NULL
         GROUP BY a.RecordId
     """

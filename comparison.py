@@ -338,21 +338,25 @@ AGE_COMP_SHR = cl.CustomComparison(
             "victim ages NULL",
             ComparisonComp.AGE_NULL.value
         ).to_dict(),
-        ComparisonLevel(
+        TFComparisonLevel(
             "exact match victim age",
-            ComparisonComp.EXACT_AGE.value
+            ComparisonComp.EXACT_AGE.value,
+            "victim_age"
         ).to_dict(),
-        ComparisonLevel(
+        TFComparisonLevel(
             "victim ages within 1 year",
-            ComparisonComp.AGE_1YEAR.value
+            ComparisonComp.AGE_1YEAR.value,
+            "victim_age"
         ).to_dict(),
-        ComparisonLevel(
+        TFComparisonLevel(
             "victim ages within 2 years",
-            ComparisonComp.AGE_2YEAR.value
+            ComparisonComp.AGE_2YEAR.value,
+            "victim_age"
         ).to_dict(),
-         ComparisonLevel(
+        TFComparisonLevel(
             "victim ages within 10 years",
-            ComparisonComp.AGE_10YEARS.value
+            ComparisonComp.AGE_10YEARS.value,
+            "victim_age"
         ).to_dict(),
         cll.ElseLevel()
     ]

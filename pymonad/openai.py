@@ -28,6 +28,7 @@ class GPTTokenType(str, Enum):
 class GPTModel(str, Enum):
     """OpenAI GPT model enumeration"""
     GPT_5_NANO = "gpt-5-nano"
+    GPT_5_MINI = "gpt-5-mini"
 
     @classmethod
     def from_string(cls, model_str: str) -> 'GPTModel | None':
@@ -50,6 +51,12 @@ class GPTModel(str, Enum):
                 return 0.005
             case GPTModel.GPT_5_NANO, GPTTokenType.OUTPUT:
                 return 0.4
+            case GPTModel.GPT_5_MINI, GPTTokenType.UNCACHED:
+                return 0.025
+            case GPTModel.GPT_5_MINI, GPTTokenType.CACHED:
+                return 0.25
+            case GPTModel.GPT_5_MINI, GPTTokenType.OUTPUT:
+                return 2.0
             case _:
                 raise ValueError(
                     f"Unknown model or token type: {self}, {token_type}")
@@ -226,7 +233,7 @@ def to_gpt_tuple(resp: Response) -> GPTFullResponse:
         case ParsedResponse():
             output = resp.output_parsed
             if output is None:
-                print(f"DEBUG: Raw GPT output_text: {resp.output_text}")
+                print(f"DEBUG: Raw GPT output_text: {resp.output_text}/nFull output: {resp.output}")
                 return Left(GPTError.NOT_PARSED)
         case Response():
             output = PlainText(output_text = resp.output_text)

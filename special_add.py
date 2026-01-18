@@ -20,7 +20,8 @@ from pymonad import (
     with_duckdb,
     input_with_prompt,
     bind_first,
-    Unit
+    Unit,
+    InputPrompt
 )
 from menuprompts import NextStep
 from article import Articles, ArticleAppError, from_rows
@@ -32,11 +33,11 @@ SPECIAL_ADD_PROMPTS: dict[str, str | tuple[str,]] = {
 }
 
 
-def input_entity_id() -> Run[String]:
-    """
-    Prompt the user to input the entity ID.
-    """
-    return input_with_prompt(PromptKey("entity_id"))
+# def input_entity_id() -> Run[String]:
+#     """
+#     Prompt the user to input the entity ID.
+#     """
+#     return input_with_prompt(PromptKey("entity_id"))
 
 
 def input_special_code() -> Run[String]:
@@ -104,6 +105,85 @@ def validate_entity_exists(entity_id: String) -> Run[String]:
         )
     )
 
+def ensure_special_defaults_table() -> Run[None]:
+    """
+    Ensure the DuckDB defaults table exists.
+    """
+    return sql_exec(
+        SQL("""--sql
+            CREATE TABLE IF NOT EXISTS special_case_defaults (
+                special_code TEXT PRIMARY KEY,
+                victim_entity_id TEXT,
+                updated_at TIMESTAMP
+            );
+        """)
+    )
+
+def get_default_entity_id(code: String) -> Run[str | None]:
+    """
+    Look up a stored entity id for a special code.
+    """
+    return sql_query(
+        SQL("""--sql
+            SELECT victim_entity_id
+            FROM special_case_defaults
+            WHERE special_code = ?
+        """),
+        SQLParams((String(code.upper()),)),
+    ) >> (
+        lambda rows: pure(
+            str(rows[0]["victim_entity_id"]).strip() if rows else None
+        )
+    )
+
+def store_default_entity_id(code: String, entity_id: String) -> Run[None]:
+    """
+    Store or update the default entity id for a special code.
+    """
+    return (
+        sql_exec(
+            SQL("""--sql
+                DELETE FROM special_case_defaults WHERE special_code = ?
+            """),
+            SQLParams((String(code.upper()),)),
+        )
+        ^ sql_exec(
+            SQL("""--sql
+                INSERT INTO special_case_defaults (
+                    special_code, victim_entity_id, updated_at
+                ) VALUES (?, ?, CURRENT_TIMESTAMP)
+            """),
+            SQLParams((String(code.upper()), String(entity_id))),
+        )
+    )
+
+def input_entity_id_with_default(code: String) -> Run[String]:
+    """
+    Prompt for entity id, using stored default if present.
+    """
+    def prompt_with_default(default_id: str | None) -> Run[String]:
+        prompt = (
+            InputPrompt(f"Enter the victim entity ID [{default_id}]: ")
+            if default_id
+            else InputPrompt("Enter the victim entity ID: ")
+        )
+        def resolve_entity_id(raw: String) -> Run[String]:
+            entered = str(raw).strip()
+            if entered:
+                return pure(String(entered))
+            if default_id:
+                return pure(String(default_id))
+            return throw(
+                ErrorPayload(
+                    "Entity ID cannot be empty.", ArticleAppError.USER_ABORT
+                )
+            )
+        return input_with_prompt(prompt) >> resolve_entity_id
+
+    return ensure_special_defaults_table() >> (
+        lambda _: get_default_entity_id(code) >> prompt_with_default
+    )
+
 
 def get_current_article_ids(entity_id: String) -> Run[str]:
     """
@@ -155,7 +235,7 @@ def get_special_articles() -> Run[Articles]:
         >> validate_special_articles
     )
 
-def update_entity(articles: Articles) -> Run[Unit]:
+def update_entity(articles: Articles, code: String) -> Run[Unit]:
     """
     Prompt for entity ID, validate and update with special articles.
     """
@@ -166,9 +246,10 @@ def update_entity(articles: Articles) -> Run[Unit]:
             >> bind_first(update_entity_articles, entity_id)
         )
     return with_duckdb(
-        input_entity_id()
+        input_entity_id_with_default(code)
         >> validate_entity_exists
-        >> update_current_article_ids
+        >> (lambda entity_id: store_default_entity_id(code, entity_id) ^ \
+            update_current_article_ids(entity_id))
         ^ export_final_victim_entities_excel()
     )
 
@@ -177,8 +258,12 @@ def add_special_articles_to_entity() -> Run[NextStep]:
     Main controller for adding special articles to an entity.
     """
     return (
-        get_special_articles()
-        >> update_entity
+        input_special_code()
+        >> (lambda code: (
+            retrieve_special_articles(code)
+            >> validate_special_articles
+            >> (lambda arts: update_entity(arts, code))
+        ))
         ^ pure(NextStep.CONTINUE)
     )
 

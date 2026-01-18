@@ -12,7 +12,8 @@ from gpt_filtering import GPT_PROMPTS, GPT_MODELS, \
     PROMPT_KEY_STR, process_all_articles
 from menuprompts import NextStep, MenuPrompts, MenuChoice, input_from_menu
 from incidents import process_all_articles as extract_process_all_articles, \
-    GPT_PROMPTS as INCIDENTS_GPT_PROMPTS, PROMPT_KEY_STR as INCIDENTS_PROMPT_KEY_STR
+    GPT_PROMPTS as INCIDENTS_GPT_PROMPTS, PROMPT_KEY_STR as INCIDENTS_PROMPT_KEY_STR, \
+    GPT_MODELS as INCIDENTS_GPT_MODELS
 
 FIX_PROMPTS: dict[str, str | tuple[str,]] = {
     "record_id": "Please enter the record ID of the article you want to fix: ",
@@ -156,7 +157,7 @@ def fix_article() -> Run[NextStep]:
     # Inject the specific GPT models and desired prompts into the namespace
     #   of a local environment and then proceed
     return with_models(
-        GPT_MODELS,
+        GPT_MODELS | INCIDENTS_GPT_MODELS,
         with_namespace(
             Namespace("fix"),
             to_prompts(FIX_PROMPTS | GPT_PROMPTS | INCIDENTS_GPT_PROMPTS),

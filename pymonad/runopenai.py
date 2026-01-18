@@ -5,6 +5,8 @@ Intent, eliminator and constructors for OpenAI API calls
 from dataclasses import dataclass
 from collections.abc import Callable
 import json
+import threading
+import time
 from typing import Any, TypeVar, cast, Literal
 
 
@@ -23,6 +25,36 @@ from .run import ErrorPayload, throw, Run, _unhandled, ask, local, pure, \
 
 A = TypeVar('A')
 P = TypeVar('P', bound=BaseModel)
+
+def _with_elapsed_timer(fn: Callable[[], A]) -> A:
+    """
+    Run fn while updating an elapsed timer in the console once per second.
+    """
+    stop = threading.Event()
+    start = time.monotonic()
+
+    def tick() -> None:
+        while not stop.wait(1):
+            elapsed = int(time.monotonic() - start)
+            minutes, seconds = divmod(elapsed, 60)
+            print(
+                f"\rElapsed time: {minutes:02d}:{seconds:02d}",
+                end="",
+                flush=True,
+            )
+
+    thread = threading.Thread(target=tick, daemon=True)
+    print("\rElapsed time: 00:00", end="", flush=True)
+    thread.start()
+    try:
+        return fn()
+    finally:
+        stop.set()
+        thread.join()
+        elapsed = int(time.monotonic() - start)
+        minutes, seconds = divmod(elapsed, 60)
+        print(f"\rElapsed time: {minutes:02d}:{seconds:02d}")
+
 @dataclass(frozen=True)
 class OAChat:
     """OpenAI Response API call intent"""
@@ -31,20 +63,23 @@ class OAChat:
     text_format: type[BaseModel] | None = None
     temperature: float = 0
     effort: Literal['low', 'medium', 'high'] = "low"
+    stream: bool = False
 
 
-def gpt_response(prompt: GPTPrompt,
-                 model: GPTModel,
-                 text_format: type[BaseModel] | None,
-                 temperature: float = 0,
-                 effort: Literal["low", "medium", "high"] = "low") \
-                    -> Run[Response | ParsedResponse[BaseModel]]:
+def gpt_response(
+    prompt: GPTPrompt,
+    model: GPTModel,
+    text_format: type[BaseModel] | None,
+    temperature: float = 0,
+    effort: Literal["low", "medium", "high"] = "low",
+    stream: bool = False
+    ) -> Run[Response | ParsedResponse[BaseModel]]:
     """
     Call the OpenAI API with the given parameters and return the response.
     """
     intent = OAChat(
         prompt, text_format=text_format, model=model, temperature=temperature, \
-              effort=effort)
+              effort=effort, stream=stream)
     return Run(lambda self: self._perform(intent, self), _unhandled)
 
 def resolve_prompt_template(env: Environment, prompt_key: PromptKey) \
@@ -57,12 +92,14 @@ def resolve_prompt_template(env: Environment, prompt_key: PromptKey) \
         return throw(ErrorPayload(f"Undefined GPT prompt: {prompt_key}"))
     return pure(gpt_prompts[prompt_key])
 
-def response_with_gpt_prompt(prompt_key: PromptKey,
-                             variables: dict[str, str | None],
-                             text_format: type[BaseModel],
-                             model_key: EnvKey,
-                             effort: Literal["low", "medium", "high"] = "low") \
-    -> Run[Response | ParsedResponse]:
+def response_with_gpt_prompt(
+    prompt_key: PromptKey,
+    variables: dict[str, str | None],
+    text_format: type[BaseModel],
+    model_key: EnvKey,
+    effort: Literal["low", "medium", "high"] = "low",
+    stream: bool = False
+    ) -> Run[Response | ParsedResponse]:
     """
     Resolve the GPT prompt from the environment.
     """
@@ -84,8 +121,42 @@ def response_with_gpt_prompt(prompt_key: PromptKey,
     return \
         ask() >> (lambda env:
         resolve_prompt(env) >> (lambda prompt: \
-        gpt_response(prompt, resolve_model(env), text_format, effort=effort)
+        gpt_response(
+            prompt, resolve_model(env), text_format, effort=effort, stream=stream)
         ))
+
+def _stream_response(
+    client: OpenAI,
+    model: GPTModel,
+    prompt: GPTPrompt,
+    effort: Literal["low", "medium", "high"],
+) -> Response:
+    """
+    Stream a response and return the final response.
+    """
+    with client.responses.stream(
+        model=model.value,
+        prompt=prompt.to_gpt,
+        input=[
+            {"role": "user", "content": "Analyze the article."}
+        ],
+        reasoning={
+            "effort": effort,
+            "summary": "detailed"
+        },
+        timeout=300.0
+    ) as stream:
+        for event in stream:
+            if event.type == "response.refusal.delta":
+                print(event.delta, end="")
+            elif event.type == "response.reasoning_summary_text.delta":
+                print(event.delta, end="")
+            elif event.type == "response.error":
+                print(event.error, end="")
+            elif event.type == "response.completed":
+                print("\nCompleted\n")
+                # print(event.response.output)
+        return stream.get_final_response()
 
 def run_openai(
     client_ctor: Callable[[], Any],
@@ -102,18 +173,22 @@ def run_openai(
                     "Run[Response | ParsedResponse[BaseModel]]") \
             -> Any:
             match intent:
-                case OAChat(prompt, model, text_format, temperature, effort):
+                case OAChat(prompt, model, text_format, temperature, effort, do_stream):
                     if text_format:
-                        return client.responses.parse(
+                        if do_stream:
+                            ### - DO NOT USE THIS - ###
+                            ## API does not properly parse the object at the end ###
+                            return _stream_response(client, model, prompt, effort)
+                        return _with_elapsed_timer(lambda: client.responses.parse(
                             model=model.value,
                             prompt=prompt.to_gpt,
                             text_format=text_format,
                             reasoning={
                                 "effort": effort,
-                                "summary": "detailed"
+                                "summary": "auto",
                             },
-                            timeout=60.0
-                        )
+                            timeout=300.0
+                        ))
                     return client.responses.create(
                         model=model,
                         prompt=prompt.to_gpt,
