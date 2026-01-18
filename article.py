@@ -1,11 +1,12 @@
 """
 Article class and related functions
 """
+from __future__ import annotations
+
 from dataclasses import dataclass, fields
 from datetime import datetime
 from enum import Enum
-from sqlite3 import Row
-from typing import cast
+from typing import cast, Mapping
 
 from pydantic import BaseModel
 
@@ -29,7 +30,7 @@ class Article:
     """
     Represents a single newspaper article.
     """
-    row: Row
+    row: Mapping
     current: int = 0
     total: int = 0
     record_id: int | None = None
@@ -117,7 +118,7 @@ class Article:
             gpt_class = "M"
         return String(gpt_class)
 
-def from_row(row: Row, current: int = 0, total: int = 0) -> Article:
+def from_row(row: Mapping, current: int = 0, total: int = 0) -> Article:
     """
     Converts a SQLite row to an Article instance.
     """
@@ -134,7 +135,12 @@ class Articles(Array[Article]):
     def __repr__(self) -> str:
         return "\n_____________\n\n".join(repr(article) for article in self)
 
-def from_rows(rows: Array[Row]) -> Articles:
+    @classmethod
+    def from_rows(cls, rows: Array[Mapping]) -> Articles:
+        """ Creates Articles object from array of database rows """
+        return from_rows(rows)
+
+def from_rows(rows: Array[Mapping]) -> Articles:
     """
     Converts a list of SQLite rows to a list of Article instances.
     """

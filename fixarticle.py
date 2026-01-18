@@ -8,7 +8,7 @@ from pymonad import Run, Namespace, with_namespace, to_prompts, put_line, \
     ErrorPayload, set_, with_models, String, bind_first, Tuple, GPTUsage, \
         GPTReasoning, Maybe, Just, _Nothing, gpt_usage_reasoning_from_rows
 from appstate import prompt_key
-from article import Article, Articles, ArticleAppError, from_rows
+from article import Article, Articles, ArticleAppError
 from gpt_filtering import GPT_PROMPTS, GPT_MODELS, \
     PROMPT_KEY_STR, process_all_articles
 from menuprompts import NextStep, MenuPrompts, MenuChoice, input_from_menu
@@ -56,7 +56,7 @@ def retrieve_single_article() -> Run[Article]:
         )
     def retrieve_article(record_id: int) -> Run[Articles]:
         return (
-            from_rows
+            Articles.from_rows
             & sql_query(SQL(single_article_sql()), SQLParams((record_id,)))
         )
     def validate_retrieval(articles: Articles) -> Run[Article]:
@@ -101,9 +101,10 @@ def _display_latest_gpt_response(article: Article) -> Run[Article]:
                     ^ pure(article)
                 )
             case _Nothing():
-                return \
-                    put_line("No GPT responses captured for this article.\n") ^ \
-                    pure(article)
+                return (
+                    put_line("No GPT responses captured for this article.\n")
+                    ^ pure(article)
+                )
 
     record_id = article.record_id or 0
     return \

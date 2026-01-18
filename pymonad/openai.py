@@ -112,12 +112,6 @@ class GPTReasoning(String):
         """
         return cls(row["Reasoning"] or "")
 
-def gpt_usage_reasoning_from_row(row: Any) -> tuple[GPTUsage, GPTReasoning]:
-    """
-    Convert a gptResults row to GPTUsage and GPTReasoning.
-    """
-    return (GPTUsage.from_row(row), GPTReasoning.from_row(row))
-
 def gpt_usage_reasoning_from_rows(
     rows: Array
 ) -> Maybe[Tuple[GPTUsage, GPTReasoning]]:

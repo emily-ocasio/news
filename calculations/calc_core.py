@@ -9,7 +9,7 @@ from datetime import datetime
 # from pprint import pformat
 import json
 from collections.abc import Iterable
-from typing import Optional, Union
+from typing import Optional, Union, Mapping
 from functools import reduce
 
 from flashtext import KeywordProcessor  # type: ignore
@@ -235,7 +235,7 @@ def unified_prompt(prompts: tuple[str, ...],
 
 def display_article(total: int,
                     current: int,
-                    row: Row,
+                    row: Mapping,
                     types: Rows,
                     limit_lines=0) -> tuple[str, tuple[str, ...]]:
     """
@@ -289,7 +289,7 @@ def article_counter(current: int, total: int) -> tuple[str, ...]:
     return (f"Article {current+1} of {total}:\n",) if total > 1 else tuple()
 
 
-def article_label(row: Row) -> tuple[str, ...]:
+def article_label(row: Mapping) -> tuple[str, ...]:
     """
     Returns label wtih article metadata
     """
