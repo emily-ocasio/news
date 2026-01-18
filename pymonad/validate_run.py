@@ -12,7 +12,7 @@ from .semigroup import Semigroup
 from .either import Either, Left, Right
 from .string import String
 from .monad import Unit, unit
-from .traverse import array_traverse, array_sequence
+from .traverse import array_traverse, array_sequence, array_traverse_run
 from .validation import V, Valid, Invalid
 
 S = TypeVar('S')
@@ -65,7 +65,7 @@ def validate_item(validators: Array[Validator[S]], item: S) \
             # Run a single validator on the item
             # The item is captured in the closure
             return val(item)
-        return array_traverse(validators, validate) if validators.length > 0 \
+        return array_traverse_run(validators, validate) if validators.length > 0 \
             else Run.pure(Array((V.pure(unit),))) # No validators, return empty
     def append_validation(a: V[FailureDetails, Unit],
                           b: V[FailureDetails, Unit]) \
@@ -140,5 +140,5 @@ def process_all(validators: Array[Validator[S]],
         -> Run[V[ItemsFailures[S], Array[T]]]:
         # Combine all the results into a single array
         return Run.pure(array_sequence(vs))
-    return (array_traverse(items, process_one) >> combine_results) \
+    return (array_traverse_run(items, process_one) >> combine_results) \
         if items.length > 0 else Run.pure(V.pure(Array(())))

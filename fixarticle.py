@@ -2,10 +2,11 @@
 Monadic controller for reviewing and making changes to a single article
 """
 from enum import Enum
-from calculations import single_article_sql
+from calculations import single_article_sql, latest_gptresults_sql
 from pymonad import Run, Namespace, with_namespace, to_prompts, put_line, \
     pure, input_number, PromptKey, sql_query, SQL, SQLParams, throw, \
-    ErrorPayload, set_, with_models, String, bind_first
+    ErrorPayload, set_, with_models, String, bind_first, Tuple, GPTUsage, \
+        GPTReasoning, Maybe, Just, _Nothing, gpt_usage_reasoning_from_rows
 from appstate import prompt_key
 from article import Article, Articles, ArticleAppError, from_rows
 from gpt_filtering import GPT_PROMPTS, GPT_MODELS, \
@@ -87,6 +88,29 @@ def _display_article(article: Article) -> Run[Article]:
         put_line(f"Retrieved article:\n {article}") ^ \
         pure(article)
 
+def _display_latest_gpt_response(article: Article) -> Run[Article]:
+    """
+    Display the latest GPT usage + reasoning captured for this article.
+    """
+    def after_query(maybe_usage: Maybe[Tuple[GPTUsage, GPTReasoning]]) -> Run[Article]:
+        match maybe_usage:
+            case Just(tup):
+                return (
+                    put_line(str(tup.fst))
+                    ^ put_line(f"GPT reasoning summary:\n{tup.snd}")
+                    ^ pure(article)
+                )
+            case _Nothing():
+                return \
+                    put_line("No GPT responses captured for this article.\n") ^ \
+                    pure(article)
+
+    record_id = article.record_id or 0
+    return \
+        (gpt_usage_reasoning_from_rows & \
+        sql_query(SQL(latest_gptresults_sql()), SQLParams((record_id,)))) \
+        >> after_query
+
 def _select_apply_action(article: Article) -> Run[NextStep]:
     """
     Select the desired action to apply to the article.
@@ -147,6 +171,7 @@ def select_fix_article() -> Run[NextStep]:
     return (
         retrieve_single_article()
         >> _display_article
+        >> _display_latest_gpt_response
         >> _select_apply_action
     )
 

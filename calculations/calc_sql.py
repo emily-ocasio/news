@@ -635,6 +635,18 @@ def insert_gptresults_sql() -> str:
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """
 
+def latest_gptresults_sql() -> str:
+    """
+    SQL statement to return the most recent GPT result for an article.
+    """
+    return """
+        SELECT *
+        FROM gptResults
+        WHERE RecordId = ?
+        ORDER BY TimeStamp DESC, ResultId DESC
+        LIMIT 1
+    """
+
 
 def articles_to_filter_sql() -> str:
     """

@@ -252,8 +252,8 @@ def response_message(specific: Callable[[BaseModel], str],
     """
     def message(resp: GPTResponseTuple) -> Run[GPTFullResponse]:
         return \
-            put_line(specific(resp.parsed.output)) ^ \
-            put_line(f"GPT Usage: {resp.parsed.usage}") ^ \
+            put_line(f"{resp.parsed.usage}") ^ \
             put_line(f"GPT reasoning summary: \n{resp.parsed.reasoning}") ^\
+            put_line(specific(resp.parsed.output)) ^ \
             pure(gpt_full)
     return from_either(message, gpt_full)

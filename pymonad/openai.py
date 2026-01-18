@@ -1,15 +1,19 @@
 """
 Dataclasses and related functions for OpenAI API calls
 """
+from __future__ import annotations
+
 from dataclasses import dataclass
 from enum import Enum
-from typing import TypeVar
+from typing import TypeVar, Any
 
 from openai.types.responses import ResponsePromptParam, Response, ParsedResponse
 from openai.types.responses.response_prompt_param import Variables
 from pydantic import BaseModel
 
+from .array import Array
 from .either import Either, Left, Right
+from .maybe import Maybe, Just, Nothing
 from .string import String
 from .tuple import Tuple
 
@@ -101,6 +105,29 @@ class GPTReasoning(String):
     """
     Represents the reasoning summary behind a GPT response.
     """
+    @classmethod
+    def from_row(cls, row: Any) -> "GPTReasoning":
+        """
+        Convert a gptResults row to GPTReasoning.
+        """
+        return cls(row["Reasoning"] or "")
+
+def gpt_usage_reasoning_from_row(row: Any) -> tuple[GPTUsage, GPTReasoning]:
+    """
+    Convert a gptResults row to GPTUsage and GPTReasoning.
+    """
+    return (GPTUsage.from_row(row), GPTReasoning.from_row(row))
+
+def gpt_usage_reasoning_from_rows(
+    rows: Array
+) -> Maybe[Tuple[GPTUsage, GPTReasoning]]:
+    """
+    Convert the latest gptResults row to a Maybe of usage + reasoning.
+    """
+    if len(rows) == 0:
+        return Nothing
+    row = rows[0]
+    return Just(Tuple(GPTUsage.from_row(row), GPTReasoning.from_row(row)))
 
 BUNDLE = 1000
 @dataclass(frozen=True)
@@ -168,6 +195,26 @@ class GPTUsage:
             reasoning_tokens=0,
             total_tokens=0,
             model_used=None
+        )
+
+    @classmethod
+    def from_row(cls, row: Any) -> "GPTUsage":
+        """
+        Convert a gptResults row to GPTUsage.
+        """
+        input_tokens = row["TotalInputTokens"] or 0
+        cached_tokens = row["CachedInputTokens"] or 0
+        output_tokens = row["TotalOutputTokens"] or 0
+        reasoning_tokens = row["ReasoningTokens"] or 0
+        model_str = row["Model"] or ""
+        model = GPTModel.from_string(model_str) if model_str else None
+        return cls(
+            input_tokens=input_tokens,
+            cached_tokens=cached_tokens,
+            output_tokens=output_tokens,
+            reasoning_tokens=reasoning_tokens,
+            total_tokens=input_tokens + output_tokens,
+            model_used=model
         )
 
 @dataclass(frozen=True)

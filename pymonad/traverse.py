@@ -23,6 +23,23 @@ def array_traverse(xs: Array[A], f: Callable[[A], Applicative[B]]) \
     """
     return xs.traverse(f)
 
+def array_traverse_run(xs: Array[A], f: Callable[[A], Run[B]]) -> Run[Array[B]]:
+    """
+    Stack-safe traverse specialized for Run.
+    Forces each Run step in a loop to avoid deep bind chains.
+    """
+    if not xs.a:
+        raise ValueError("Cannot traverse an empty Array.")
+
+    def step(self_run: Run[object]) -> Array[B]:
+        acc = Array.mempty()
+        for x in xs:
+            b = f(x)._step(self_run)
+            acc = Array.snoc(acc, b)
+        return acc
+
+    return Run(step, lambda intent, current: current._perform(intent, current))
+
 @overload
 def array_sequence(xs: Array[V[A, B]]) -> V[A, Array[B]]: ...
 @overload

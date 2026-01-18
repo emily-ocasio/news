@@ -317,7 +317,8 @@ class WashingtonPostArticleHomicideClassification(BaseModel):
         hom = self.homicide_classification.value \
             if self.homicide_classification else 'None'
         return f"GPT article classification: {art}\n" + \
-            f"GPT homicide classification: {hom}\n"
+            f"GPT homicide classification: {hom}\n" + \
+            self.model_dump_json(indent=2)
 
 class WashingtonPostArticleIncidentExtraction(BaseModel):
     """

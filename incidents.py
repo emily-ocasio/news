@@ -101,8 +101,7 @@ def save_json(article_class_t: ArticleClassTuple,
                 String(cast(FormatType, resp_t.parsed.output).incidents_json),
                 record_id
             ))) ^ \
-        put_line("Saved new GPT Incident JSON:\n") ^ \
-        put_line(cast(FormatType, resp_t.parsed.output).incidents_json) ^ \
+        put_line("Saved new GPT Incident JSON.\n") ^ \
         pure(resp_t)
 
 def save_extracted_article(article: Article, resp_t: GPTResponseTuple) \
@@ -135,7 +134,7 @@ def extract_single_article(article: Article) -> Run[Article]:
     save_article= save_article_fn(article)
     save_gpt = save_gpt_fn(article, PromptKey(PROMPT_KEY_STR))
     return \
-        put_line(f"Extracting incident data from article {article.record_id}...\n") ^ \
+        put_line(f"Extracting incident data from article {article}...\n") ^ \
         extract_article(article) >> \
         print_gpt_response >> \
         save_article >> \

@@ -1,10 +1,11 @@
 """ Implementation of Maybe in Python."""
-from abc import ABC, abstractmethod, ABCMeta
+from __future__ import annotations
+from abc import ABCMeta
 from enum import Enum, EnumMeta
 from dataclasses import dataclass
-from typing import cast, Callable, TypeVar, overload
+from typing import Callable, TypeVar, overload
 
-from .functor import Functor, map
+from .functor import Functor, map #pylint: disable=W0622
 from .monad import ap
 
 A = TypeVar("A")
@@ -16,7 +17,7 @@ F = TypeVar("F", bound='Maybe')
 # class _Maybe[A](Apply['_Maybe', A]):
 #     pass
 
-type Maybe[A] = Just[A] | _Nothing
+type Maybe[A] = Just[A] | _Nothing #pylint: disable=E0601
 
 
 # class _Maybe[A](Functor[A], Apply[A], Applicative[A], Bind['Maybe', A], ABC):
@@ -26,7 +27,6 @@ type Maybe[A] = Just[A] | _Nothing
 
 #     def __mul__(self: "_Maybe[Callable[[B],C]]", other: "_Maybe[B]") -> Maybe[C]:
 #         return apply(self, other)
-    
 #     @abstractmethod
 #     def map(self, f: Callable[[A], B]) -> Maybe[B]:
 #         """Applies a function to the value inside Maybe."""
@@ -46,7 +46,10 @@ type Maybe[A] = Just[A] | _Nothing
 #         return Just(value)
 
 class NothingMaybeMeta(ABCMeta, EnumMeta):
-    pass
+    """
+    Metaclass for Nothing
+    """
+
 
 
 class _Nothing(Functor, Enum, metaclass=NothingMaybeMeta):
@@ -61,20 +64,23 @@ class _Nothing(Functor, Enum, metaclass=NothingMaybeMeta):
     def __mul__(self, other: Maybe) -> "_Nothing":
         return Nothing
 
-    def _apply(self, other: Maybe) -> "_Nothing":
+    def _apply(self, _: Maybe) -> "_Nothing":
         return Nothing
 
     def __rshift__(self, m: Callable[[A], "Maybe[B]"]) -> "_Nothing":
         return Nothing
 
-    def _bind(self, m: Callable[[A], "Maybe[B]"]) -> "_Nothing":
+    def _bind(self, _: Callable[[A], "Maybe[B]"]) -> "_Nothing":
         return Nothing
 
     def __repr__(self):
         """String representation of Nothing."""
         return "Nothing"
-    
-    def pure(self, value):
+
+    def pure(self, _):
+        """
+        Implementation of pure Nothing
+        """
         return Nothing
 
     def __eq__(self, other) -> bool:
@@ -86,10 +92,12 @@ Nothing: _Nothing = _Nothing.NOTHING
 
 @dataclass(frozen=True)
 class Just[A](Functor[A]):
+    """ Implementtion of the Just variant of Maybe"""
     a: A
 
     @classmethod
     def make(cls, value) -> 'Just':
+        """Defines make function for Just"""
         return Just(value)
 
     def map(self, f: Callable[[A], B]) -> "Just[B]":
@@ -147,10 +155,10 @@ class Just[A](Functor[A]):
 # b = Nothing
 
 # test_maybe(a, b)
-def fromMaybe(default: A, m: Maybe[A]) -> A:
+def from_maybe(default: A, m: Maybe[A]) -> A:
     """Extracts the value from a Maybe, or returns a default value."""
     match m:
         case Just(value):
             return value
-        case Nothing:
+        case _Nothing():
             return default
