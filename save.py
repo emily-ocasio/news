@@ -168,7 +168,7 @@ def classification(state: State) -> RxResp:
     """
     row = state.articles[state.next_article]
     sql = calc.classify_sql()
-    auto_class = calc.classify(row)
+    auto_class = calc.classify(row) #type: ignore
     total = len(state.articles)
     msg = (
         f"Record: {row['RecordId']} (#{state.next_article} of {total}) "
