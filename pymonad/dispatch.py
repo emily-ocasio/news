@@ -266,7 +266,7 @@ def _splink_dedupe(job: SplinkDedupeJob) -> tuple[str, str]:
         db_api = DuckDBAPI(connection=con)
         linker = Linker(
             job.input_table,
-            job.settings | {"retain_intermediate_calculation_columns": True},
+            job.settings | {"retain_intermediate_calculation_columns": True, "max_iterations": 100},
             db_api=db_api,
         )
 
@@ -285,24 +285,29 @@ def _splink_dedupe(job: SplinkDedupeJob) -> tuple[str, str]:
                     linker.training.estimate_parameters_using_expectation_maximisation(
                         blocking_rule=training_rule
                     )
-
         df_pairs = linker.inference.predict(
-            threshold_match_probability=job.predict_threshold
+            threshold_match_probability= (job.predict_threshold if job.predict_threshold > 0 else None)
         )
-
         if job.visualize:
-            pd_pairs = df_pairs.as_pandas_dataframe()
-            print(len(pd_pairs))
-            inspect_df = pd_pairs
-            inspect_df = inspect_df[
-                # ((pd_pairs["midpoint_day_l"] == 2624)
-                #     | (pd_pairs["midpoint_day_l"] == 2624))
-                #     & (pd_pairs["midpoint_day_r"] == 2624)
-                inspect_df["victim_age_l"] == 36
-            ]
-            print(len(inspect_df))
-            inspect_dict = cast(list[dict[str, Any]], inspect_df.to_dict(orient="records"))
             alt.renderers.enable("browser")
+            pd_pairs = df_pairs.as_pandas_dataframe()
+            print(f"Total predictions within threshold: {len(pd_pairs)}")
+            inspect_df = pd_pairs
+            inspect_df = inspect_df[(
+                # ((inspect_df["midpoint_day_l"] == 2864)
+                #     | (inspect_df["midpoint_day_l"] == 2864))
+                #     & (inspect_df["midpoint_day_r"] > 0)
+                (inspect_df["victim_count_l"] == 2)
+                & (inspect_df["victim_count_r"] == 2)
+                & (inspect_df["month_l"] == 9)
+                & (inspect_df["month_r"] == 9)
+                )
+            ]
+            print(f"Number of records in waterfall chart: {len(inspect_df)}\n")
+            print("Waterfall chart members:")
+            print_df = inspect_df[["match_probability", "unique_id_l", "unique_id_r"]].reset_index()
+            print(print_df)
+            inspect_dict = cast(list[dict[str, Any]], inspect_df.to_dict(orient="records"))
             waterfall = linker.visualisations.waterfall_chart(inspect_dict)
             waterfall.show()  # type: ignore
 

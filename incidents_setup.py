@@ -110,7 +110,10 @@ SELECT
   -- keep raw offender_name so we can normalize it with the same logic as victims
   a.offender_name,
 
-  try_cast(json_extract_string(v.value, '$.victim_count') AS INTEGER) AS victim_count,
+  coalesce(
+    try_cast(json_extract_string(v.value, '$.victim_count') AS INTEGER),
+    a.victim_count
+  ) AS victim_count,
 
   concat_ws(':', CAST(a.article_id AS VARCHAR), CAST(a.incident_idx AS VARCHAR), CAST(CAST(v.key AS INTEGER) AS VARCHAR)) AS victim_row_id
 FROM incidents_cached a

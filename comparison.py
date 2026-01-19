@@ -331,6 +331,31 @@ AGE_COMP = cl.CustomComparison(
     ]
 )
 
+VICTIM_COUNT_COMP = cl.CustomComparison(
+    output_column_name="victim_count",
+    comparison_levels=[
+        NullComparisonLevel(
+            "victim counts NULL",
+            _null_comp_builder("victim_count")
+        ).to_dict(),
+        TFComparisonLevel(
+            "exact match victim count",
+            _exact_comp_builder("victim_count"),
+            "victim_count",
+            0.8,
+            0.0001
+        ).to_dict(),
+        # ComparisonLevel(
+        #     "victim counts within 1 (counts > 1)",
+        #     (
+        #         '"victim_count_l" > 1 AND "victim_count_r" > 1 '
+        #         'AND abs("victim_count_l" - "victim_count_r") <= 1'
+        #     )
+        # ).to_dict(),
+        cll.ElseLevel()
+    ]
+)
+
 AGE_COMP_SHR = cl.CustomComparison(
     output_column_name="victim_age",
     comparison_levels=[

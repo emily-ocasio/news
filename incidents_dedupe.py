@@ -14,6 +14,7 @@ from comparison import (
     NAME_COMP,
     DATE_COMP,
     AGE_COMP,
+    VICTIM_COUNT_COMP,
     DIST_COMP,
     OFFENDER_COMP,
     WEAPON_COMP,
@@ -80,7 +81,7 @@ def _dedupe_named_victims(env: Environment) -> Run[Unit]:
         training_blocking_rules=NAMED_VICTIM_BLOCKS_FOR_TRAINING,
         deterministic_rules=NAMED_VICTIM_DETERMINISTIC_BLOCKS,
         deterministic_recall=0.8,
-        visualize=True
+        visualize=False
     ) >> (
         lambda outnames: put_line(
             f"[D] Wrote {outnames[0]} and {outnames[1]} in DuckDB."
@@ -256,6 +257,7 @@ def _export_top_clusters_excel() -> Run[Unit]:
               v.victim_forename_norm,
               v.victim_surname_norm,
               v.victim_age,
+              v.victim_count,
               v.victim_sex,
               v.lat,
               v.lon,
@@ -370,6 +372,7 @@ def _build_representative_victims() -> Run[Unit]:
 
                     -- canonical age: mode excluding NULLs
                     mode(m.victim_age) FILTER (WHERE m.victim_age IS NOT NULL) AS canonical_age,
+                    max(m.victim_count) FILTER (WHERE m.victim_count IS NOT NULL) AS canonical_victim_count,
                     -- keep these if you still want distribution context
                     avg(m.victim_age) FILTER (WHERE m.victim_age IS NOT NULL) AS avg_age,
                     min(m.victim_age) FILTER (WHERE m.victim_age IS NOT NULL) AS min_age,
@@ -569,6 +572,7 @@ def _build_representative_victims() -> Run[Unit]:
                   a.lat_centroid,
                   a.lon_centroid,
                   a.canonical_age,
+                  a.canonical_victim_count,
                   a.avg_age,
                   a.min_age,
                   a.max_age,
@@ -640,6 +644,7 @@ def _settings_for_victim_dedupe() -> dict:
         NAME_COMP,
         DATE_COMP,
         AGE_COMP,
+        VICTIM_COUNT_COMP,
         DIST_COMP,
         cl.ExactMatch("victim_sex"),
         OFFENDER_COMP,

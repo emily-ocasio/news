@@ -2,6 +2,8 @@
 Match unnamed (orphan) victims to previously deduped victim clusters.
 """
 
+import hashlib
+import networkx as nx
 from splink.internals import comparison_library as cl
 
 from blocking import (
@@ -13,6 +15,7 @@ from blocking import (
 from comparison import (
     DATE_COMP_ORPHAN,
     AGE_COMP_ORPHAN,
+    VICTIM_COUNT_COMP,
     DIST_COMP,
     OFFENDER_COMP,
     WEAPON_COMP,
@@ -97,6 +100,7 @@ def _create_linkage_input_tables() -> Run[Unit]:
                     lat_centroid AS lat,
                     lon_centroid AS lon,
                     canonical_age AS victim_age,
+                    canonical_victim_count AS victim_count,
                     canonical_sex AS victim_sex,
                     canonical_race AS victim_race,
                     canonical_ethnicity AS victim_ethnicity,
@@ -137,6 +141,7 @@ def _create_linkage_input_tables() -> Run[Unit]:
                     lat,
                     lon,
                     victim_age,
+                    victim_count,
                     victim_sex,
                     victim_race,
                     victim_ethnicity,
@@ -342,9 +347,10 @@ def _link_orphans_to_entities(env: Environment) -> Run[Unit]:
                 WEAPON_COMP,
                 CIRC_COMP,
                 SUMMARY_COMP,
+                VICTIM_COUNT_COMP,
             ],
         },
-        predict_threshold=0.20,
+        predict_threshold=0.1,
         cluster_threshold=0.0,
         pairs_out="orphan_entity_pairs",
         clusters_out="",
@@ -353,7 +359,7 @@ def _link_orphans_to_entities(env: Environment) -> Run[Unit]:
         train_first=True,
         training_blocking_rules=ORPHAN_TRAINING_BLOCKS,
         do_cluster=False,
-        visualize=False,
+        visualize=True,
     ) >> (lambda outnames: put_line(f"[D] Wrote {outnames[0]} in DuckDB.")) ^ pure(unit)
 
 
@@ -362,71 +368,93 @@ def _integrate_orphan_matches() -> Run[Unit]:
     Integrate the final orphan matches into victim_entity_reps_new.
     Creates victim_entity_reps_new (augmented from victim_entity_reps) based on the entity-orphan matching results.
     """
+    def _stable_edge_weight(match_probability, entity_uid, orphan_uid) -> float:
+        base = 0.0 if match_probability is None else float(match_probability)
+        seed = f"{entity_uid}|{orphan_uid}".encode("utf-8")
+        digest = hashlib.md5(seed).hexdigest()
+        jitter = (int(digest[:8], 16) % 1000000) / 1e15
+        return base + jitter
+
+    def _max_weight_pairs_by_article(rows) -> list[tuple[str, str, int | None, float | None]]:
+        by_article: dict[int | None, list[dict]] = {}
+        for row in rows:
+            by_article.setdefault(row["article_id"], []).append(row)
+
+        matched: list[tuple[str, str, int | None, float | None]] = []
+        for article_id, group in by_article.items():
+            G: nx.Graph = nx.Graph()  # pylint: disable=C0103
+            for row in group:
+                entity_uid = str(row["entity_uid"])
+                orphan_uid = str(row["orphan_uid"])
+                prob = row["match_probability"]
+                G.add_edge(
+                    f"e:{entity_uid}",
+                    f"o:{orphan_uid}",
+                    weight=_stable_edge_weight(prob, entity_uid, orphan_uid),
+                    raw_prob=prob,
+                )
+            if not G.edges:
+                continue
+            matching = nx.max_weight_matching(G, maxcardinality=True, weight="weight")
+            for u, v in matching:
+                if u.startswith("o:"):
+                    u, v = v, u
+                entity_uid = u[2:]
+                orphan_uid = v[2:]
+                prob = G[u][v]["raw_prob"]
+                matched.append((entity_uid, orphan_uid, article_id, prob))
+        return matched
+
+    def _write_final_orphan_matches(rows) -> Run[None]:
+        matches = _max_weight_pairs_by_article(rows)
+        if not matches:
+            return sql_exec(
+                SQL(
+                    """--sql
+                    CREATE OR REPLACE TABLE final_orphan_matches (
+                      entity_uid VARCHAR,
+                      orphan_uid VARCHAR,
+                      article_id BIGINT,
+                      match_probability DOUBLE
+                    );
+                    """
+                )
+            )
+        values = []
+        for entity_uid, orphan_uid, article_id, prob in matches:
+            art_sql = "NULL" if article_id is None else str(int(article_id))
+            prob_sql = "NULL" if prob is None else str(float(prob))
+            values.append(f"({entity_uid!r}, {orphan_uid!r}, {art_sql}, {prob_sql})")
+        values_sql = ", ".join(values)
+        return sql_exec(
+            SQL(
+                f"""--sql
+                CREATE OR REPLACE TABLE final_orphan_matches AS
+                SELECT * FROM (VALUES {values_sql})
+                AS t(entity_uid, orphan_uid, article_id, match_probability);
+                """
+            )
+        )
+
     return (
         # Drop existing new table if present (for reruns)
         sql_exec(SQL("DROP TABLE IF EXISTS victim_entity_reps_new;"))
         # Create final matches table using the validated logic
-        ^ sql_exec(
+        ^ sql_query(
             SQL(
                 """--sql
-                CREATE OR REPLACE TABLE final_orphan_matches AS
-                WITH base_pairs AS (
-                  SELECT unique_id_l, unique_id_r, match_probability
-                  FROM orphan_entity_pairs
-                ),
-                sides AS (
-                  SELECT
-                    bp.*,
-                    el.unique_id AS e_l, er.unique_id AS e_r,
-                    ol.unique_id AS o_l, orr.unique_id AS o_r
-                  FROM base_pairs bp
-                  LEFT JOIN entity_link_input el ON bp.unique_id_l = el.unique_id
-                  LEFT JOIN entity_link_input er ON bp.unique_id_r = er.unique_id
-                  LEFT JOIN orphan_link_input  ol ON bp.unique_id_l = ol.unique_id
-                  LEFT JOIN orphan_link_input  orr ON bp.unique_id_r = orr.unique_id
-                ),
-                pairs_raw AS (
-                  SELECT
-                    COALESCE(e_l, e_r) AS entity_uid,
-                    COALESCE(o_l, o_r) AS orphan_uid,
-                    oi.article_id,
-                    s.match_probability
-                  FROM sides s
-                  JOIN orphan_link_input oi
-                    ON oi.unique_id = COALESCE(s.o_l, s.o_r)
-                  WHERE COALESCE(e_l, e_r) IS NOT NULL
-                    AND COALESCE(o_l, o_r) IS NOT NULL
-                ),
-                -- Stage 1: within (article_id, entity_uid) keep only the best orphan
-                per_entity_winners AS (
-                  SELECT entity_uid, orphan_uid, article_id, match_probability
-                  FROM (
-                    SELECT pr.*,
-                           ROW_NUMBER() OVER (
-                             PARTITION BY pr.article_id, pr.entity_uid
-                             ORDER BY pr.match_probability DESC NULLS LAST, pr.orphan_uid
-                           ) AS rn
-                    FROM pairs_raw pr
-                  )
-                  WHERE rn = 1
-                ),
-                -- Stage 2: for each (article_id, orphan_uid) pick the best remaining entity
-                pairs_top AS (
-                  SELECT entity_uid, orphan_uid, article_id, match_probability
-                  FROM (
-                    SELECT pew.*,
-                           ROW_NUMBER() OVER (
-                             PARTITION BY pew.article_id, pew.orphan_uid
-                             ORDER BY pew.match_probability DESC NULLS LAST, pew.entity_uid
-                           ) AS rn
-                    FROM per_entity_winners pew
-                  )
-                  WHERE rn = 1
-                )
-                SELECT * FROM pairs_top;
+                SELECT
+                  bp.unique_id_l AS entity_uid,
+                  bp.unique_id_r AS orphan_uid,
+                  oi.article_id,
+                  bp.match_probability
+                FROM orphan_entity_pairs bp
+                JOIN orphan_link_input oi
+                  ON oi.unique_id = bp.unique_id_r;
                 """
             )
         )
+        >> _write_final_orphan_matches
         # Create victim_entity_reps_new by augmenting victim_entity_reps with orphan data
         ^ sql_exec(
             SQL(
@@ -443,7 +471,7 @@ def _integrate_orphan_matches() -> Run[Unit]:
                 WITH matched_orphans AS (
                   SELECT
                     fom.entity_uid,
-                    vce.lat, vce.lon, vce.midpoint_day, vce.article_id
+                    vce.lat, vce.lon, vce.midpoint_day, vce.article_id, vce.victim_count
                   FROM final_orphan_matches fom
                   JOIN victims_cached_enh vce ON vce.victim_row_id = CAST(fom.orphan_uid AS VARCHAR)
                 ),
@@ -455,7 +483,8 @@ def _integrate_orphan_matches() -> Run[Unit]:
                     AVG(lon) AS avg_orphan_lon,
                     MIN(midpoint_day) AS min_orphan_mid,
                     MAX(midpoint_day) AS max_orphan_mid,
-                    STRING_AGG(DISTINCT CAST(article_id AS VARCHAR), ',') AS orphan_article_ids
+                    STRING_AGG(DISTINCT CAST(article_id AS VARCHAR), ',') AS orphan_article_ids,
+                    MAX(victim_count) FILTER (WHERE victim_count IS NOT NULL) AS max_orphan_victim_count
                   FROM matched_orphans
                   GROUP BY entity_uid
                 )
@@ -470,7 +499,14 @@ def _integrate_orphan_matches() -> Run[Unit]:
                   ELSE lon_centroid END,
                   min_event_day = CASE WHEN mu.num_orphans IS NOT NULL THEN LEAST(min_event_day, mu.min_orphan_mid) ELSE min_event_day END,
                   max_event_day = CASE WHEN mu.num_orphans IS NOT NULL THEN GREATEST(max_event_day, mu.max_orphan_mid) ELSE max_event_day END,
-                  article_ids_csv = article_ids_csv || ',' || COALESCE(mu.orphan_article_ids, '')
+                  article_ids_csv = article_ids_csv || ',' || COALESCE(mu.orphan_article_ids, ''),
+                  canonical_victim_count = CASE
+                    WHEN mu.max_orphan_victim_count IS NOT NULL AND canonical_victim_count IS NOT NULL
+                      THEN GREATEST(canonical_victim_count, mu.max_orphan_victim_count)
+                    WHEN mu.max_orphan_victim_count IS NOT NULL
+                      THEN mu.max_orphan_victim_count
+                    ELSE canonical_victim_count
+                  END
                 FROM matched_updates mu
                 WHERE victim_entity_reps_new.victim_entity_id = mu.entity_uid;
                 """
@@ -496,6 +532,7 @@ def _integrate_orphan_matches() -> Run[Unit]:
                   canonical_ethnicity,
                   city_id,
                   canonical_age,
+                  canonical_victim_count,
                   mode_weapon,
                   mode_circumstance,
                   offender_fullname,
@@ -517,6 +554,7 @@ def _integrate_orphan_matches() -> Run[Unit]:
                   victim_ethnicity AS canonical_ethnicity,
                   city_id AS city_id,
                   victim_age AS canonical_age,
+                  victim_count AS canonical_victim_count,
                   weapon AS mode_weapon,
                   circumstance AS mode_circumstance,
                   offender_name AS offender_fullname,
@@ -628,11 +666,8 @@ def _export_orphan_matches_debug_excel() -> Run[Unit]:
     Build a single worksheet that lists every victim entity and every orphan.
 
     Matching logic:
-      - Detect sides robustly by joining each side of orphan_entity_pairs to
-        entity_link_input and orphan_link_input (no reliance on dataset labels).
-      - Enforce per-article uniqueness: within an article_id, any single entity
-        can be matched to at most one orphan (choose highest match_probability).
-      - After that constraint, select the top-1 entity per orphan by match_probability.
+      - Use final_orphan_matches derived from max-weight bipartite matching
+        per orphan article.
 
     Output:
       - Exactly one row per entity, one per orphan.
@@ -644,77 +679,20 @@ def _export_orphan_matches_debug_excel() -> Run[Unit]:
         sql_export(
             SQL(
                 """--sql
-            -- Identify which side is entity vs orphan by joining inputs
-            -- (probably unnecessary because entities are always supposed to be left,
-            -- but it is extra robust to dataset labels)
-            WITH base_pairs AS (
-              SELECT unique_id_l, unique_id_r, match_probability
-              FROM orphan_entity_pairs
-            ),
-            sides AS (
-              SELECT
-                bp.*,
-                el.unique_id AS e_l, er.unique_id AS e_r,
-                ol.unique_id AS o_l, orr.unique_id AS o_r
-              FROM base_pairs bp
-              LEFT JOIN entity_link_input el ON bp.unique_id_l = el.unique_id
-              LEFT JOIN entity_link_input er ON bp.unique_id_r = er.unique_id
-              LEFT JOIN orphan_link_input  ol ON bp.unique_id_l = ol.unique_id
-              LEFT JOIN orphan_link_input  orr ON bp.unique_id_r = orr.unique_id
-            ),
-            pairs_raw AS (
-              SELECT
-                COALESCE(e_l, e_r) AS entity_uid,
-                COALESCE(o_l, o_r) AS orphan_uid,
-                oi.article_id,
-                s.match_probability
-              FROM sides s
-              JOIN orphan_link_input oi
-                ON oi.unique_id = COALESCE(s.o_l, s.o_r)
-              WHERE COALESCE(e_l, e_r) IS NOT NULL
-                AND COALESCE(o_l, o_r) IS NOT NULL
-            ),
-            -- Stage 1: within (article_id, entity_uid) keep only the best orphan
-            per_entity_winners AS (
-              SELECT entity_uid, orphan_uid, article_id, match_probability
-              FROM (
-                SELECT pr.*,
-                      ROW_NUMBER() OVER (
-                        PARTITION BY pr.article_id, pr.entity_uid
-                        ORDER BY pr.match_probability DESC NULLS LAST, pr.orphan_uid
-                      ) AS rn
-                FROM pairs_raw pr
-              )
-              WHERE rn = 1
-            ),
-            -- Stage 2: for each (article_id, orphan_uid) pick the best remaining entity
-            pairs_top AS (
-              SELECT entity_uid, orphan_uid, article_id, match_probability
-              FROM (
-                SELECT pew.*,
-                      ROW_NUMBER() OVER (
-                        PARTITION BY pew.article_id, pew.orphan_uid
-                        ORDER BY pew.match_probability DESC NULLS LAST, pew.entity_uid
-                      ) AS rn
-                FROM per_entity_winners pew
-              )
-              WHERE rn = 1
-            ),
-            -- Decorate orphans with their chosen entity (if any)
-            orphan_choice AS (
+            WITH orphan_choice AS (
               SELECT
                 o.*,
-                pt.entity_uid,
-                pt.match_probability
+                fm.entity_uid,
+                fm.match_probability
               FROM orphan_link_input o
-              LEFT JOIN pairs_top pt
-                ON o.unique_id = pt.orphan_uid
+              LEFT JOIN final_orphan_matches fm
+                ON o.unique_id = fm.orphan_uid
             ),
             -- Compute match_id for entities: match_<entity_uid> if they have ≥1 orphans, else entity_<id>
             entity_with_match AS (
               SELECT
                 e.*,
-                CASE WHEN EXISTS (SELECT 1 FROM pairs_top pt WHERE pt.entity_uid = e.unique_id)
+                CASE WHEN EXISTS (SELECT 1 FROM final_orphan_matches fm WHERE fm.entity_uid = e.unique_id)
                     THEN CONCAT('match_', e.unique_id)
                     ELSE CONCAT('entity_', e.unique_id)
                 END AS match_id
@@ -738,6 +716,7 @@ def _export_orphan_matches_debug_excel() -> Run[Unit]:
                 e.victim_fullname_norm,  -- Added
                 e.weapon, e.circumstance,
                 e.offender_forename_norm, e.offender_surname_norm,
+                e.victim_count,
                 CAST(NULL AS DOUBLE) AS match_probability
               FROM entity_with_match e
 
@@ -764,6 +743,7 @@ def _export_orphan_matches_debug_excel() -> Run[Unit]:
                 o.victim_fullname_norm,  -- Added
                 o.weapon, o.circumstance,
                 o.offender_forename_norm, o.offender_surname_norm,
+                o.victim_count,
                 o.match_probability
               FROM orphan_choice o
               LEFT JOIN entity_link_input e
@@ -786,6 +766,7 @@ def _export_orphan_matches_debug_excel() -> Run[Unit]:
               victim_fullname_norm,  -- Added
               weapon, circumstance,
               offender_forename_norm, offender_surname_norm,
+              victim_count,
               match_probability,
               article_ids_csv
             FROM combined
