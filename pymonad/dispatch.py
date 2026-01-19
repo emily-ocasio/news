@@ -12,6 +12,7 @@ import altair as alt
 import duckdb
 from pandas import DataFrame
 from splink import Linker, DuckDBAPI
+from splink import blocking_analysis
 from splink.internals.blocking_rule_creator import BlockingRuleCreator
 import networkx as nx
 
@@ -287,6 +288,19 @@ def _splink_dedupe(job: SplinkDedupeJob) -> tuple[str, str]:
             job.settings | {"retain_intermediate_calculation_columns": True, "max_iterations": 100},
             db_api=db_api,
         )
+        prediction_rules = job.settings.get("blocking_rules_to_generate_predictions", [])
+        if prediction_rules:
+            tables = job.input_table if isinstance(job.input_table, list) else [job.input_table]
+            counts_df = blocking_analysis.cumulative_comparisons_to_be_scored_from_blocking_rules_data(
+                table_or_tables=tables,
+                blocking_rules=prediction_rules,
+                link_type=job.settings.get("link_type", "dedupe_only"),
+                db_api=db_api,
+                unique_id_column_name=job.settings.get("unique_id_column_name", "unique_id"),
+                source_dataset_column_name=job.settings.get("source_dataset_column_name"),
+            )
+            total_comparisons = int(counts_df["row_count"].sum())
+            print(f"Total comparisons to be scored (pre-threshold): {total_comparisons}")
 
         linker.training.estimate_probability_two_random_records_match(
             list(job.deterministic_rules), recall=job.deterministic_recall
@@ -308,8 +322,8 @@ def _splink_dedupe(job: SplinkDedupeJob) -> tuple[str, str]:
                     )
                     current_settings = linker.misc.save_model_to_json(out_path=None)
                     current_params = _extract_em_params(current_settings)
+                    deltas: list[float] = []
                     if prev_block_params is not None:
-                        deltas: list[float] = []
                         for key, (m_now, u_now) in current_params.items():
                             if key not in prev_block_params:
                                 continue
@@ -327,7 +341,6 @@ def _splink_dedupe(job: SplinkDedupeJob) -> tuple[str, str]:
                 if current_params is None:
                     break
                 if prev_params is not None:
-                    deltas: list[float] = []
                     for key, (m_now, u_now) in current_params.items():
                         if key not in prev_params:
                             continue
