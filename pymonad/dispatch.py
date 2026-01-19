@@ -347,7 +347,12 @@ def _splink_dedupe(job: SplinkDedupeJob) -> tuple[str, str]:
                 """)
         if job.unique_matching and job.unique_pairs_table:
             # Query all pairs with match_probability > 0
-            pairs = con.execute(f"SELECT unique_id_l, unique_id_r, match_probability FROM {job.pairs_out} WHERE match_probability > 0").fetchall()
+            pairs = con.execute(
+                f"""
+                SELECT unique_id_l, unique_id_r, match_probability 
+                FROM {job.pairs_out} WHERE match_probability > 0
+                """
+                ).fetchall()
             # Create bipartite graph
             G: nx.Graph = nx.Graph() #pylint: disable=C0103
             # Add edges with weights

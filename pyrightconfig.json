@@ -1,5 +1,14 @@
 {
   "typeCheckingMode": "basic",
   "reportMissingTypeStubs": true,
-  "stubPath": "./typings"
+  "stubPath": "./typings",
+  "exclude": [
+    "**/.*",
+    "**/node_modules",
+    "**/__pycache__",
+    "**/splink/**"
+  ],
+  "ignore": [
+    "**/splink/**"
+  ]
 }

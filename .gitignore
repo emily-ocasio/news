@@ -1,5 +1,6 @@
 __pycache__/
 *.wal
+*.db-journal
 .dmypy.json
 .ipynb_checkpoints/
 newarticles.db
