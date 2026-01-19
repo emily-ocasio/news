@@ -615,7 +615,7 @@ def match_article_to_shr_victims() -> Run[NextStep]:
             settings=shr_linkage_settings,
             predict_threshold=0.01,
             deterministic_rules=SHR_DETERMINISTIC_BLOCKS,
-            deterministic_recall=0.8,
+            deterministic_recall=0.1,
             pairs_out="shr_link_pairs",
             do_cluster=False,
             train_first=True,

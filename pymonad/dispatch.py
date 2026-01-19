@@ -78,9 +78,12 @@ class SplinkDedupeJob:
     em_stop_delta: float = 0.002
 
 
-def _extract_em_params(settings_dict: dict[str, Any]) -> dict[tuple[str, str], tuple[float | None, float | None]]:
+def _extract_em_params(
+        settings_dict: dict[str, Any]
+        ) -> dict[tuple[str, str], tuple[float | None, float | None]]:
     """
-    Flatten comparison level m/u probabilities to a stable dict keyed by (comparison_name, level_name).
+    Flatten comparison level m/u probabilities to a stable dict
+    keyed by (comparison_name, level_name).
     """
     params: dict[tuple[str, str], tuple[float | None, float | None]] = {}
     for comparison in settings_dict.get("comparisons", []):
@@ -359,7 +362,7 @@ def _splink_dedupe(job: SplinkDedupeJob) -> tuple[str, str]:
                         break
                 prev_params = current_params
         df_pairs = linker.inference.predict(
-            threshold_match_probability= (job.predict_threshold if job.predict_threshold > 0 else None)
+            threshold_match_probability= job.predict_threshold
         )
         if job.visualize:
             alt.renderers.enable("browser")
@@ -454,7 +457,14 @@ def _splink_dedupe(job: SplinkDedupeJob) -> tuple[str, str]:
                 con.execute(f"CREATE OR REPLACE TABLE {job.unique_pairs_table} AS SELECT * FROM (VALUES {values_str}) AS t(unique_id_l, unique_id_r, match_probability)")
             else:
                 # Create empty table
-                con.execute(f"CREATE OR REPLACE TABLE {job.unique_pairs_table} (unique_id_l VARCHAR, unique_id_r VARCHAR, match_probability DOUBLE)")
+                con.execute(f"""--sql
+                    CREATE OR REPLACE TABLE {job.unique_pairs_table}
+                    (
+                        unique_id_l VARCHAR, 
+                        unique_id_r VARCHAR, 
+                        match_probability DOUBLE
+                    )
+                    """)
         if job.do_cluster:
             if not isinstance(job.input_table, str):
                 raise RuntimeError(
