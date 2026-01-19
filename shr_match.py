@@ -547,7 +547,7 @@ def match_article_to_shr_victims() -> Run[NextStep]:
                     2 AS city_id  -- Corresponds to DC (PublicationID of Washi Post)
                 FROM sqldb.shr
                 WHERE State = 'District of Columbia' -- Only DC for now
-                AND Year = 1977 -- Limit to 1977 for now
+                AND Year >= 1977 AND Year <= 1978 -- Limit to 1977-78 for now
                 """
             )
         ) ^

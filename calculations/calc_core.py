@@ -382,7 +382,7 @@ def rich_to_str(text: Union[Text, Table, str], end='\n') -> str:
     return capture.get()
 
 
-def filter_row(row: Row) -> bool:
+def filter_row(row: Mapping) -> bool:
     """
     Determines whether there are matches in either
         the title or the main text of the article
@@ -437,17 +437,17 @@ def located_articles(rows: tuple[Row, ...], mass=True) -> tuple[Row, ...]:
     return tuple(filter(loc_filter, rows))
 
 
-def filter_by_type(rows: tuple[Row, ...], good=True) -> tuple[Row, ...]:
+def filter_by_type(rows: tuple[Mapping, ...], good=True) -> tuple[Mapping, ...]:
     """
     Returns subset of articles that have (or do not have) good types only
     """
-    def type_filter(row: Row) -> bool:
+    def type_filter(row: Mapping) -> bool:
         is_good = is_good_type(row)
         return is_good if good else not is_good
     return tuple(filter(type_filter, rows))
 
 
-def type_divide(rows: tuple[Row, ...]) -> tuple[int, int]:
+def type_divide(rows: tuple[Mapping, ...]) -> tuple[int, int]:
     """
     Returns counts of articles that have good and bad types
     """
@@ -455,7 +455,7 @@ def type_divide(rows: tuple[Row, ...]) -> tuple[int, int]:
     return good_count, len(rows) - good_count
 
 
-def classify(row: Row) -> str:
+def classify(row: Mapping) -> str:
     """
     Determines auto-classification of an article
     """
@@ -473,7 +473,7 @@ def classify(row: Row) -> str:
     return 'M'
 
 
-def is_good_type(row: Row) -> bool:
+def is_good_type(row: Mapping) -> bool:
     """
     Determine whether row is is of a 'good type'
     Takes into consideration that some articles marked as Advertisement
@@ -492,7 +492,7 @@ def is_good_type(row: Row) -> bool:
                                     and 'ad' not in row['Title'].lower())
 
 
-def full_pred(row: Row) -> bool:
+def full_pred(row: Mapping) -> bool:
     """
     Determine wheter row is predicted to be a match using all three criteria:
     - must be of a 'good type' (e.g. no advertisements)
