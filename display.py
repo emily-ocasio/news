@@ -13,7 +13,7 @@ def article(state: State) -> RxResp:
     total = len(state.articles)
     row = state.articles[state.next_article]
     display, lines = calc.display_article(total, state.next_article,
-                                          row, state.current_article_types,
+                                          row, state.current_article_types, #type: ignore
                                           limit_lines=0
                                           if state.article_kind == 'assign'
                                           else state.terminal_size[1])
@@ -88,7 +88,7 @@ def type_count(state: State) -> RxResp:
     """
     Display summary counts of article types
     """
-    count_good, count_bad = calc.type_divide(state.articles)
+    count_good, count_bad = calc.type_divide(state.articles) #type: ignore
     msg = f"Good types: {count_good}, Bad types: {count_bad}"
     return action2('print_message', message=msg), state
 

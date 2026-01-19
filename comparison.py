@@ -67,7 +67,8 @@ class ComparisonComp(StrEnum):
     OFFENDER_CLOSE = _similarity_comp_builder2(
         "offender_forename_norm", "offender_surname_norm", 0.85)
     WEAPON_NULL = _null_comp_builder("weapon") + ' OR ' + \
-        _null_comp_builder("weapon", "= 'unknown'")
+        _null_comp_builder("weapon", "= 'unknown'") + ' OR ' + \
+        _null_comp_builder("weapon", "= 'other'")
     WEAPON_EXACT = _exact_comp_builder("weapon") + " OR " + \
         _specific_value_comp_builder(
             "weapon", "IN ('firearm', 'handgun', 'rifle', 'shotgun')")

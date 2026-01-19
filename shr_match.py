@@ -620,7 +620,7 @@ def match_article_to_shr_victims() -> Run[NextStep]:
             training_blocking_rules=SHR_TRAINING_BLOCKS,
             unique_matching=True,
             unique_pairs_table="shr_max_weight_matches",
-            visualize=False
+            visualize=True
         ) >>
         (lambda pairs_clusters: put_line(
             f"Linkage complete. Pairs table: {pairs_clusters[0]}, Clusters table: {pairs_clusters[1]}"

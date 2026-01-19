@@ -193,7 +193,7 @@ def article_type(state: State, choice) -> RxResp:
     if choice not in 'GB':
         raise ChoiceException("Choice not supported")
     state = state._replace(
-        articles=calc.filter_by_type(state.articles, choice == 'G')
+        articles=calc.filter_by_type(state.articles, choice == 'G') #type: ignore
     )
     return controller.first_article(state)
 

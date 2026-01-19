@@ -293,16 +293,23 @@ def _splink_dedupe(job: SplinkDedupeJob) -> tuple[str, str]:
             pd_pairs = df_pairs.as_pandas_dataframe()
             print(f"Total predictions within threshold: {len(pd_pairs)}")
             inspect_df = pd_pairs
-            inspect_df = inspect_df[(
-                # ((inspect_df["midpoint_day_l"] == 2864)
-                #     | (inspect_df["midpoint_day_l"] == 2864))
-                #     & (inspect_df["midpoint_day_r"] > 0)
-                (inspect_df["victim_count_l"] == 2)
-                & (inspect_df["victim_count_r"] == 2)
-                & (inspect_df["month_l"] == 9)
-                & (inspect_df["month_r"] == 9)
-                )
-            ]
+            try:
+                inspect_df = inspect_df[(
+                    # ((inspect_df["midpoint_day_l"] == 2864)
+                    #     | (inspect_df["midpoint_day_l"] == 2864))
+                    #     & (inspect_df["midpoint_day_r"] > 0)
+                    (inspect_df["victim_count_l"] == 2)
+                    & (inspect_df["victim_count_r"] == 2)
+                    & (inspect_df["midpoint_day_l"] == 3267)
+                    # & (inspect_df["month_r"] == 9)
+                    )
+                ]
+            except KeyError as ke:
+                print(f"Exception: {ke}")
+                print("Column not found in inspect_df")
+                print("Allowable columns:")
+                print(f"{inspect_df.columns}")
+
             print(f"Number of records in waterfall chart: {len(inspect_df)}\n")
             print("Waterfall chart members:")
             print_df = inspect_df[["match_probability", "unique_id_l", "unique_id_r"]].reset_index()
