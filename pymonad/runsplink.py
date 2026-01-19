@@ -27,7 +27,10 @@ def splink_dedupe_job(
     do_cluster: bool = True,
     visualize: bool = False,
     unique_matching: bool = False,
-    unique_pairs_table: str = "unique_pairs"
+    unique_pairs_table: str = "unique_pairs",
+    em_max_runs: int = 3,
+    em_min_runs: int = 1,
+    em_stop_delta: float = 0.002
 
 
 ) -> Run[tuple[str, str]]:
@@ -53,6 +56,9 @@ def splink_dedupe_job(
                 visualize,
                 unique_matching,
                 unique_pairs_table,
+                em_max_runs,
+                em_min_runs,
+                em_stop_delta,
             ),
             self,
         ),

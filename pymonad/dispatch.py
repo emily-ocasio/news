@@ -72,6 +72,24 @@ class SplinkDedupeJob:
     visualize: bool = False
     unique_matching: bool = False
     unique_pairs_table: str = ""
+    em_max_runs: int = 3
+    em_min_runs: int = 1
+    em_stop_delta: float = 0.002
+
+
+def _extract_em_params(settings_dict: dict[str, Any]) -> dict[tuple[str, str], tuple[float | None, float | None]]:
+    """
+    Flatten comparison level m/u probabilities to a stable dict keyed by (comparison_name, level_name).
+    """
+    params: dict[tuple[str, str], tuple[float | None, float | None]] = {}
+    for comparison in settings_dict.get("comparisons", []):
+        comp_name = comparison.get("comparison_description", "")
+        for level in comparison.get("comparison_levels", []):
+            level_name = level.get("comparison_vector_value", level.get("label", ""))
+            m_prob = level.get("m_probability")
+            u_prob = level.get("u_probability")
+            params[(str(comp_name), str(level_name))] = (m_prob, u_prob)
+    return params
 
 
 @dataclass(frozen=True)
@@ -278,13 +296,55 @@ def _splink_dedupe(job: SplinkDedupeJob) -> tuple[str, str]:
         if job.train_first:
             # Prefer explicit training rule from intent, otherwise fall back
             # to the blocking rules used for prediction.
-            for _ in range(1):  # 1 iteration of EM
+            prev_params: dict[tuple[str, str], tuple[float | None, float | None]] | None = None
+            for run_idx in range(job.em_max_runs):
+                prev_block_params: dict[tuple[str, str], tuple[float | None, float | None]] | None = None
+                current_params: dict[tuple[str, str], tuple[float | None, float | None]] | None = None
                 for training_rule in job.training_blocking_rules or job.settings.get(
                     "blocking_rules_to_generate_predictions", []
                 ):
                     linker.training.estimate_parameters_using_expectation_maximisation(
                         blocking_rule=training_rule
                     )
+                    current_settings = linker.misc.save_model_to_json(out_path=None)
+                    current_params = _extract_em_params(current_settings)
+                    if prev_block_params is not None:
+                        deltas: list[float] = []
+                        for key, (m_now, u_now) in current_params.items():
+                            if key not in prev_block_params:
+                                continue
+                            m_prev, u_prev = prev_block_params[key]
+                            if m_now is not None and m_prev is not None:
+                                deltas.append(abs(m_now - m_prev))
+                            if u_now is not None and u_prev is not None:
+                                deltas.append(abs(u_now - u_prev))
+                        max_delta = max(deltas) if deltas else 1.0
+                        print(
+                            f"EM run {run_idx + 1}/{job.em_max_runs} block drift: "
+                            f"max_delta={max_delta:.6f} (block to block)"
+                        )
+                    prev_block_params = current_params
+                if current_params is None:
+                    break
+                if prev_params is not None:
+                    deltas: list[float] = []
+                    for key, (m_now, u_now) in current_params.items():
+                        if key not in prev_params:
+                            continue
+                        m_prev, u_prev = prev_params[key]
+                        if m_now is not None and m_prev is not None:
+                            deltas.append(abs(m_now - m_prev))
+                        if u_now is not None and u_prev is not None:
+                            deltas.append(abs(u_now - u_prev))
+                    max_delta = max(deltas) if deltas else 1.0
+                    print(
+                        f"EM run {run_idx + 1}/{job.em_max_runs}: "
+                        f"max_delta={max_delta:.6f} "
+                        f"(stop if < {job.em_stop_delta:.6f} after {job.em_min_runs} runs)"
+                    )
+                    if run_idx + 1 >= job.em_min_runs and max_delta < job.em_stop_delta:
+                        break
+                prev_params = current_params
         df_pairs = linker.inference.predict(
             threshold_match_probability= (job.predict_threshold if job.predict_threshold > 0 else None)
         )

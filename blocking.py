@@ -15,6 +15,7 @@ class BlockComp(StrEnum):
         "floor(l.midpoint_day/213) = floor(r.midpoint_day/213) "
         "AND floor((l.midpoint_day+106)/213) = floor((r.midpoint_day+106)/213)"
     )
+    YEAR_BLOCK_1 = "abs(l.year_block - r.year_block) <= 1"
     EXACT_YEAR = "l.year = r.year"
     EXACT_YEAR_MONTH = "l.year = r.year AND l.month = r.month"
     EXACT_YEAR_MONTH_DAY = "l.incident_date = r.incident_date"
@@ -62,6 +63,7 @@ class TrainBlockRule(StrEnum):
     """
     YEAR = _train_block_from_comps(BlockComp.EXACT_YEAR)
     YEAR_MONTH = _train_block_from_comps(BlockComp.EXACT_YEAR_MONTH)
+    YEAR_BLOCK_1 = _train_block_from_comps(BlockComp.YEAR_BLOCK_1)
     SAME_NAMES = _train_block_from_comps(BlockComp.SAME_NAMES)
     LOCATION = _train_block_from_comps(BlockComp.LONG_LAT_EXISTS,
                                        BlockComp.CLOSE_LONG_LAT)
@@ -151,6 +153,5 @@ SHR_DETERMINISTIC_BLOCKS = [
 ]
 
 SHR_TRAINING_BLOCKS = [
-    TrainBlockRule.MIDPOINT_7MONTH,
-    TrainBlockRule.AGE_DIFF2_SEX
+    TrainBlockRule.YEAR_BLOCK_1
 ]

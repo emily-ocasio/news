@@ -566,6 +566,7 @@ def match_article_to_shr_victims() -> Run[NextStep]:
                         )
                     ELSE NULL END AS midpoint_day,
                     CAST(substring(YearMonth, 1, 4) AS INTEGER) AS year,
+                    CAST(substring(YearMonth, 1, 4) AS INTEGER) AS year_block,
                     CAST(substring(YearMonth, 6, 2) AS INTEGER) AS month,
                     -- NULL AS lat,  -- SHR may not have precise coords; use NULL or default DC
                     -- NULL AS lon,
@@ -589,6 +590,7 @@ def match_article_to_shr_victims() -> Run[NextStep]:
                     -- lat_centroid AS lat,
                     -- lon_centroid AS lon,
                     extract(year from (DATE '1970-01-01' + to_days(entity_midpoint_day))) AS year,
+                    extract(year from (DATE '1970-01-01' + to_days(entity_midpoint_day))) AS year_block,
                     extract(month from (DATE '1970-01-01' + to_days(entity_midpoint_day))) AS month,
                     canonical_age AS victim_age,
                     canonical_victim_count AS victim_count,
