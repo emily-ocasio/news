@@ -2,6 +2,7 @@
 Intent, eliminator, and smart constructors for Splink.
 """
 
+from dataclasses import dataclass
 from typing import Any, Sequence, TypeVar, cast
 
 import altair as alt
@@ -12,7 +13,6 @@ from splink import Linker, DuckDBAPI, blocking_analysis
 from splink.internals.blocking_rule_creator import BlockingRuleCreator
 
 # pylint:disable=W0212
-from .dispatch import SplinkDedupeJob, SplinkVisualizeJob
 from .run import Run
 
 A = TypeVar("A")
@@ -21,6 +21,41 @@ _SPLINK_STATE: dict[str, Any] = {
     "conn": None,
     "linker": None,
 }
+
+
+@dataclass(frozen=True)
+class SplinkDedupeJob:
+    """
+    Splink deduplication intent
+    """
+    duckdb_path: str
+    input_table: str | list[str]
+    settings: dict
+    predict_threshold: float
+    cluster_threshold: float
+    pairs_out: str
+    clusters_out: str
+    deterministic_rules: Sequence[str | BlockingRuleCreator]
+    deterministic_recall: float
+    train_first: bool = False
+    training_blocking_rules: Sequence[str] | None = None
+    do_cluster: bool = True
+    visualize: bool = False
+    unique_matching: bool = False
+    unique_pairs_table: str = ""
+    em_max_runs: int = 3
+    em_min_runs: int = 1
+    em_stop_delta: float = 0.002
+
+
+@dataclass(frozen=True)
+class SplinkVisualizeJob:
+    """
+    Splink visualization intent
+    """
+    linker: Linker
+    left_midpoints: Sequence[int] | None = None
+    right_midpoints: Sequence[int] | None = None
 
 
 def get_latest_splink_linker() -> Any | None:
@@ -288,8 +323,8 @@ def _run_splink_visualize(job: SplinkVisualizeJob) -> None:
     alt.renderers.enable("browser")
     settings = linker.misc.save_model_to_json(out_path=None)
     unique_id_col = settings.get("unique_id_column_name", "unique_id")
-    left_id_col = f"{unique_id_col}_l"
-    right_id_col = f"{unique_id_col}_r"
+    left_id_col: str | None = f"{unique_id_col}_l"
+    right_id_col: str | None = f"{unique_id_col}_r"
 
     df_pairs = linker.inference.predict(threshold_match_probability=0)
     pd_pairs = df_pairs.as_pandas_dataframe()

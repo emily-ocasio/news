@@ -3,11 +3,10 @@ Defines functions with side effects and maps them to intents
 """
 
 from dataclasses import dataclass
-from typing import Callable, TypedDict, Sequence
+from typing import Callable, TypedDict
 import json
 import time
 import requests
-from splink.internals.blocking_rule_creator import BlockingRuleCreator
 
 from .string import String
 
@@ -46,39 +45,6 @@ class GetLine:
     prompt: InputPrompt
 
 
-@dataclass(frozen=True)
-class SplinkDedupeJob:
-    """
-    Splink deduplication intent
-    """
-    duckdb_path: str
-    input_table: str | list[str]
-    settings: dict
-    predict_threshold: float
-    cluster_threshold: float
-    pairs_out: str
-    clusters_out: str
-    deterministic_rules: Sequence[str | BlockingRuleCreator]
-    deterministic_recall: float
-    train_first: bool = False
-    training_blocking_rules: Sequence[str] | None = None
-    do_cluster: bool = True
-    visualize: bool = False
-    unique_matching: bool = False
-    unique_pairs_table: str = ""
-    em_max_runs: int = 3
-    em_min_runs: int = 1
-    em_stop_delta: float = 0.002
-
-
-@dataclass(frozen=True)
-class SplinkVisualizeJob:
-    """
-    Splink visualization intent
-    """
-    linker: object
-    left_midpoints: Sequence[int] | None = None
-    right_midpoints: Sequence[int] | None = None
 
 
 @dataclass(frozen=True)
