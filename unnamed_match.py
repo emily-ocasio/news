@@ -29,7 +29,6 @@ from pymonad import (
     Run,
     ask,
     pure,
-    set_,
     with_duckdb,
     splink_dedupe_job,
     sql_exec,
@@ -40,7 +39,6 @@ from pymonad import (
     Unit,
     unit
 )
-from appstate import latest_splink_linker
 
 
 def _create_orphans_view() -> Run[Unit]:
@@ -363,8 +361,7 @@ def _link_orphans_to_entities(env: Environment) -> Run[Unit]:
         do_cluster=False,
         visualize=False,
     ) >> (
-        lambda outnames: set_(latest_splink_linker, outnames[0])
-        ^ put_line(f"[D] Wrote {outnames[1]} in DuckDB.")
+        lambda outnames: put_line(f"[D] Wrote {outnames[1]} in DuckDB.")
     ) ^ pure(unit)
 
 

@@ -6,8 +6,9 @@ import sys
 from typing import cast
 from openai import OpenAI
 from pymonad import Run, run_reader, run_state, run_base_effect, run_except, \
-    run_sqlite, run_openai, Environment, Namespace, ErrorPayload, \
+    run_sqlite, run_openai, run_splink, Environment, Namespace, ErrorPayload, \
     REAL_DISPATCH, Left, Right, Either, Tuple, put_line, pure, GPTModel
+from pymonad import runsplink
 from article import ArticleAppError
 from runinitial import initialize_program
 from appstate import AppState
@@ -34,8 +35,8 @@ def main() -> None:
         "mar_key": MAR_API_KEY,
         "extras": {}
     }
-    prog = run_reader(env, run_state(AppState.mempty(), \
-            run_except(initialize_program())))
+    prog = run_reader(env, run_splink(run_state(AppState.mempty(), \
+            run_except(initialize_program()))))
     run_result = run_base_effect(REAL_DISPATCH, prog)
     prev_state = run_result.fst
     main_trampoline(env, prev_state)
@@ -58,7 +59,9 @@ def build_tick(env: Environment, state0: AppState)\
                 run_except(
                     run_sqlite(env['db_path'],
                         run_openai(env["openai_client"],
-                            run_state(state0, tick) # Run[Either e (AppState, NextAction)]
+                            run_splink(
+                                run_state(state0, tick) # Run[Either e (AppState, NextAction)]
+                            )
                         )
                     )
                 )
@@ -102,6 +105,7 @@ def exit_program() -> None:
     """
     print("Exiting program...")
     # Perform any necessary cleanup here
+    runsplink.close_splink_resources()
     sys.exit()
 
 if __name__ == "__main__":

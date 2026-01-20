@@ -442,7 +442,14 @@ def run_duckdb(
             if attach_sqlite_path:
                 con.execute("INSTALL sqlite_scanner;")
                 con.execute("LOAD sqlite_scanner;")
-                con.execute(f"ATTACH '{attach_sqlite_path}' AS sqldb (TYPE SQLITE);")
+                attached = {
+                    row[1]
+                    for row in con.execute("PRAGMA database_list;").fetchall()
+                }
+                if "sqldb" not in attached:
+                    con.execute(
+                        f"ATTACH '{attach_sqlite_path}' AS sqldb (TYPE SQLITE);"
+                    )
 
             # Optional: any one-off setup script (views, extensions, etc.)
             if setup_sql:

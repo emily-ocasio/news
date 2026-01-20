@@ -8,11 +8,10 @@ from pymonad import (
     get_line,
     put_line,
     pure,
-    view,
     splink_visualize_job,
     unit,
 )
-from appstate import latest_splink_linker
+from pymonad import runsplink
 from menuprompts import NextStep
 
 
@@ -73,4 +72,4 @@ def splink_charts() -> Run[NextStep]:
     """
     Entry point for controller to visualize the latest Splink run.
     """
-    return view(latest_splink_linker) >> _visualize_with_linker
+    return pure(runsplink.get_latest_splink_linker()) >> _visualize_with_linker
