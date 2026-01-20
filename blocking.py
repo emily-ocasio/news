@@ -116,10 +116,7 @@ NAMED_VICTIM_BLOCKS = [
 ]
 
 NAMED_VICTIM_BLOCKS_FOR_TRAINING = [
-    TrainBlockRule.SAME_NAMES,
-    TrainBlockRule.YEAR_MONTH,
-    TrainBlockRule.LOCATION,
-    TrainBlockRule.AGE_SEX
+    TrainBlockRule.YEAR_BLOCK_1
 ]
 
 NAMED_VICTIM_DETERMINISTIC_BLOCKS = [

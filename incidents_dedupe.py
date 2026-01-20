@@ -51,6 +51,7 @@ def _create_victims_named_table() -> Run[Unit]:
         CREATE OR REPLACE TABLE victims_named AS
         SELECT
           vce.*,
+          vce.year AS year_block,
           CAST(vce.article_id AS varchar) AS exclusion_id
         FROM victims_cached_enh vce
         WHERE vce.victim_forename_norm IS NOT NULL
