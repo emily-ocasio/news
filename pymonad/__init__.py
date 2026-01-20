@@ -85,7 +85,7 @@ from .runopenai import (
     resolve_prompt_template,
 )
 from .semigroup import Semigroup
-from .runsplink import splink_dedupe_job
+from .runsplink import splink_dedupe_job, splink_visualize_job
 from .string import Char, String, from_char_array, from_string
 from .traverse import array_sequence, array_traverse
 from .tuple import Tuple, Threeple

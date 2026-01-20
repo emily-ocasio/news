@@ -10,6 +10,7 @@ from menuprompts import MenuChoice, MenuPrompts, input_from_menu, NextStep
 
 from incidents import gpt_incidents
 from incidents_dedupe import dedupe_incidents
+from splink_charts import splink_charts
 from unnamed_match import match_unnamed_victims
 from gpt_filtering import second_filter
 from first_filter import first_filter
@@ -38,6 +39,7 @@ class MainChoice(Enum):
     INCIDENTS = MenuChoice("I")
     GEOCODE = MenuChoice("M")
     DEDUP = MenuChoice("D")
+    CHARTS = MenuChoice("C")
     UNNAMED = MenuChoice("U")
     LINK = MenuChoice("L")
     SPECIAL = MenuChoice("P")
@@ -88,6 +90,8 @@ def dispatch_from_main_menu(choice: MainChoice) -> Run[NextStep]:
             return geocode_incidents()
         case MainChoice.DEDUP:
             return dedupe_incidents()
+        case MainChoice.CHARTS:
+            return splink_charts()
         case MainChoice.UNNAMED:
             return match_unnamed_victims()
         case MainChoice.LINK:

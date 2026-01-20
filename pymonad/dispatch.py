@@ -78,6 +78,16 @@ class SplinkDedupeJob:
     em_stop_delta: float = 0.002
 
 
+@dataclass(frozen=True)
+class SplinkVisualizeJob:
+    """
+    Splink visualization intent
+    """
+    linker: Linker
+    left_midpoints: Sequence[int] | None = None
+    right_midpoints: Sequence[int] | None = None
+
+
 def _extract_em_params(
         settings_dict: dict[str, Any]
         ) -> dict[tuple[str, str], tuple[float | None, float | None]]:
@@ -283,243 +293,266 @@ def _getline(x: GetLine) -> String:
 
 
 @intentdef(SplinkDedupeJob)
-def _splink_dedupe(job: SplinkDedupeJob) -> tuple[str, str]:
-    with duckdb.connect(job.duckdb_path) as con:
-        db_api = DuckDBAPI(connection=con)
-        linker = Linker(
-            job.input_table,
-            job.settings | {"retain_intermediate_calculation_columns": True, "max_iterations": 100},
+def _splink_dedupe(job: SplinkDedupeJob) -> tuple[Linker, str, str]:
+    # Keep connection open so the Linker remains usable for later visualization.
+    con = duckdb.connect(job.duckdb_path)
+    db_api = DuckDBAPI(connection=con)
+    linker = Linker(
+        job.input_table,
+        job.settings | {"retain_intermediate_calculation_columns": True, "max_iterations": 100},
+        db_api=db_api,
+    )
+    prediction_rules = job.settings.get("blocking_rules_to_generate_predictions", [])
+    if prediction_rules:
+        tables = job.input_table if isinstance(job.input_table, list) else [job.input_table]
+        counts_df = blocking_analysis.cumulative_comparisons_to_be_scored_from_blocking_rules_data(
+            table_or_tables=tables,
+            blocking_rules=prediction_rules,
+            link_type=job.settings.get("link_type", "dedupe_only"),
             db_api=db_api,
+            unique_id_column_name=job.settings.get("unique_id_column_name", "unique_id"),
+            source_dataset_column_name=job.settings.get("source_dataset_column_name"),
         )
-        prediction_rules = job.settings.get("blocking_rules_to_generate_predictions", [])
-        if prediction_rules:
-            tables = job.input_table if isinstance(job.input_table, list) else [job.input_table]
-            counts_df = blocking_analysis.cumulative_comparisons_to_be_scored_from_blocking_rules_data(
-                table_or_tables=tables,
-                blocking_rules=prediction_rules,
-                link_type=job.settings.get("link_type", "dedupe_only"),
-                db_api=db_api,
-                unique_id_column_name=job.settings.get("unique_id_column_name", "unique_id"),
-                source_dataset_column_name=job.settings.get("source_dataset_column_name"),
-            )
-            total_comparisons = int(counts_df["row_count"].sum())
-            print(f"Total comparisons to be scored (pre-threshold): {total_comparisons}")
+        total_comparisons = int(counts_df["row_count"].sum())
+        print(f"Total comparisons to be scored (pre-threshold): {total_comparisons}")
 
-        linker.training.estimate_probability_two_random_records_match(
-            list(job.deterministic_rules), recall=job.deterministic_recall
-        )
-        linker.training.estimate_u_using_random_sampling(1e6)
+    linker.training.estimate_probability_two_random_records_match(
+        list(job.deterministic_rules), recall=job.deterministic_recall
+    )
+    linker.training.estimate_u_using_random_sampling(1e6)
 
-        if job.train_first:
-            # Prefer explicit training rule from intent, otherwise fall back
-            # to the blocking rules used for prediction.
-            prev_params: dict[tuple[str, str], tuple[float | None, float | None]] | None = None
-            for run_idx in range(job.em_max_runs):
-                prev_block_params: dict[tuple[str, str], tuple[float | None, float | None]] | None = None
-                current_params: dict[tuple[str, str], tuple[float | None, float | None]] | None = None
-                for training_rule in job.training_blocking_rules or job.settings.get(
-                    "blocking_rules_to_generate_predictions", []
-                ):
-                    linker.training.estimate_parameters_using_expectation_maximisation(
-                        blocking_rule=training_rule
-                    )
-                    current_settings = linker.misc.save_model_to_json(out_path=None)
-                    current_params = _extract_em_params(current_settings)
-                    deltas: list[float] = []
-                    if prev_block_params is not None:
-                        for key, (m_now, u_now) in current_params.items():
-                            if key not in prev_block_params:
-                                continue
-                            m_prev, u_prev = prev_block_params[key]
-                            if m_now is not None and m_prev is not None:
-                                deltas.append(abs(m_now - m_prev))
-                            if u_now is not None and u_prev is not None:
-                                deltas.append(abs(u_now - u_prev))
-                        max_delta = max(deltas) if deltas else 1.0
-                        print(
-                            f"EM run {run_idx + 1}/{job.em_max_runs} block drift: "
-                            f"max_delta={max_delta:.6f} (block to block)"
-                        )
-                    prev_block_params = current_params
-                if current_params is None:
-                    break
-                if prev_params is not None:
+    if job.train_first:
+        # Prefer explicit training rule from intent, otherwise fall back
+        # to the blocking rules used for prediction.
+        prev_params: dict[tuple[str, str], tuple[float | None, float | None]] | None = None
+        for run_idx in range(job.em_max_runs):
+            prev_block_params: dict[tuple[str, str], tuple[float | None, float | None]] | None = None
+            current_params: dict[tuple[str, str], tuple[float | None, float | None]] | None = None
+            for training_rule in job.training_blocking_rules or job.settings.get(
+                "blocking_rules_to_generate_predictions", []
+            ):
+                linker.training.estimate_parameters_using_expectation_maximisation(
+                    blocking_rule=training_rule
+                )
+                current_settings = linker.misc.save_model_to_json(out_path=None)
+                current_params = _extract_em_params(current_settings)
+                deltas: list[float] = []
+                if prev_block_params is not None:
                     for key, (m_now, u_now) in current_params.items():
-                        if key not in prev_params:
+                        if key not in prev_block_params:
                             continue
-                        m_prev, u_prev = prev_params[key]
+                        m_prev, u_prev = prev_block_params[key]
                         if m_now is not None and m_prev is not None:
                             deltas.append(abs(m_now - m_prev))
                         if u_now is not None and u_prev is not None:
                             deltas.append(abs(u_now - u_prev))
                     max_delta = max(deltas) if deltas else 1.0
                     print(
-                        f"EM run {run_idx + 1}/{job.em_max_runs}: "
-                        f"max_delta={max_delta:.6f} "
-                        f"(stop if < {job.em_stop_delta:.6f} after {job.em_min_runs} runs)"
+                        f"EM run {run_idx + 1}/{job.em_max_runs} block drift: "
+                        f"max_delta={max_delta:.6f} (block to block)"
                     )
-                    if run_idx + 1 >= job.em_min_runs and max_delta < job.em_stop_delta:
-                        break
-                prev_params = current_params
-        df_pairs = linker.inference.predict(
-            threshold_match_probability= job.predict_threshold
-        )
-        if job.visualize:
-            alt.renderers.enable("browser")
-            pd_pairs = df_pairs.as_pandas_dataframe()
-            print(f"Total predictions within threshold: {len(pd_pairs)}")
-            inspect_df = pd_pairs
-            try:
-                inspect_df = inspect_df[(
-                    # ((inspect_df["midpoint_day_l"] == 2864)
-                    #     | (inspect_df["midpoint_day_l"] == 2864))
-                    #     & (inspect_df["midpoint_day_r"] > 0)
-                    (inspect_df["victim_count_l"] == 2)
-                    & (inspect_df["victim_count_r"] == 2)
-                    & (inspect_df["midpoint_day_l"] == 3267)
-                    # & (inspect_df["month_r"] == 9)
-                    )
-                ]
-            except KeyError as ke:
-                print(f"Exception: {ke}")
-                print("Column not found in inspect_df")
-                print("Allowable columns:")
-                print(f"{inspect_df.columns}")
-
-            print(f"Number of records in waterfall chart: {len(inspect_df)}\n")
-            print("Waterfall chart members:")
-            print_df = inspect_df[["match_probability", "unique_id_l", "unique_id_r"]].reset_index()
-            print(print_df)
-            inspect_dict = cast(list[dict[str, Any]], inspect_df.to_dict(orient="records"))
-            waterfall = linker.visualisations.waterfall_chart(inspect_dict)
-            waterfall.show()  # type: ignore
-
-
-        # Persist outputs into stable tables in the same DB
-
-        con.execute(
-            f"CREATE OR REPLACE TABLE {job.pairs_out} AS "
-            f"SELECT * FROM {df_pairs.physical_name}"
-        )
-        if job.settings.get("link_type", "dedupe") == "link_only":
-            con.execute(f"""
-                CREATE OR REPLACE TABLE {job.pairs_out}_top1 AS
-                WITH ranked AS (
-                SELECT
-                    *,
-                    ROW_NUMBER() OVER (
-                    PARTITION BY unique_id_r
-                    ORDER BY
-                        match_probability DESC,
-                        -- stable tie-breakers so results are deterministic:
-                        COALESCE(match_weight, 0) DESC,
-                        CAST(unique_id_l AS VARCHAR)
-                    ) AS rn
-                FROM {job.pairs_out}
+                prev_block_params = current_params
+            if current_params is None:
+                break
+            if prev_params is not None:
+                for key, (m_now, u_now) in current_params.items():
+                    if key not in prev_params:
+                        continue
+                    m_prev, u_prev = prev_params[key]
+                    if m_now is not None and m_prev is not None:
+                        deltas.append(abs(m_now - m_prev))
+                    if u_now is not None and u_prev is not None:
+                        deltas.append(abs(u_now - u_prev))
+                max_delta = max(deltas) if deltas else 1.0
+                print(
+                    f"EM run {run_idx + 1}/{job.em_max_runs}: "
+                    f"max_delta={max_delta:.6f} "
+                    f"(stop if < {job.em_stop_delta:.6f} after {job.em_min_runs} runs)"
                 )
-                SELECT * EXCLUDE (rn)
-                FROM ranked
-                WHERE rn = 1;
+                if run_idx + 1 >= job.em_min_runs and max_delta < job.em_stop_delta:
+                    break
+            prev_params = current_params
+    df_pairs = linker.inference.predict(
+        threshold_match_probability=job.predict_threshold
+    )
+
+    # Persist outputs into stable tables in the same DB
+
+    con.execute(
+        f"CREATE OR REPLACE TABLE {job.pairs_out} AS "
+        f"SELECT * FROM {df_pairs.physical_name}"
+    )
+    if job.settings.get("link_type", "dedupe") == "link_only":
+        con.execute(f"""
+            CREATE OR REPLACE TABLE {job.pairs_out}_top1 AS
+            WITH ranked AS (
+            SELECT
+                *,
+                ROW_NUMBER() OVER (
+                PARTITION BY unique_id_r
+                ORDER BY
+                    match_probability DESC,
+                    -- stable tie-breakers so results are deterministic:
+                    COALESCE(match_weight, 0) DESC,
+                    CAST(unique_id_l AS VARCHAR)
+                ) AS rn
+            FROM {job.pairs_out}
+            )
+            SELECT * EXCLUDE (rn)
+            FROM ranked
+            WHERE rn = 1;
+            """)
+    if job.unique_matching and job.unique_pairs_table:
+        # Query all pairs with match_probability > 0
+        pairs = con.execute(
+            f"""
+            SELECT unique_id_l, unique_id_r, match_probability 
+            FROM {job.pairs_out} WHERE match_probability > 0
+            """
+            ).fetchall()
+        # Create bipartite graph
+        G: nx.Graph = nx.Graph() #pylint: disable=C0103
+        # Add edges with weights
+        for row in pairs:
+            G.add_edge(
+                f"l_{row[0]}",
+                f"r_{row[1]}",
+                weight=row[2]
+            )
+        # Compute maximum weight matching
+        matching = nx.max_weight_matching(G)
+        # Extract matched pairs
+        matched_pairs = []
+        seen = set()
+        for u, v in matching:
+            if u not in seen and v not in seen:
+                weight = G[u][v]['weight']
+                if u.startswith("r_"):
+                    u, v = v, u
+                matched_pairs.append((u[2:], v[2:], weight))
+                seen.add(u)
+                seen.add(v)
+        # Persist to unique_pairs_table
+        if matched_pairs:
+            values_str = ', '.join(f"({repr(u)}, {repr(v)}, {w})" for u, v, w in matched_pairs)
+            con.execute(f"CREATE OR REPLACE TABLE {job.unique_pairs_table} AS SELECT * FROM (VALUES {values_str}) AS t(unique_id_l, unique_id_r, match_probability)")
+        else:
+            # Create empty table
+            con.execute(f"""--sql
+                CREATE OR REPLACE TABLE {job.unique_pairs_table}
+                (
+                    unique_id_l VARCHAR, 
+                    unique_id_r VARCHAR, 
+                    match_probability DOUBLE
+                )
                 """)
-        if job.unique_matching and job.unique_pairs_table:
-            # Query all pairs with match_probability > 0
-            pairs = con.execute(
-                f"""
-                SELECT unique_id_l, unique_id_r, match_probability 
-                FROM {job.pairs_out} WHERE match_probability > 0
-                """
-                ).fetchall()
-            # Create bipartite graph
-            G: nx.Graph = nx.Graph() #pylint: disable=C0103
-            # Add edges with weights
-            for row in pairs:
-                G.add_edge(
-                    f"l_{row[0]}",
-                    f"r_{row[1]}",
-                    weight=row[2]
-                )
-            # Compute maximum weight matching
-            matching = nx.max_weight_matching(G)
-            # Extract matched pairs
-            matched_pairs = []
-            seen = set()
-            for u, v in matching:
-                if u not in seen and v not in seen:
-                    weight = G[u][v]['weight']
-                    if u.startswith("r_"):
-                        u, v = v, u
-                    matched_pairs.append((u[2:], v[2:], weight))
-                    seen.add(u)
-                    seen.add(v)
-            # Persist to unique_pairs_table
-            if matched_pairs:
-                values_str = ', '.join(f"({repr(u)}, {repr(v)}, {w})" for u, v, w in matched_pairs)
-                con.execute(f"CREATE OR REPLACE TABLE {job.unique_pairs_table} AS SELECT * FROM (VALUES {values_str}) AS t(unique_id_l, unique_id_r, match_probability)")
-            else:
-                # Create empty table
-                con.execute(f"""--sql
-                    CREATE OR REPLACE TABLE {job.unique_pairs_table}
-                    (
-                        unique_id_l VARCHAR, 
-                        unique_id_r VARCHAR, 
-                        match_probability DOUBLE
-                    )
-                    """)
-        if job.do_cluster:
-            if not isinstance(job.input_table, str):
-                raise RuntimeError(
-                    "Constrained clustering currently requires a single input table name "
-                    f"(got {type(job.input_table).__name__})."
-                )
-
-            unique_id_col = cast(str, job.settings.get("unique_id_column_name", "unique_id"))
-            clusters_df = _constrained_greedy_clusters(
-                con=con,
-                input_table=job.input_table,
-                unique_id_column_name=unique_id_col,
-                exclusion_id_column_name="exclusion_id",
-                pairs_table=job.pairs_out,
-                match_probability_threshold=job.cluster_threshold,
-            )
-            con.register("_constrained_clusters_df", clusters_df)
-            con.execute(
-                f"CREATE OR REPLACE TABLE {job.clusters_out} AS "
-                "SELECT * FROM _constrained_clusters_df"
+    if job.do_cluster:
+        if not isinstance(job.input_table, str):
+            raise RuntimeError(
+                "Constrained clustering currently requires a single input table name "
+                f"(got {type(job.input_table).__name__})."
             )
 
-            counts_table = _cluster_counts_table_name(job.clusters_out)
-            # Some downstream code creates `{x}_cluster_counts` as a VIEW; ensure
-            # we don't fail if the object exists with a different type.
-            try:
-                con.execute(f"DROP VIEW IF EXISTS {counts_table}")
-            except duckdb.Error:
-                pass
-            try:
-                con.execute(f"DROP TABLE IF EXISTS {counts_table}")
-            except duckdb.Error:
-                pass
-            con.execute(
-                f"""
-                CREATE OR REPLACE TABLE {counts_table} AS
-                SELECT cluster_id, COUNT(*)::BIGINT AS member_count
-                FROM {job.clusters_out}
-                GROUP BY cluster_id
-                """
-            )
-        if job.visualize:
-            alt.renderers.enable("browser")
-            chart = linker.visualisations.match_weights_chart()
-            chart.show()  # type: ignore
-            mw = chart["data"].to_dict()["values"]
-            mw_df = DataFrame(mw)
-            linker.visualisations.comparison_viewer_dashboard(
-                df_pairs,
-                out_path="comparison_viewer.html",
-                overwrite=True,
-                num_example_rows=20)
-            con.register("mw_df", mw_df)
-            con.execute("CREATE OR REPLACE TABLE match_weights AS SELECT * FROM mw_df")
-    return (job.unique_pairs_table if job.unique_matching and job.unique_pairs_table else job.pairs_out, job.clusters_out if job.do_cluster else "")
+        unique_id_col = cast(str, job.settings.get("unique_id_column_name", "unique_id"))
+        clusters_df = _constrained_greedy_clusters(
+            con=con,
+            input_table=job.input_table,
+            unique_id_column_name=unique_id_col,
+            exclusion_id_column_name="exclusion_id",
+            pairs_table=job.pairs_out,
+            match_probability_threshold=job.cluster_threshold,
+        )
+        con.register("_constrained_clusters_df", clusters_df)
+        con.execute(
+            f"CREATE OR REPLACE TABLE {job.clusters_out} AS "
+            "SELECT * FROM _constrained_clusters_df"
+        )
+
+        counts_table = _cluster_counts_table_name(job.clusters_out)
+        # Some downstream code creates `{x}_cluster_counts` as a VIEW; ensure
+        # we don't fail if the object exists with a different type.
+        try:
+            con.execute(f"DROP VIEW IF EXISTS {counts_table}")
+        except duckdb.Error:
+            pass
+        try:
+            con.execute(f"DROP TABLE IF EXISTS {counts_table}")
+        except duckdb.Error:
+            pass
+        con.execute(
+            f"""
+            CREATE OR REPLACE TABLE {counts_table} AS
+            SELECT cluster_id, COUNT(*)::BIGINT AS member_count
+            FROM {job.clusters_out}
+            GROUP BY cluster_id
+            """
+        )
+    return (
+        linker,
+        job.unique_pairs_table if job.unique_matching and job.unique_pairs_table else job.pairs_out,
+        job.clusters_out if job.do_cluster else ""
+    )
+
+
+@intentdef(SplinkVisualizeJob)
+def _splink_visualize(job: SplinkVisualizeJob) -> None:
+    linker = job.linker
+    alt.renderers.enable("browser")
+    settings = linker.misc.save_model_to_json(out_path=None)
+    unique_id_col = settings.get("unique_id_column_name", "unique_id")
+    left_id_col = f"{unique_id_col}_l"
+    right_id_col = f"{unique_id_col}_r"
+
+    df_pairs = linker.inference.predict(threshold_match_probability=0)
+    pd_pairs = df_pairs.as_pandas_dataframe()
+    inspect_df = pd_pairs
+
+    if job.left_midpoints:
+        if "midpoint_day_l" in inspect_df.columns:
+            inspect_df = inspect_df[inspect_df["midpoint_day_l"].isin(job.left_midpoints)]
+        else:
+            print("midpoint_day_l column not found; skipping left midpoint filter.")
+    if job.right_midpoints:
+        if "midpoint_day_r" in inspect_df.columns:
+            inspect_df = inspect_df[inspect_df["midpoint_day_r"].isin(job.right_midpoints)]
+        else:
+            print("midpoint_day_r column not found; skipping right midpoint filter.")
+
+    print(f"Total predictions within threshold: {len(pd_pairs)}")
+    print(f"Number of records in waterfall chart: {len(inspect_df)}\n")
+    print("Waterfall chart members:")
+
+    if left_id_col not in inspect_df.columns or right_id_col not in inspect_df.columns:
+        if "unique_id_l" in inspect_df.columns and "unique_id_r" in inspect_df.columns:
+            left_id_col, right_id_col = "unique_id_l", "unique_id_r"
+        else:
+            left_id_col, right_id_col = None, None
+
+    display_cols = [
+        col for col in [
+            "match_probability",
+            left_id_col,
+            right_id_col,
+            "midpoint_day_l",
+            "midpoint_day_r",
+        ]
+        if col and col in inspect_df.columns
+    ]
+    if display_cols:
+        print_df = inspect_df[display_cols].reset_index()
+        print(print_df)
+    else:
+        print(inspect_df.reset_index())
+
+    if len(inspect_df) > 0:
+        inspect_dict = cast(list[dict[str, Any]], inspect_df.to_dict(orient="records"))
+        waterfall = linker.visualisations.waterfall_chart(inspect_dict)
+        waterfall.show()  # type: ignore
+    else:
+        print("No records match the requested midpoint filters; skipping waterfall chart.")
+
+    chart = linker.visualisations.match_weights_chart()
+    chart.show()  # type: ignore
 
 
 @intentdef(MarGeocode)

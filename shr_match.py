@@ -9,12 +9,14 @@ from pymonad import (
     ask,
     put_line,
     pure,
+    set_,
     splink_dedupe_job,
     sql_exec,
     sql_export,
     with_duckdb,
     Unit, unit,
 )
+from appstate import latest_splink_linker
 from menuprompts import NextStep
 from comparison import (
     DATE_COMP_SHR,
@@ -622,10 +624,11 @@ def match_article_to_shr_victims() -> Run[NextStep]:
             training_blocking_rules=SHR_TRAINING_BLOCKS,
             unique_matching=True,
             unique_pairs_table="shr_max_weight_matches",
-            visualize=True
+            visualize=False
         ) >>
-        (lambda pairs_clusters: put_line(
-            f"Linkage complete. Pairs table: {pairs_clusters[0]}, Clusters table: {pairs_clusters[1]}"
+        (lambda pairs_clusters: set_(latest_splink_linker, pairs_clusters[0])
+        ^ put_line(
+            f"Linkage complete. Pairs table: {pairs_clusters[1]}, Clusters table: {pairs_clusters[2]}"
         ) ^
         sql_exec(
             SQL(
@@ -635,7 +638,7 @@ def match_article_to_shr_victims() -> Run[NextStep]:
                     unique_id_l AS entity_uid,
                     unique_id_r AS shr_id,
                     match_probability
-                FROM {pairs_clusters[0]}
+                FROM {pairs_clusters[1]}
                 """
             )
         ) ^

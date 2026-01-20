@@ -39,6 +39,7 @@ initial_prompts = (
     "Build [I]ncident views (DuckDB)",
     "Run [M]AR geocoding (addresses)",
     "Run [D]edup incidents (Splink)",
+    "Splink [C]harts (latest dedupe/linkage)",
     "Match [U]nnamed victims (Splink)",
     "[L]ink to SHR victims (Splink)",
     "Add special articles to entit[Y]",

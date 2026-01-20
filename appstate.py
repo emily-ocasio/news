@@ -2,7 +2,7 @@
 Defines monadic state at the top level.
 """
 from dataclasses import dataclass, fields
-from typing import Self
+from typing import Any, Self
 
 from pymonad import Lens, lens, Monoid, String
 
@@ -14,6 +14,7 @@ class AppState(Monoid):
     user_name: String = String.mempty()
     selected_option: String = String.mempty()
     prompt_key: String = String.mempty()
+    latest_splink_linker: Any | None = None
 
     @classmethod
     def mempty(cls) -> "AppState":
@@ -41,3 +42,4 @@ class AppState(Monoid):
 user_name: Lens[AppState, str] = lens("user_name")
 selected_option: Lens[AppState, str] = lens("selected_option")
 prompt_key: Lens[AppState, str] = lens("prompt_key")
+latest_splink_linker: Lens[AppState, Any | None] = lens("latest_splink_linker")

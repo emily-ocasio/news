@@ -3,12 +3,12 @@ Intent and smart constructors for Splink
 Uses run_base_effect eliminator with REAL_DISPATCH
 """
 
-from typing import Sequence
+from typing import Sequence, Any
 
 from splink.internals.blocking_rule_creator import BlockingRuleCreator
 
 # pylint:disable=W0212
-from .dispatch import SplinkDedupeJob
+from .dispatch import SplinkDedupeJob, SplinkVisualizeJob
 from .run import Run
 
 
@@ -33,10 +33,10 @@ def splink_dedupe_job(
     em_stop_delta: float = 0.002
 
 
-) -> Run[tuple[str, str]]:
+) -> Run[tuple[Any, str, str]]:
     """
     Smart constructor for SplinkDedupeJob intent.
-    Returns Run[(pairs_table_name, clusters_table_name)]
+    Returns Run[(linker, pairs_table_name, clusters_table_name)]
     """
     return Run(
         lambda self: self._perform(
@@ -59,6 +59,27 @@ def splink_dedupe_job(
                 em_max_runs,
                 em_min_runs,
                 em_stop_delta,
+            ),
+            self,
+        ),
+        lambda i, c: c._perform(i, c),
+    )
+
+
+def splink_visualize_job(
+    linker: Any,
+    left_midpoints: Sequence[int] | None = None,
+    right_midpoints: Sequence[int] | None = None,
+) -> Run[None]:
+    """
+    Smart constructor for SplinkVisualizeJob intent.
+    """
+    return Run(
+        lambda self: self._perform(
+            SplinkVisualizeJob(
+                linker=linker,
+                left_midpoints=list(left_midpoints) if left_midpoints else None,
+                right_midpoints=list(right_midpoints) if right_midpoints else None,
             ),
             self,
         ),

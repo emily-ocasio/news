@@ -30,6 +30,7 @@ from pymonad import (
     ask,
     put_line,
     pure,
+    set_,
     splink_dedupe_job,
     sql_exec,
     sql_export,
@@ -37,6 +38,7 @@ from pymonad import (
     unit,
     with_duckdb,
 )
+from appstate import latest_splink_linker
 
 
 def _create_victims_named_table() -> Run[Unit]:
@@ -83,12 +85,9 @@ def _dedupe_named_victims(env: Environment) -> Run[Unit]:
         deterministic_recall=0.8,
         visualize=False
     ) >> (
-        lambda outnames: put_line(
-            f"[D] Wrote {outnames[0]} and {outnames[1]} in DuckDB."
-        )
-    ) ^ pure(
-        unit
-    )
+        lambda outnames: set_(latest_splink_linker, outnames[0])
+        ^ put_line(f"[D] Wrote {outnames[1]} and {outnames[2]} in DuckDB.")
+    ) ^ pure(unit)
 
 
 def _create_cluster_tables() -> Run[Unit]:
