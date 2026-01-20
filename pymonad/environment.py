@@ -2,6 +2,7 @@
 Dataclasses and related functions for the Reader environment.
 """
 from collections.abc import Callable, Mapping
+from enum import Enum
 from typing import Any, TypedDict, ReadOnly
 
 from st_initialize import SentenceTransformerModel
@@ -52,14 +53,22 @@ class Environment(TypedDict):
     """
     prompt_ns: ReadOnly[Namespace]
     prompts_by_ns: ReadOnly[NamedPrompts]
-    db_path: ReadOnly[str]
-    duckdb_path: ReadOnly[str]
+    connections: ReadOnly[Mapping["DbBackend", Any]]
+    current_backend: ReadOnly["DbBackend"]
     openai_client: ReadOnly[Callable]
     openai_default_model: ReadOnly[GPTModel]
     openai_models: ReadOnly[dict[EnvKey, GPTModel]]
     fasttext_model: ReadOnly[SentenceTransformerModel]
     mar_key: ReadOnly[str]
     extras: ReadOnly[Mapping[EnvKey, Any]]
+
+
+class DbBackend(Enum):
+    """
+    Supported database backends.
+    """
+    SQLITE = "sqlite"
+    DUCKDB = "duckdb"
 
 def all_prompts(env: Environment, ns: Namespace | None = None) -> AllPrompts:
     """

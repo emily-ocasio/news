@@ -14,6 +14,7 @@ from .environment import (
     Prompt,
     AllPrompts,
     to_prompts,
+    DbBackend,
 )
 from .functor import Functor, map  # pylint: disable=redefined-builtin
 from .lens import Lens, view, set_, over, modify, lens
@@ -65,12 +66,11 @@ from .openai import (
     gpt_usage_reasoning_from_rows,
 )
 from .runsql import (
-    run_sqlite,
+    run_sql,
     SQL,
     SQLParams,
     sql_query,
     sql_exec,
-    run_duckdb,
     sql_script,
     with_duckdb,
     sql_export,

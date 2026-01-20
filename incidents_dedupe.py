@@ -71,7 +71,6 @@ def _dedupe_named_victims(env: Environment) -> Run[Unit]:
     Run initial pass of Splink deduplication on the victims_named table.
     """
     return splink_dedupe_job(
-        duckdb_path=env["duckdb_path"],
         input_table="victims_named",
         settings=_settings_for_victim_dedupe(),
         predict_threshold=0.1,

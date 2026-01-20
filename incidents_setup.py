@@ -7,7 +7,7 @@ from pymonad import (
     pure,
     put_line,
     ask,
-    run_duckdb,
+    with_duckdb,
     sql_script,
     sql_query,
     sql_exec,
@@ -409,17 +409,16 @@ LIMIT 10;
 def build_incident_views() -> Run[NextStep]:
     """
     Steps:
-      1) In SQLite (already under run_sqlite): rebuild filtered subset table.
+      1) In SQLite (already under run_sql): rebuild filtered subset table.
       2) In DuckDB: attach SQLite, rebuild view from subset, materialize cache.
       3) Print counts and preview. Return to menu.
     Requires env:
-      env["db_path"]      -> SQLite path
-      env["duckdb_path"]  -> DuckDB persistent DB path
+      Uses existing SQLite + DuckDB connections from the environment.
     """
     return ask() >> (
         lambda env:
         # --- 1) Rebuild subset in SQLite
-        # (this runs in the existing run_sqlite context) ---
+        # (this runs in the existing run_sql context) ---
         # For now, just articles labeled 'M' in CLASS_WP
         # which represents the articles from Washington Post
         # in future, we will include other newspapers
@@ -447,8 +446,7 @@ def build_incident_views() -> Run[NextStep]:
         ^
         # --- 2) Build DuckDB view + materialized cache from the subset ---
         put_line("[I] Building DuckDB view and materialized cache…")
-        ^ run_duckdb(
-            env.get("duckdb_path", "news.duckdb"),
+        ^ with_duckdb(
             (
                 sql_script(
                     SQL(
@@ -509,7 +507,6 @@ def build_incident_views() -> Run[NextStep]:
                     )
                 )
             ),
-            attach_sqlite_path=env["db_path"],
         )
         ^ put_line("[I] Done.")
         ^ pure(NextStep.CONTINUE)

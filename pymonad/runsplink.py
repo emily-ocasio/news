@@ -13,14 +13,12 @@ from splink import Linker, DuckDBAPI, blocking_analysis
 from splink.internals.blocking_rule_creator import BlockingRuleCreator
 
 # pylint:disable=W0212
-from .run import Run
+from .environment import DbBackend, Environment
+from .run import Run, ask, throw, ErrorPayload
 
 A = TypeVar("A")
 
-_SPLINK_STATE: dict[str, Any] = {
-    "conn": None,
-    "linker": None,
-}
+_SPLINK_LINKER: Linker | None = None
 
 
 @dataclass(frozen=True)
@@ -28,7 +26,6 @@ class SplinkDedupeJob:
     """
     Splink deduplication intent
     """
-    duckdb_path: str
     input_table: str | list[str]
     settings: dict
     predict_threshold: float
@@ -58,32 +55,19 @@ class SplinkVisualizeJob:
     right_midpoints: Sequence[int] | None = None
 
 
-def get_latest_splink_linker() -> Any | None:
+def get_latest_splink_linker() -> Linker | None:
     """
     Return the latest Linker produced by Splink jobs in this process.
     """
-    return _SPLINK_STATE.get("linker")
+    return _SPLINK_LINKER
 
 
 def close_splink_resources() -> None:
     """
     Close any cached Splink resources for this process.
     """
-    conn = _SPLINK_STATE.get("conn")
-    if conn is not None:
-        try:
-            conn.close()
-        finally:
-            _SPLINK_STATE["conn"] = None
-            _SPLINK_STATE["linker"] = None
-
-
-def _ensure_duckdb_connection(duckdb_path: str) -> duckdb.DuckDBPyConnection:
-    conn = _SPLINK_STATE.get("conn")
-    if conn is None:
-        conn = duckdb.connect(duckdb_path)
-        _SPLINK_STATE["conn"] = conn
-    return conn
+    global _SPLINK_LINKER
+    _SPLINK_LINKER = None
 
 
 def _extract_em_params(
@@ -244,7 +228,6 @@ def _constrained_greedy_clusters(
 
 
 def splink_dedupe_job(
-    duckdb_path: str,
     input_table: str | list[str],
     settings: dict,
     predict_threshold: float = 0.05,
@@ -272,7 +255,6 @@ def splink_dedupe_job(
     return Run(
         lambda self: self._perform(
             SplinkDedupeJob(
-                duckdb_path,
                 input_table,
                 settings,
                 predict_threshold,
@@ -589,9 +571,15 @@ def run_splink(prog: Run[A]) -> Run[A]:
         def perform(intent: Any, current: "Run[Any]") -> Any:
             match intent:
                 case SplinkDedupeJob():
-                    con = _ensure_duckdb_connection(intent.duckdb_path)
+                    env = cast(Environment, ask()._step(current))
+                    con = env["connections"].get(DbBackend.DUCKDB)
+                    if con is None:
+                        return throw(
+                            ErrorPayload("Splink requires a DuckDB connection.")
+                        )._step(current)
                     out = _run_splink_dedupe_with_conn(intent, con)
-                    _SPLINK_STATE["linker"] = out[0]
+                    global _SPLINK_LINKER
+                    _SPLINK_LINKER = out[0]
                     return out
                 case SplinkVisualizeJob():
                     return _run_splink_visualize(intent)

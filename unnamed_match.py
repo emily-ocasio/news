@@ -339,7 +339,6 @@ def _link_orphans_to_entities(env: Environment) -> Run[Unit]:
     Link orphan victims to existing victim entities using Splink.
     """
     return splink_dedupe_job(
-        duckdb_path=env["duckdb_path"],
         input_table=["entity_link_input", "orphan_link_input"],
         settings={
             "link_type": "link_only",

@@ -6,7 +6,6 @@ import splink.internals.comparison_library as cl
 from pymonad import (
     Run,
     SQL,
-    ask,
     put_line,
     pure,
     splink_dedupe_job,
@@ -608,9 +607,7 @@ def match_article_to_shr_victims() -> Run[NextStep]:
             )
         ) ^
         put_line("Running Splink linkage...") ^
-        ask() >>
-        (lambda env: splink_dedupe_job(
-            duckdb_path=env["duckdb_path"],
+        splink_dedupe_job(
             input_table=["article_victims", "shr_cached"],
             settings=shr_linkage_settings,
             predict_threshold=0.01,
@@ -642,5 +639,5 @@ def match_article_to_shr_victims() -> Run[NextStep]:
         _export_shr_final_matches_excel() ^
         _export_shr_debug_matches_excel() ^
         put_line("Exported SHR matches to shr_matches.xlsx.") ^
-        pure(NextStep.CONTINUE)))
+        pure(NextStep.CONTINUE))
     )

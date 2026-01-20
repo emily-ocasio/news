@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from typing import TypeVar
 from typing import Any, cast
 
-import sqlite3
 import pandas as pd
 import duckdb
 from openpyxl import load_workbook
@@ -16,7 +15,8 @@ from openpyxl.formatting.rule import FormulaRule
 from openpyxl.cell import Cell
 
 from .array import Array
-from .run import Run, _unhandled, ask
+from .environment import DbBackend, Environment
+from .run import Run, _unhandled, ask, local, throw, ErrorPayload
 from .string import String
 
 
@@ -51,7 +51,7 @@ class SQLParams(Array[SQLParam]):
 
 class SQLExecutionError(Exception):
     """
-    Raised by run_sqlite/run_duckdb performer when the underlying
+    Raised by run_sql performer when the underlying
     driver raises an exception. Captures SQL and params.
     """
 
@@ -342,30 +342,41 @@ def _set_freeze_panes_xlsx(filename: str, sheet: str) -> None:
         raise e
 
 
-def run_sqlite(
-    db_path: str,
-    prog: Run[A],
-    *,
-    pragmas: dict[str, Any] | None = None,
-    row_factory: Any = sqlite3.Row,  # name-based access: row["col"]
-) -> Run[A]:
+def _get_backend_and_conn_run() -> Run[tuple[DbBackend, Any]]:
+    def resolve(env: Environment) -> Run[tuple[DbBackend, Any]]:
+        backend = env["current_backend"]
+        con = env["connections"].get(backend)
+        if con is None:
+            return throw(ErrorPayload(f"No connection for backend: {backend}"))
+        return Run.pure((backend, con))
+    return ask() >> resolve
+
+
+def _duckdb_query_dicts(
+    con: duckdb.DuckDBPyConnection, sql_s: str, params: SQLParams
+) -> list[dict]:
+    try:
+        cur = con.execute(sql_s, params.to_params())
+        cols = [d[0] for d in (cur.description or [])]
+        rows = cur.fetchall()
+        return [dict(zip(cols, tup)) for tup in rows]
+    except Exception as ex:  # noqa: BLE001
+        raise SQLExecutionError(sql_s, params.to_params(), ex) from ex
+
+
+def run_sql(prog: Run[A]) -> Run[A]:
     """
-    Eliminator for SQLite database calls.
+    Eliminator for SQL database calls. Routes to the current backend from env.
     """
 
     def step(self_run: Run[Any]) -> A:
         parent = self_run._perform
-        con = sqlite3.connect(db_path)
-        try:
-            con.row_factory = row_factory  # rows act like dicts by column name
-            if pragmas:
-                with con:
-                    for k, v in pragmas.items():
-                        con.execute(f"PRAGMA {k}={v};")
 
-            def perform(intent: Any, current: "Run[Any]") -> Any:
-                match intent:
-                    case SqlQuery(sql, params):
+        def perform(intent: Any, current: "Run[Any]") -> Any:
+            match intent:
+                case SqlQuery(sql, params):
+                    backend, con = _get_backend_and_conn_run()._step(current)
+                    if backend == DbBackend.SQLITE:
                         try:
                             cur = con.execute(str(sql), params.to_params())
                             rows = cur.fetchall()
@@ -375,154 +386,66 @@ def run_sqlite(
                             raise SQLExecutionError(
                                 str(sql), params.to_params(), ex
                             ) from ex
-                    case SqlExec(sql, params):
-                        try:
-                            con.execute(str(sql), params.to_params())
-                            con.commit()
-                            return None
-                        except Exception as ex:  # noqa: BLE001
-                            raise SQLExecutionError(
-                                str(sql), params.to_params(), ex
-                            ) from ex
-                    case SqlScript(sql):
-                        try:
-                            con.executescript(str(sql))
-                            return None
-                        except Exception as ex:  # noqa: BLE001
-                            raise SQLExecutionError(str(sql), None, ex) from ex
+                    return _duckdb_query_dicts(con, str(sql), params)
 
-                    case SqlExport(sql, filename, sheet, band_by_group_col, band_wrap):
-                        try:
-                            df = pd.read_sql_query(str(sql), con)
-                        except Exception as ex:
-                            raise SQLExecutionError(str(sql), None, ex) from ex
-                        _sql_export(df, filename, sheet, band_by_group_col, band_wrap)
+                case SqlExec(sql, params):
+                    backend, con = _get_backend_and_conn_run()._step(current)
+                    try:
+                        con.execute(str(sql), params.to_params())
+                        if backend == DbBackend.SQLITE:
+                            con.commit()
                         return None
+                    except Exception as ex:  # noqa: BLE001
+                        raise SQLExecutionError(
+                            str(sql), params.to_params(), ex
+                        ) from ex
 
-                    case InTransaction(subprog):
-                        try:
-                            result = subprog._step(current)
-                            con.commit()
-                            return result
-                        except Exception:
-                            con.rollback()
-                            raise
-
-                    case _:
-                        return parent(intent, current)
-
-            inner = Run(prog._step, perform)
-            return inner._step(inner)
-        finally:
-            con.close()
-
-    return Run(step, lambda i, c: c._perform(i, c))
-
-
-def run_duckdb(
-    db_path: str,
-    prog: Run[A],
-    *,
-    attach_sqlite_path: str | None = None,
-    setup_sql: str | None = None,  # e.g., CREATE VIEWs, INSTALL/LOAD, etc.
-) -> Run[A]:
-    """
-    Eliminator for DuckDB database calls.
-    - Optionally ATTACH an existing SQLite DB via sqlite_scanner.
-    - Optionally run a setup SQL script (CREATE VIEWs, INSTALL/LOAD, etc.)
-    Normalizes query results to list of dicts (column-name access)
-    to match how you currently use sqlite3.Row.
-    """
-
-    def step(self_run: Run[Any]) -> A:
-        parent = self_run._perform
-        #con = duckdb.connect(db_path)
-        with duckdb.connect(db_path) as con:
-            # Optional: attach SQLite
-            if attach_sqlite_path:
-                con.execute("INSTALL sqlite_scanner;")
-                con.execute("LOAD sqlite_scanner;")
-                attached = {
-                    row[1]
-                    for row in con.execute("PRAGMA database_list;").fetchall()
-                }
-                if "sqldb" not in attached:
-                    con.execute(
-                        f"ATTACH '{attach_sqlite_path}' AS sqldb (TYPE SQLITE);"
-                    )
-
-            # Optional: any one-off setup script (views, extensions, etc.)
-            if setup_sql:
-                con.execute(setup_sql)
-
-            def _query_dicts(sql_s: str, params: SQLParams) -> list[dict]:
-                try:
-                    cur = con.execute(sql_s, params.to_params())
-                    cols = [d[0] for d in (cur.description or [])]
-                    rows = cur.fetchall()
-                    return [dict(zip(cols, tup)) for tup in rows]
-                except Exception as ex:  # noqa: BLE001
-                    raise SQLExecutionError(sql_s, params.to_params(), ex) from ex
-
-            def perform(intent: Any, current: "Run[Any]") -> Any:
-                match intent:
-                    case SqlQuery(sql, params):
-                        return _query_dicts(str(sql), params)
-                    case SqlExec(sql, params):
-                        try:
-                            con.execute(str(sql), params.to_params())
-                            return None
-                        except Exception as ex:  # noqa: BLE001
-                            raise SQLExecutionError(
-                                str(sql), params.to_params(), ex
-                            ) from ex
-                    case SqlScript(sql):
-                        try:
+                case SqlScript(sql):
+                    backend, con = _get_backend_and_conn_run()._step(current)
+                    try:
+                        if backend == DbBackend.SQLITE:
+                            con.executescript(str(sql))
+                        else:
                             con.execute(str(sql))
-                            return None
-                        except Exception as ex:  # noqa: BLE001
-                            raise SQLExecutionError(str(sql), None, ex) from ex
+                        return None
+                    except Exception as ex:  # noqa: BLE001
+                        raise SQLExecutionError(str(sql), None, ex) from ex
 
-                    case SqlExport(sql, filename, sheet, band_by_group_col, band_wrap):
-                        try:
+                case SqlExport(sql, filename, sheet, band_by_group_col, band_wrap):
+                    backend, con = _get_backend_and_conn_run()._step(current)
+                    try:
+                        if backend == DbBackend.SQLITE:
+                            df = pd.read_sql_query(str(sql), con)
+                        else:
                             df = con.execute(str(sql)).df()
-                        except Exception as ex:  # noqa: BLE001
-                            raise SQLExecutionError(str(sql), None, ex) from ex
-                        return _sql_export(
-                            df=df,
-                            filename=filename,
-                            sheet=sheet,
-                            band_by_group_col=band_by_group_col,
-                            band_wrap=band_wrap
-                        )
+                    except Exception as ex:
+                        raise SQLExecutionError(str(sql), None, ex) from ex
+                    _sql_export(df, filename, sheet, band_by_group_col, band_wrap)
+                    return None
 
-                    case InTransaction(subprog):
-                        # DuckDB has transactional semantics; use BEGIN/COMMIT
-                        try:
+                case InTransaction(subprog):
+                    backend, con = _get_backend_and_conn_run()._step(current)
+                    try:
+                        if backend == DbBackend.DUCKDB:
                             con.execute("BEGIN")
-                            result = subprog._step(current)
+                        result = subprog._step(current)
+                        if backend == DbBackend.DUCKDB:
                             con.execute("COMMIT")
-                            return result
-                        except Exception:
+                        else:
+                            con.commit()
+                        return result
+                    except Exception:
+                        if backend == DbBackend.DUCKDB:
                             con.execute("ROLLBACK")
-                            raise
+                        else:
+                            con.rollback()
+                        raise
 
-                    case _:
-                        return parent(intent, current)
+                case _:
+                    return parent(intent, current)
 
-            inner = Run(prog._step, perform)
-            return inner._step(inner)
-        #finally:
-            # try:
-            #     # Cleanly detach the SQLite-attached database if present to avoid
-            #     # "database with name 'sqldb' already exists" on subsequent runs.
-            #     #con.execute("DETACH DATABASE sqldb;")
-            #     pass
-            # except duckdb.CatalogException:
-            #     # Ignore if not attached or already detached.
-            #     pass
-            # finally:
-            #     con.close()
+        inner = Run(prog._step, perform)
+        return inner._step(inner)
 
     return Run(step, lambda i, c: c._perform(i, c))
 
@@ -530,10 +453,8 @@ def run_duckdb(
 def with_duckdb(subprog: Run[A]) -> Run[A]:
     """
     Context wrapper to run a sub-program in DuckDB mode.
-    Assumes the environment has "duckdb_path" set.
     """
-    return ask() >> (
-        lambda env: run_duckdb(
-            env["duckdb_path"], subprog, attach_sqlite_path=env["db_path"]
-        )
+    return local(
+        lambda env: {**env, "current_backend": DbBackend.DUCKDB},
+        subprog,
     )
