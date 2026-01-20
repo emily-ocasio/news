@@ -164,7 +164,7 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
             addr_key, article_ids = item
             if addr_key.lower() == "unknown":
                 # Special case: set lon/lat to null
-                return put_line(f"[GEO] Special case 'unknown': {addr_key} articles={article_ids}\n") ^ \
+                return put_line(f"[GEO] Special case 'unknown': {addr_key} articles={article_ids}") ^ \
                     sql_exec(
                         INSERT_CACHE_SQL,
                         SQLParams(
@@ -182,13 +182,13 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
                     lambda rs:
                     # cached -> done (log differently for cached permanent failures)
                     (
-                        put_line(f"[GEO] Already cached (permanent failure): {addr_key} articles={article_ids}\n") ^ pure(None)
+                        put_line(f"[GEO] Already cached (permanent failure): {addr_key} articles={article_ids}") ^ pure(None)
                         if len(rs) > 0 and rs[0]["x_lon"] is None
-                        else put_line(f"[GEO] Already cached (success): {addr_key}\n") ^ pure(None)
+                        else put_line(f"[GEO] Already cached (success): {addr_key}") ^ pure(None)
                         if len(rs) > 0
                         else
                         # not cached -> geocode and insert
-                        put_line(f"[GEO] MAR: {addr_key} articles={article_ids}")
+                        put_line(f"[GEO] MAR request: {addr_key} articles={article_ids}")
                         ^ geocode_address(addr_key, env["mar_key"])
                         >> (
                             lambda g: (
@@ -205,7 +205,7 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
                                         )
                                     ),
                                 )
-                                ^ put_line(f"[GEO] MAR response: {g}")
+                                ^ put_line(f"[GEO] MAR response OK, matched address: {g['matched_address']} articles={article_ids}")
                                 ^ pure(None)
                                 if g.get("ok")
                                 else
