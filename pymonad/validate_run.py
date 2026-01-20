@@ -12,7 +12,7 @@ from .semigroup import Semigroup
 from .either import Either, Left, Right
 from .string import String
 from .monad import Unit, unit
-from .traverse import array_traverse, array_sequence, array_traverse_run
+from .traverse import array_sequence, array_traverse_run
 from .validation import V, Valid, Invalid
 
 S = TypeVar('S')

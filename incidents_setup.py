@@ -18,6 +18,7 @@ from pymonad import (
     SQLParams,
     String,
 )
+from pymonad.traverse import array_traverse_run
 from menuprompts import NextStep
 from calculations import sbert_average_vector
 
@@ -65,17 +66,20 @@ def _row_update_run(env: Environment, row) -> Run[None]:
             if len(rows) > 0
             else (
                 (
-                    lambda vec_vals: sql_exec(
-                        SQL(
-                            f"INSERT INTO sbert_cache (input_text, vec) VALUES (?, ARRAY[{','.join(format(x, '.17g') for x in vec_vals)}]);"
-                        ),
-                        SQLParams((String(key),)),
-                    )
-                    ^ sql_exec(
-                        SQL(
-                            f"UPDATE incidents_cached SET summary_vec = ARRAY[{','.join(format(x, '.17g') for x in vec_vals)}] WHERE article_id = ? AND incident_idx = ?;"
-                        ),
-                        SQLParams((row["article_id"], row["incident_idx"])),
+                    lambda vec_vals: (
+                        put_line(f"[I] Cache miss for summary: {key[:60]}")
+                        ^ sql_exec(
+                            SQL(
+                                f"INSERT INTO sbert_cache (input_text, vec) VALUES (?, ARRAY[{','.join(format(x, '.17g') for x in vec_vals)}]);"
+                            ),
+                            SQLParams((String(key),)),
+                        )
+                        ^ sql_exec(
+                            SQL(
+                                f"UPDATE incidents_cached SET summary_vec = ARRAY[{','.join(format(x, '.17g') for x in vec_vals)}] WHERE article_id = ? AND incident_idx = ?;"
+                            ),
+                            SQLParams((row["article_id"], row["incident_idx"])),
+                        )
                     )
                 )(sbert_average_vector(env["fasttext_model"].model, key))
             )
@@ -480,7 +484,7 @@ def build_incident_views() -> Run[NextStep]:
                     lambda rows: put_line(
                         f"[I] Retrieved {len(rows)} rows for vectorization…"
                     )
-                    ^ array_traverse(
+                    ^ array_traverse_run(
                         Array.make(tuple(rows)), lambda r: _row_update_run(env, r)
                     )
                 )

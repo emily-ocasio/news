@@ -23,11 +23,9 @@ from comparison import (
 )
 from menuprompts import NextStep
 from pymonad import (
-    Environment,
     Run,
     SQL,
     Unit,
-    ask,
     put_line,
     pure,
     splink_dedupe_job,
@@ -66,7 +64,7 @@ def _create_victims_named_table() -> Run[Unit]:
     )
 
 
-def _dedupe_named_victims(env: Environment) -> Run[Unit]:
+def _dedupe_named_victims(_: Unit) -> Run[Unit]:
     """
     Run initial pass of Splink deduplication on the victims_named table.
     """
@@ -602,13 +600,13 @@ def _build_representative_victims() -> Run[Unit]:
     )
 
 
-def dedupe_incidents_with_splink(env) -> Run[NextStep]:
+def dedupe_incidents_with_splink() -> Run[NextStep]:
     """
     Deduplicate incident records using Splink.
     """
     return (
         _create_victims_named_table()
-        ^ _dedupe_named_victims(env)
+        >> _dedupe_named_victims
         ^ _create_cluster_tables()
         ^ _show_initial_clusters()
         ^ _export_top_clusters_excel()
@@ -664,4 +662,4 @@ def dedupe_incidents() -> Run[NextStep]:
     """
     Entry point for controller to deduplicate incidents
     """
-    return with_duckdb(ask() >> dedupe_incidents_with_splink)
+    return with_duckdb(dedupe_incidents_with_splink())

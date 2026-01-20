@@ -34,11 +34,11 @@ def array_traverse_run(xs: Array[A], f: Callable[[A], Run[B]]) -> Run[Array[B]]:
     def step(self_run: Run[object]) -> Array[B]:
         acc = Array.mempty()
         for x in xs:
-            b = f(x)._step(self_run)
+            b = f(x)._step(self_run) #pylint: disable=protected-access
             acc = Array.snoc(acc, b)
         return acc
 
-    return Run(step, lambda intent, current: current._perform(intent, current))
+    return Run(step, lambda intent, current: current._perform(intent, current)) #pylint: disable=protected-access
 
 @overload
 def array_sequence(xs: Array[V[A, B]]) -> V[A, Array[B]]: ...
