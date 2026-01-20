@@ -107,7 +107,7 @@ def _create_cluster_tables() -> Run[Unit]:
         )
         ^ sql_exec(
             SQL(
-                """
+                """--sql
             CREATE OR REPLACE VIEW victim_entities AS
             SELECT
             victim_entity_id,
@@ -208,80 +208,6 @@ def _show_initial_clusters() -> Run[Unit]:
                     )
                 )
             )
-        )
-        ^ pure(unit)
-    )
-
-
-# --- Export top clusters to Excel ---
-def _export_top_clusters_excel() -> Run[Unit]:
-    """
-    Export the top 100 clusters (one row per article/member) to an Excel file.
-    """
-    return (
-        sql_export(
-            SQL(
-                """--sql
-            WITH top AS (
-              SELECT cluster_id
-              FROM victim_cluster_counts
-              ORDER BY member_count DESC
-              LIMIT 100
-            ),
-            canon AS (
-              SELECT
-                vc.cluster_id AS cluster_id,
-                mode(v.victim_surname_norm) AS canonical_surname
-              FROM victim_clusters vc
-              JOIN victims_cached_enh v
-                ON vc.victim_row_id = v.victim_row_id
-              WHERE vc.cluster_id IN (SELECT cluster_id FROM top)
-                AND v.victim_surname_norm IS NOT NULL
-              GROUP BY vc.cluster_id
-            )
-            SELECT
-              c.cluster_id,
-              c.member_count,
-              cn.canonical_surname,
-              v.article_id,
-              v.victim_row_id,
-              v.city_id,
-              v.incident_date,
-              v.midpoint_day,
-              v.date_precision,
-              v.victim_name_raw,
-              v.victim_forename_norm,
-              v.victim_surname_norm,
-              v.victim_age,
-              v.victim_count,
-              v.victim_sex,
-              v.lat,
-              v.lon,
-              COALESCE(v.geo_address_norm, '') AS address,
-              COALESCE(v.offender_name_norm, '') AS offender,
-              COALESCE(v.weapon, '') AS weapon
-            FROM victim_cluster_counts c
-            JOIN victim_clusters vc
-              ON c.cluster_id = vc.cluster_id
-            JOIN victims_cached_enh v
-              ON vc.victim_row_id = v.victim_row_id
-            LEFT JOIN canon cn
-              ON c.cluster_id = cn.cluster_id
-            WHERE c.cluster_id IN (SELECT cluster_id FROM top)
-            ORDER BY
-              cn.canonical_surname NULLS LAST,
-              v.victim_surname_norm NULLS LAST,
-              v.victim_forename_norm NULLS LAST,
-              v.victim_name_raw
-            """
-            ),
-            "top_clusters.xlsx",
-            "Top100",
-            band_by_group_col="cluster_id",
-            band_wrap=2,
-        )
-        ^ put_line(
-            "[D] Wrote top_clusters.xlsx (Top 100 clusters, one row per article)."
         )
         ^ pure(unit)
     )
@@ -600,6 +526,73 @@ def _build_representative_victims() -> Run[Unit]:
     )
 
 
+def _export_final_clusters_excel() -> Run[Unit]:
+    """
+    Export all clusters (one row per article/member) to an Excel file.
+    """
+    return (
+        sql_export(
+            SQL(
+                """--sql
+            WITH canon AS (
+              SELECT
+                vc.cluster_id AS cluster_id,
+                mode(v.victim_surname_norm) AS canonical_surname
+              FROM victim_clusters vc
+              JOIN victims_cached_enh v
+                ON vc.victim_row_id = v.victim_row_id
+              WHERE v.victim_surname_norm IS NOT NULL
+              GROUP BY vc.cluster_id
+            )
+            SELECT
+              c.cluster_id,
+              c.member_count,
+              cn.canonical_surname,
+              v.article_id,
+              v.victim_row_id,
+              v.city_id,
+              v.incident_date,
+              v.midpoint_day,
+              v.date_precision,
+              v.victim_name_raw,
+              v.victim_forename_norm,
+              v.victim_surname_norm,
+              v.victim_age,
+              v.victim_count,
+              v.victim_sex,
+              v.lat,
+              v.lon,
+              COALESCE(v.geo_address_norm, '') AS address,
+              COALESCE(v.offender_name_norm, '') AS offender,
+              COALESCE(v.weapon, '') AS weapon
+            FROM victim_cluster_counts c
+            JOIN victim_clusters vc
+              ON c.cluster_id = vc.cluster_id
+            JOIN victims_cached_enh v
+              ON vc.victim_row_id = v.victim_row_id
+            LEFT JOIN canon cn
+              ON c.cluster_id = cn.cluster_id
+            ORDER BY
+              cn.canonical_surname NULLS LAST,
+              c.cluster_id,
+              v.victim_surname_norm NULLS LAST,
+              v.victim_forename_norm NULLS LAST,
+              v.victim_name_raw,
+              v.article_id
+            """
+            ),
+            "final_clusters.xlsx",
+            "FinalClusters",
+            band_by_group_col="cluster_id",
+            band_wrap=2,
+        )
+        ^ put_line(
+            "[D] Wrote final_clusters.xlsx (All clusters, one row per article)."
+        )
+        ^ pure(unit)
+    )
+
+
 def dedupe_incidents_with_splink() -> Run[NextStep]:
     """
     Deduplicate incident records using Splink.
@@ -609,8 +602,8 @@ def dedupe_incidents_with_splink() -> Run[NextStep]:
         >> _dedupe_named_victims
         ^ _create_cluster_tables()
         ^ _show_initial_clusters()
-        ^ _export_top_clusters_excel()
         ^ _build_representative_victims()
+        ^ _export_final_clusters_excel()
         ^ pure(NextStep.CONTINUE)
     )
 
