@@ -18,7 +18,7 @@ from comparison import (
     VICTIM_COUNT_COMP,
     DIST_COMP,
     OFFENDER_COMP,
-    WEAPON_COMP,
+    TF_WEAPON_COMP,
     CIRC_COMP,
     SUMMARY_COMP,
 )
@@ -90,6 +90,12 @@ def _create_linkage_input_tables() -> Run[Unit]:
                       )
                     ) AS year,
                     EXTRACT(
+                      YEAR FROM COALESCE(
+                        incident_date,
+                        date_add(DATE '1970-01-01', INTERVAL (CAST(entity_midpoint_day AS INTEGER)) DAY)
+                      )
+                    ) AS year_block,
+                    EXTRACT(
                       MONTH FROM COALESCE(
                         incident_date,
                         date_add(DATE '1970-01-01', INTERVAL (CAST(entity_midpoint_day AS INTEGER)) DAY)
@@ -137,6 +143,7 @@ def _create_linkage_input_tables() -> Run[Unit]:
                     date_precision,
                     article_id,
                     year,
+                    year AS year_block,
                     month,
                     lat,
                     lon,
@@ -342,9 +349,9 @@ def _link_orphans_to_entities(env: Environment) -> Run[Unit]:
                 DATE_COMP_ORPHAN,
                 AGE_COMP_ORPHAN,
                 DIST_COMP,
-                cl.ExactMatch("victim_sex"),
+                cl.ExactMatch("victim_sex").configure(term_frequency_adjustments=True),
                 OFFENDER_COMP,
-                WEAPON_COMP,
+                TF_WEAPON_COMP,
                 CIRC_COMP,
                 SUMMARY_COMP,
                 VICTIM_COUNT_COMP,
@@ -360,6 +367,7 @@ def _link_orphans_to_entities(env: Environment) -> Run[Unit]:
         training_blocking_rules=ORPHAN_TRAINING_BLOCKS,
         do_cluster=False,
         visualize=False,
+        em_max_runs=5
     ) >> (
         lambda outnames: put_line(f"[D] Wrote {outnames[1]} in DuckDB.")
     ) ^ pure(unit)

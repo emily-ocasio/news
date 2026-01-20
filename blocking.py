@@ -138,9 +138,7 @@ ORPHAN_DETERMINISTIC_BLOCKS = [
 ]
 
 ORPHAN_TRAINING_BLOCKS = [
-    TrainBlockRule.LOCATION,
-    TrainBlockRule.MIDPOINT_7MONTH,
-    TrainBlockRule.SUMMARY
+    TrainBlockRule.YEAR_BLOCK_1
 ]
 
 SHR_OVERALL_BLOCKS = [

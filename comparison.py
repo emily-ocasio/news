@@ -399,9 +399,15 @@ AGE_COMP_ORPHAN = cl.CustomComparison(
         #     "exact match victim age",
         #     ComparisonComp.EXACT_AGE.value
         # ).to_dict(),
-        ComparisonLevel(
+        TFComparisonLevel(
+            "exact match victim age",
+            ComparisonComp.EXACT_AGE.value,
+            "victim_age"
+        ).to_dict(),
+        TFComparisonLevel(
             "victim ages within 2 years",
-            ComparisonComp.AGE_2YEAR.value
+            ComparisonComp.AGE_2YEAR.value,
+            "victim_age"
         ).to_dict(),
         cll.ElseLevel()
     ]
