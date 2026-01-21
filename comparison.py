@@ -73,7 +73,7 @@ class ComparisonComp(StrEnum):
         _specific_value_comp_builder(
             "weapon", "IN ('firearm', 'handgun', 'rifle', 'shotgun')")
     WEAPON_FIREARM = _specific_value_comp_builder(
-        "weapon", "IN ('firearm', 'handgun', 'rifle', 'shotgun')")
+        "weapon", "IN ('firearm', 'handgun')")
     CIRC_NULL = _null_comp_builder("circumstance") + ' OR ' + \
         _null_comp_builder("circumstance", "= 'undetermined'")
     CIRC_EXACT = _exact_comp_builder("circumstance")
@@ -113,7 +113,7 @@ class TFComparisonLevel(ComparisonLevel):
     Comparison level for term frequency-adjusted comparisons
     """
     tf_adjustment_column: str
-    tf_adjustment_weight: float = 0.5
+    tf_adjustment_weight: float = 1.0
     tf_minimum_u_value: float = 0.001
 
 
@@ -283,6 +283,10 @@ DATE_COMP_SHR = cl.CustomComparison(
                 ComparisonComp.MIDPOINT_20DAYS,
                 ComparisonComp.MONTH_PRECISION
             )
+        ).to_dict(),
+        ComparisonLevel(
+            "exact year and month",
+            ComparisonComp.EXACT_YEAR_MONTH.value
         ).to_dict(),
         ComparisonLevel(
             "midpoint within 30 days",
@@ -458,11 +462,11 @@ TF_WEAPON_COMP = cl.CustomComparison(
         ).to_dict(),
         cll.ExactMatchLevel("weapon").configure(
             tf_adjustment_column="weapon",
-            tf_adjustment_weight=0.5,
             tf_minimum_u_value=0.001),
-        ComparisonLevel(
+        TFComparisonLevel(
             "firearm class weapon match",
-            ComparisonComp.WEAPON_FIREARM.value
+            ComparisonComp.WEAPON_FIREARM.value,
+            tf_adjustment_column="weapon",
         ).to_dict(),
         cll.ElseLevel()
     ]

@@ -53,6 +53,10 @@ class BlockComp(StrEnum):
     FIREARM_HANDGUN = "l.weapon = 'firearm' AND r.weapon = 'handgun'"
     MIDPOINT_30DAYS = "abs(l.midpoint_day - r.midpoint_day) <= 30"
     MIDPOINT_90DAYS = "abs(l.midpoint_day - r.midpoint_day) <= 90"
+    MONTH_PRECISION = (
+        "(l.date_precision = 'month' OR r.date_precision = 'month') "
+        "AND (l.date_precision <> 'year' AND r.date_precision <> 'year')"
+    )
     DIFFERENT_ARTICLE = "l.exclusion_id <> r.exclusion_id"
     LONG_LAT_EXISTS = (
         "l.lat IS NOT NULL AND r.lat IS NOT NULL "
@@ -99,6 +103,11 @@ class TrainBlockRule(StrEnum):
     MIDPOINT_BLOCK_2MONTH = _train_block_from_comps(
         BlockComp.MIDPOINT_BLOCK_EXISTS,
         BlockComp.MIDPOINT_BLOCK_2MONTH
+    )
+    MIDPOINT_90DAYS_MONTH_PRECISION = _train_block_from_comps(
+        BlockComp.MIDPOINT_EXISTS,
+        BlockComp.MIDPOINT_90DAYS,
+        BlockComp.MONTH_PRECISION
     )
     SUMMARY = _train_block_from_comps(BlockComp.CLOSE_SUMMARY)
     MONTH_AGE_SEX = _train_block_from_comps(
@@ -201,7 +210,7 @@ SHR_DETERMINISTIC_BLOCKS = [
 ]
 
 SHR_TRAINING_BLOCKS = [
-    TrainBlockRule.MIDPOINT_BLOCK_2MONTH,
+    TrainBlockRule.YEAR_MONTH,
     TrainBlockRule.AGE_SEX,
     TrainBlockRule.YEAR_OFFENDER_AGE_SEX,
 ]

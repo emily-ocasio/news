@@ -56,9 +56,12 @@ This project is a terminal-based tool for managing, analyzing, and interacting w
 
 ### 2.6 Splink Integration
 - Uses Splink for entity resolution and data linkage.
-- Calls to Splink do not have their own eliminator but are resolved within pymonad/dispatch.py using the run_base_effect eliminator. Helper functions for Splink are in pymonad/runsplink.py.
+- Calls to Splink are done via the run_splink eliminator in [pymonad/runsplink.py](../pymonad/runsplink.py).
 - Data from the sqlite database is utilized by Splink through the DuckDB connector. Further caching of data trasnformations is stored within DuckDB tables.
-- Extraction of data into DuckDB is handled primarily by the controller code in incidents_setup.py.
+- Extraction of data from the GPT structured output in JSON format stored in sqlite into DuckDB to stage for splink is handled primarily by the controller code in incidents_setup.py.
+- Detailed information about splink documentation is available at ./splink-reference.md
+- Splink library source code is in /Users/wendell/miniforge3/envs/news/lib/python3.13/site-packages/splink
+
 
 ### 2.7 Geocoding Integration
 - For articles refering to homicides in Washington DC, a call to the MAR 2 API is performed. There is no separate eliminator for this, but the call is made within pymonad/dispatch.py using the run_base_effect eliminator.

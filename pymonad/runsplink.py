@@ -3,6 +3,7 @@ Intent, eliminator, and smart constructors for Splink.
 """
 
 from dataclasses import dataclass
+import logging
 import json
 from pathlib import Path
 from typing import Any, Sequence, TypeVar, cast
@@ -383,6 +384,18 @@ def _run_splink_dedupe_with_conn(
     con: duckdb.DuckDBPyConnection,
     current: "Run[Any]",
 ) -> tuple[Linker, str, str]:
+    def _configure_splink_logger(name: str) -> None:
+        logger = logging.getLogger(name)
+        logger.setLevel(15)
+        if not any(isinstance(handler, logging.StreamHandler) for handler in logger.handlers):
+            handler = logging.StreamHandler()
+            handler.setLevel(15)
+            handler.setFormatter(logging.Formatter("%(message)s"))
+            logger.addHandler(handler)
+        logger.propagate = False
+
+    _configure_splink_logger("splink")
+    _configure_splink_logger("splink.internals")
     def _duckdb_exec(sql: str) -> None:
         with_duckdb(sql_exec(SQL(sql)))._step(current)
 
@@ -438,10 +451,15 @@ def _run_splink_dedupe_with_conn(
                         if key not in prev_block_params:
                             continue
                         m_prev, u_prev = prev_block_params[key]
-                        if m_now is not None and m_prev is not None:
-                            deltas.append(abs(m_now - m_prev))
-                        if u_now is not None and u_prev is not None:
-                            deltas.append(abs(u_now - u_prev))
+                        if (
+                            m_now is not None
+                            and u_now is not None
+                            and m_prev is not None
+                            and u_prev is not None
+                            and u_now != 0
+                            and u_prev != 0
+                        ):
+                            deltas.append(abs((m_now / u_now) - (m_prev / u_prev)))
                     max_delta = max(deltas) if deltas else 1.0
                     print(
                         f"EM run {run_idx + 1}/{job.em_max_runs} block drift: "
@@ -455,10 +473,15 @@ def _run_splink_dedupe_with_conn(
                     if key not in prev_params:
                         continue
                     m_prev, u_prev = prev_params[key]
-                    if m_now is not None and m_prev is not None:
-                        deltas.append(abs(m_now - m_prev))
-                    if u_now is not None and u_prev is not None:
-                        deltas.append(abs(u_now - u_prev))
+                    if (
+                        m_now is not None
+                        and u_now is not None
+                        and m_prev is not None
+                        and u_prev is not None
+                        and u_now != 0
+                        and u_prev != 0
+                    ):
+                        deltas.append(abs((m_now / u_now) - (m_prev / u_prev)))
                 max_delta = max(deltas) if deltas else 1.0
                 print(
                     f"EM run {run_idx + 1}/{job.em_max_runs}: "
