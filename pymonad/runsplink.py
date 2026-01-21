@@ -362,6 +362,14 @@ def _run_splink_visualize(job: SplinkVisualizeJob) -> None:
     chart.show()  # type: ignore
     chart = linker.visualisations.m_u_parameters_chart()
     chart.show()  # type: ignore
+    print("\nGenerating comparison viewer dashboard…")
+    linker.visualisations.comparison_viewer_dashboard(
+        df_pairs,
+        "comparison_viewer.html",
+        overwrite=True,
+        num_example_rows=5,
+    )
+    print("Comparison viewer dashboard written to comparison_viewer.html")
 
     if link_type == "dedupe_only":
         print("\nGenerating constrained clusters with article exclusion…")
