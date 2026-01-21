@@ -3,6 +3,8 @@ Intent, eliminator, and smart constructors for Splink.
 """
 
 from dataclasses import dataclass
+import json
+from pathlib import Path
 from typing import Any, Sequence, TypeVar, cast
 
 import altair as alt
@@ -15,7 +17,8 @@ from splink.internals.blocking_rule_creator import BlockingRuleCreator
 
 # pylint:disable=W0212
 from .environment import DbBackend, Environment
-from .run import Run, ask, throw, ErrorPayload, put_splink_linker, get_splink_linker
+from .run import Run, ask, throw, ErrorPayload, put_splink_linker, get_splink_linker, \
+    HasSplinkLinker
 from .runsql import SQL, sql_exec, sql_query, sql_register, with_duckdb
 from .array import Array
 
@@ -632,6 +635,48 @@ def _run_splink_dedupe_with_conn(
         job.clusters_out if job.do_cluster else ""
     )
 
+def _splink_model_paths(splink_key: Any) -> tuple[Path, Path]:
+    key_str = str(splink_key).replace("/", "_")
+    base_dir = Path("splink_models")
+    model_path = base_dir / f"splink_model_{key_str}.json"
+    meta_path = base_dir / f"splink_model_{key_str}.meta.json"
+    return model_path, meta_path
+
+
+def _save_splink_model(
+    splink_key: Any,
+    linker: Linker,
+    input_table: str | list[str],
+) -> None:
+    if splink_key is None:
+        return
+    model_path, meta_path = _splink_model_paths(splink_key)
+    model_path.parent.mkdir(parents=True, exist_ok=True)
+    linker.misc.save_model_to_json(str(model_path), overwrite=True)
+    with open(meta_path, "w", encoding="utf-8") as f:
+        json.dump({"input_table": input_table}, f, indent=2)
+
+
+def _load_splink_model(
+    splink_key: Any,
+    con: duckdb.DuckDBPyConnection,
+) -> Linker | None:
+    if splink_key is None:
+        return None
+    model_path, meta_path = _splink_model_paths(splink_key)
+    if not model_path.is_file() or not meta_path.is_file():
+        return None
+    try:
+        with open(meta_path, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+        input_table = meta.get("input_table")
+        if input_table is None:
+            return None
+        db_api = DuckDBAPI(connection=con)
+        return Linker(input_table, str(model_path), db_api=db_api)
+    except Exception:
+        return None
+
 
 def run_splink(prog: Run[A]) -> Run[A]:
     """
@@ -651,6 +696,7 @@ def run_splink(prog: Run[A]) -> Run[A]:
                         )._step(current)
                     out = _run_splink_dedupe_with_conn(intent, con, current)
                     put_splink_linker(intent.splink_key, out[0])._step(current)
+                    _save_splink_model(intent.splink_key, out[0], intent.input_table)
                     return out
                 case SplinkVisualizeJob():
                     linker = get_splink_linker(intent.splink_key)._step(current)
@@ -659,6 +705,19 @@ def run_splink(prog: Run[A]) -> Run[A]:
                             ErrorPayload("No Splink linker stored for visualization.")
                         )._step(current)
                     return _run_splink_visualize(linker, intent)
+                case HasSplinkLinker(key):
+                    linker = get_splink_linker(key)._step(current)
+                    if linker is not None:
+                        return True
+                    env = cast(Environment, ask()._step(current))
+                    con = env["connections"].get(DbBackend.DUCKDB)
+                    if con is None:
+                        return False
+                    reloaded = _load_splink_model(key, con)
+                    if reloaded is None:
+                        return False
+                    put_splink_linker(key, reloaded)._step(current)
+                    return True
                 case _:
                     return parent(intent, current)
 

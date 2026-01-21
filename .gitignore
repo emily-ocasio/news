@@ -30,3 +30,4 @@ code_analyzer.py
 *.bin
 *.xlsx
 test_sbert.ipynb
+splink_models/

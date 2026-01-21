@@ -333,8 +333,6 @@ def run_state(initial: StateRegistry[M] | M, prog: Run[A]) \
                     updated_splink[key] = linker
                     registry = replace(registry, splink_state=updated_splink)
                     return None
-                case HasSplinkLinker(key):
-                    return key in registry.splink_state
                 case _:
                     return parent(intent, current)
         inner = Run(prog._step, perform)
