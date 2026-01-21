@@ -8,6 +8,7 @@ from typing import Any, Sequence, TypeVar, cast
 import altair as alt
 import duckdb
 import networkx as nx
+import pandas as pd
 from pandas import DataFrame
 from splink import Linker, DuckDBAPI, blocking_analysis
 from splink.internals.blocking_rule_creator import BlockingRuleCreator
@@ -66,7 +67,7 @@ def close_splink_resources() -> None:
     """
     Close any cached Splink resources for this process.
     """
-    global _SPLINK_LINKER
+    global _SPLINK_LINKER #pylint: disable=W0603
     _SPLINK_LINKER = None
 
 
@@ -304,6 +305,7 @@ def _run_splink_visualize(job: SplinkVisualizeJob) -> None:
     linker = job.linker
     alt.renderers.enable("browser")
     settings = linker.misc.save_model_to_json(out_path=None)
+    link_type = settings.get("link_type", "dedupe_only")
     unique_id_col = settings.get("unique_id_column_name", "unique_id")
     left_id_col: str | None = f"{unique_id_col}_l"
     right_id_col: str | None = f"{unique_id_col}_r"
@@ -358,6 +360,59 @@ def _run_splink_visualize(job: SplinkVisualizeJob) -> None:
 
     chart = linker.visualisations.match_weights_chart()
     chart.show()  # type: ignore
+
+    if link_type == "dedupe_only":
+        print("\nGenerating constrained clusters with article exclusion…")
+        df_clustered = linker.clustering.cluster_pairwise_predictions_at_threshold(
+            df_pairs, 0
+        )
+        inspect_ids: set[Any] = set()
+        if left_id_col and left_id_col in inspect_df.columns:
+            inspect_ids.update(inspect_df[left_id_col].dropna().tolist())
+        if right_id_col and right_id_col in inspect_df.columns:
+            inspect_ids.update(inspect_df[right_id_col].dropna().tolist())
+        print("\nGenerating Cluster Studio dashboard…")
+        try:
+            clusters_df = df_clustered.as_pandas_dataframe()
+            if inspect_ids:
+                filtered = clusters_df[clusters_df[unique_id_col].isin(inspect_ids)]
+            else:
+                filtered = clusters_df.iloc[0:0]
+            cluster_ids = sorted(filtered["cluster_id"].dropna().unique().tolist())
+        except Exception as exc: #pylint: disable=W0718
+            print(f"Unable to compute cluster_ids for dashboard: {exc}")
+            cluster_ids = []
+        if not cluster_ids:
+            print("No clusters found for the waterfall chart rows; skipping dashboard.")
+            return
+        try:
+            pairs_df = df_pairs.as_pandas_dataframe()
+            mask = pd.Series(False, index=pairs_df.index)
+            if left_id_col and left_id_col in pairs_df.columns:
+                mask |= pairs_df[left_id_col].isin(inspect_ids)
+            if right_id_col and right_id_col in pairs_df.columns:
+                mask |= pairs_df[right_id_col].isin(inspect_ids)
+            filtered_pairs = pairs_df.loc[mask]
+            filtered_clusters = clusters_df[clusters_df[unique_id_col].isin(inspect_ids)]
+            df_pairs_filtered = linker._db_api.register_table(
+                filtered_pairs,
+                f"__splink__df_pairs_inspect_{id(filtered_pairs)}",
+            )
+            df_clustered_filtered = linker._db_api.register_table(
+                filtered_clusters,
+                f"__splink__df_clustered_inspect_{id(filtered_clusters)}",
+            )
+        except Exception as exc: #pylint: disable=W0718
+            print(f"Unable to filter dashboard inputs: {exc}")
+            return
+        linker.visualisations.cluster_studio_dashboard(
+            df_pairs_filtered,
+            df_clustered_filtered,
+            "cluster_studio.html",
+            cluster_ids=cluster_ids,
+            overwrite=True,
+        )
+        print("Cluster studio dashboard written to cluster_studio.html")
 
 
 def _run_splink_dedupe_with_conn(
@@ -578,7 +633,7 @@ def run_splink(prog: Run[A]) -> Run[A]:
                             ErrorPayload("Splink requires a DuckDB connection.")
                         )._step(current)
                     out = _run_splink_dedupe_with_conn(intent, con)
-                    global _SPLINK_LINKER
+                    global _SPLINK_LINKER #pylint: disable=W0603
                     _SPLINK_LINKER = out[0]
                     return out
                 case SplinkVisualizeJob():
