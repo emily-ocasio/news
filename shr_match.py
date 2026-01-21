@@ -496,84 +496,89 @@ def match_article_to_shr_victims() -> Run[NextStep]:
                 """
                 CREATE OR REPLACE TABLE shr_cached AS
                 SELECT
-                    "index" as unique_id,
-                    CASE VicSex WHEN 'Unknown' THEN NULL ELSE lower(VicSex) END as victim_sex,
-                    VicAge as victim_age,
-                    CASE VicRace WHEN 'Unknown' THEN NULL ELSE VicRace END as victim_race,
-                    CASE VicEthnic WHEN 'Unknown' THEN NULL ELSE VicEthnic END as victim_ethnicity,
-                    VicCount+1 as victim_count,
-                    CASE OffSex WHEN 'Unknown' THEN NULL ELSE lower(OffSex) END as offender_sex,
-                    CASE OffAge WHEN 999 THEN NULL ELSE OffAge END as offender_age,
-                    CASE OffRace WHEN 'Unknown' THEN NULL ELSE OffRace END as offender_race,
-                    CASE OffEthnic WHEN 'Unknown' THEN NULL ELSE OffEthnic END as offender_ethnicity,
-                    -- Map SHR Weapon to GPT schema enums
-                    CASE 
-                        WHEN LOWER(TRIM(Weapon)) LIKE '%knife%' THEN 'knife'
-                        WHEN LOWER(TRIM(Weapon)) LIKE '%shotgun%' THEN 'shotgun'
-                        WHEN LOWER(TRIM(Weapon)) LIKE '%rifle%' THEN 'rifle'
-                        WHEN LOWER(TRIM(Weapon)) LIKE '%handgun%' THEN 'handgun'
-                        WHEN LOWER(TRIM(Weapon)) LIKE '%firearm%' THEN 'firearm'
-                        WHEN LOWER(TRIM(Weapon)) LIKE '%gun%' THEN 'firearm'
-                        WHEN LOWER(TRIM(Weapon)) LIKE '%blunt%' THEN 'blunt object'
-                        WHEN LOWER(TRIM(Weapon)) LIKE '%personal%' THEN 'personal weapon'
-                        WHEN LOWER(TRIM(Weapon)) LIKE '%fire%' THEN 'fire'
-                        WHEN LOWER(TRIM(Weapon)) LIKE '%strangulation%' THEN 'strangulation'
-                        WHEN LOWER(TRIM(Weapon)) LIKE '%asphyxiation%' THEN 'asphyxiation'
-                        WHEN LOWER(TRIM(Weapon)) LIKE '%drugs%' THEN 'drugs'
-                        WHEN LOWER(TRIM(Weapon)) LIKE '%explosives%' THEN 'explosives'
-                        WHEN LOWER(TRIM(Weapon)) LIKE '%drowning%' THEN 'drowning'
-                        WHEN LOWER(TRIM(Weapon)) LIKE '%poison%' THEN 'poison'
-                        WHEN LOWER(TRIM(Weapon)) LIKE '%pushed%' THEN 'pushed from height'
-                        WHEN LOWER(TRIM(Weapon)) LIKE '%other%' THEN 'other'
-                        WHEN LOWER(TRIM(Weapon)) LIKE '%unknown%' THEN 'unknown'
-                        ELSE 'unknown'  -- Default to unknown for unmapped values
-                    END AS weapon,
-                    -- Map SHR Circumstance to GPT schema enums
-                    CASE 
-                        WHEN LOWER(TRIM(Circumstance)) LIKE '%narcotic%' THEN 'narcotics related'
-                        WHEN LOWER(TRIM(Circumstance)) LIKE '%lover%' THEN 'lover''s triangle'
-                        WHEN LOWER(TRIM(Circumstance)) LIKE '%undetermined%' THEN 'undetermined'
-                        WHEN LOWER(TRIM(Circumstance)) LIKE '%argument%' THEN 'argument'
-                        WHEN LOWER(TRIM(Circumstance)) LIKE '%robbery%' THEN 'robbery'
-                        WHEN LOWER(TRIM(Circumstance)) LIKE '%brawl%' THEN 'brawl'
-                        WHEN LOWER(TRIM(Circumstance)) LIKE '%motor vehicle%' THEN 'other felony related'
-                        WHEN LOWER(TRIM(Circumstance)) LIKE '%felony%' THEN 'other felony related'
-                        WHEN LOWER(TRIM(Circumstance)) LIKE '%arson%' THEN 'arson'
-                        WHEN LOWER(TRIM(Circumstance)) LIKE '%negligent%' THEN 'negligence'
-                        WHEN LOWER(TRIM(Circumstance)) LIKE '%manslaughter%' THEN 'negligence'
-                        WHEN LOWER(TRIM(Circumstance)) LIKE '%babysitter%' THEN 'child killed by babysitter'
-                        WHEN LOWER(TRIM(Circumstance)) LIKE '%gang%' THEN 'gang killing'
-                        WHEN LOWER(TRIM(Circumstance)) LIKE '%burglary%' THEN 'burglary'
-                        WHEN LOWER(TRIM(Circumstance)) LIKE '%rape%' THEN 'rape'
-                        WHEN LOWER(TRIM(Circumstance)) LIKE '%playing with gun%' THEN 'negligence'
-                        WHEN LOWER(TRIM(Circumstance)) LIKE '%hunting accident%' THEN 'negligence'
-                        WHEN LOWER(TRIM(Circumstance)) LIKE '%institutional%' THEN 'institutional killing'
-                        WHEN LOWER(TRIM(Circumstance)) LIKE '%prostitution%' THEN 'other felony related'
-                        WHEN LOWER(TRIM(Circumstance)) LIKE '%larceny%' THEN 'other felony related'
-                        WHEN LOWER(TRIM(Circumstance)) LIKE '%gambling%' THEN 'other felony related'
-                        WHEN LOWER(TRIM(Circumstance)) LIKE '%sex offense%' THEN 'rape'
-                        WHEN LOWER(TRIM(Circumstance)) LIKE '%police%' THEN 'felon killed by police'
-                        WHEN LOWER(TRIM(Circumstance)) LIKE '%private citizen%' THEN 'other'
-                        WHEN LOWER(TRIM(Circumstance)) LIKE '%other%' THEN 'other'
-                        ELSE 'undetermined'  -- Default to undetermined for unmapped values
-                    END AS circumstance,
-                    'month' AS date_precision,
-                    CASE WHEN YearMonth IS NOT NULL THEN
-                        ROUND(
-                            date_diff('day', DATE '1970-01-01', make_date(CAST(substring(YearMonth, 1, 4) AS BIGINT), CAST(substring(YearMonth, 6, 2) AS BIGINT), 1)) - 1 +
-                            Incident * day(make_date(CAST(substring(YearMonth, 1, 4) AS BIGINT), CAST(substring(YearMonth, 6, 2) AS BIGINT), 1) + INTERVAL 1 MONTH - INTERVAL 1 DAY) /
-                            COUNT(*) OVER (PARTITION BY YearMonth)
-                        )
-                    ELSE NULL END AS midpoint_day,
-                    CAST(substring(YearMonth, 1, 4) AS INTEGER) AS year,
-                    CAST(substring(YearMonth, 1, 4) AS INTEGER) AS year_block,
-                    CAST(substring(YearMonth, 6, 2) AS INTEGER) AS month,
-                    -- NULL AS lat,  -- SHR may not have precise coords; use NULL or default DC
-                    -- NULL AS lon,
-                    2 AS city_id  -- Corresponds to DC (PublicationID of Washi Post)
-                FROM sqldb.shr
-                WHERE State = 'District of Columbia' -- Only DC for now
-                AND Year >= 1977 AND Year <= 1978 -- Limit to 1977-78 for now
+                    *,
+                    midpoint_day AS midpoint_day_block,
+                    year AS year_block
+                FROM (
+                    SELECT
+                        "index" as unique_id,
+                        CASE VicSex WHEN 'Unknown' THEN NULL ELSE lower(VicSex) END as victim_sex,
+                        VicAge as victim_age,
+                        CASE VicRace WHEN 'Unknown' THEN NULL ELSE VicRace END as victim_race,
+                        CASE VicEthnic WHEN 'Unknown' THEN NULL ELSE VicEthnic END as victim_ethnicity,
+                        VicCount+1 as victim_count,
+                        CASE OffSex WHEN 'Unknown' THEN NULL ELSE lower(OffSex) END as offender_sex,
+                        CASE OffAge WHEN 999 THEN NULL ELSE OffAge END as offender_age,
+                        CASE OffRace WHEN 'Unknown' THEN NULL ELSE OffRace END as offender_race,
+                        CASE OffEthnic WHEN 'Unknown' THEN NULL ELSE OffEthnic END as offender_ethnicity,
+                        -- Map SHR Weapon to GPT schema enums
+                        CASE
+                            WHEN LOWER(TRIM(Weapon)) LIKE '%knife%' THEN 'knife'
+                            WHEN LOWER(TRIM(Weapon)) LIKE '%shotgun%' THEN 'shotgun'
+                            WHEN LOWER(TRIM(Weapon)) LIKE '%rifle%' THEN 'rifle'
+                            WHEN LOWER(TRIM(Weapon)) LIKE '%handgun%' THEN 'handgun'
+                            WHEN LOWER(TRIM(Weapon)) LIKE '%firearm%' THEN 'firearm'
+                            WHEN LOWER(TRIM(Weapon)) LIKE '%gun%' THEN 'firearm'
+                            WHEN LOWER(TRIM(Weapon)) LIKE '%blunt%' THEN 'blunt object'
+                            WHEN LOWER(TRIM(Weapon)) LIKE '%personal%' THEN 'personal weapon'
+                            WHEN LOWER(TRIM(Weapon)) LIKE '%fire%' THEN 'fire'
+                            WHEN LOWER(TRIM(Weapon)) LIKE '%strangulation%' THEN 'strangulation'
+                            WHEN LOWER(TRIM(Weapon)) LIKE '%asphyxiation%' THEN 'asphyxiation'
+                            WHEN LOWER(TRIM(Weapon)) LIKE '%drugs%' THEN 'drugs'
+                            WHEN LOWER(TRIM(Weapon)) LIKE '%explosives%' THEN 'explosives'
+                            WHEN LOWER(TRIM(Weapon)) LIKE '%drowning%' THEN 'drowning'
+                            WHEN LOWER(TRIM(Weapon)) LIKE '%poison%' THEN 'poison'
+                            WHEN LOWER(TRIM(Weapon)) LIKE '%pushed%' THEN 'pushed from height'
+                            WHEN LOWER(TRIM(Weapon)) LIKE '%other%' THEN 'other'
+                            WHEN LOWER(TRIM(Weapon)) LIKE '%unknown%' THEN 'unknown'
+                            ELSE 'unknown'  -- Default to unknown for unmapped values
+                        END AS weapon,
+                        -- Map SHR Circumstance to GPT schema enums
+                        CASE
+                            WHEN LOWER(TRIM(Circumstance)) LIKE '%narcotic%' THEN 'narcotics related'
+                            WHEN LOWER(TRIM(Circumstance)) LIKE '%lover%' THEN 'lover''s triangle'
+                            WHEN LOWER(TRIM(Circumstance)) LIKE '%undetermined%' THEN 'undetermined'
+                            WHEN LOWER(TRIM(Circumstance)) LIKE '%argument%' THEN 'argument'
+                            WHEN LOWER(TRIM(Circumstance)) LIKE '%robbery%' THEN 'robbery'
+                            WHEN LOWER(TRIM(Circumstance)) LIKE '%brawl%' THEN 'brawl'
+                            WHEN LOWER(TRIM(Circumstance)) LIKE '%motor vehicle%' THEN 'other felony related'
+                            WHEN LOWER(TRIM(Circumstance)) LIKE '%felony%' THEN 'other felony related'
+                            WHEN LOWER(TRIM(Circumstance)) LIKE '%arson%' THEN 'arson'
+                            WHEN LOWER(TRIM(Circumstance)) LIKE '%negligent%' THEN 'negligence'
+                            WHEN LOWER(TRIM(Circumstance)) LIKE '%manslaughter%' THEN 'negligence'
+                            WHEN LOWER(TRIM(Circumstance)) LIKE '%babysitter%' THEN 'child killed by babysitter'
+                            WHEN LOWER(TRIM(Circumstance)) LIKE '%gang%' THEN 'gang killing'
+                            WHEN LOWER(TRIM(Circumstance)) LIKE '%burglary%' THEN 'burglary'
+                            WHEN LOWER(TRIM(Circumstance)) LIKE '%rape%' THEN 'rape'
+                            WHEN LOWER(TRIM(Circumstance)) LIKE '%playing with gun%' THEN 'negligence'
+                            WHEN LOWER(TRIM(Circumstance)) LIKE '%hunting accident%' THEN 'negligence'
+                            WHEN LOWER(TRIM(Circumstance)) LIKE '%institutional%' THEN 'institutional killing'
+                            WHEN LOWER(TRIM(Circumstance)) LIKE '%prostitution%' THEN 'other felony related'
+                            WHEN LOWER(TRIM(Circumstance)) LIKE '%larceny%' THEN 'other felony related'
+                            WHEN LOWER(TRIM(Circumstance)) LIKE '%gambling%' THEN 'other felony related'
+                            WHEN LOWER(TRIM(Circumstance)) LIKE '%sex offense%' THEN 'rape'
+                            WHEN LOWER(TRIM(Circumstance)) LIKE '%police%' THEN 'felon killed by police'
+                            WHEN LOWER(TRIM(Circumstance)) LIKE '%private citizen%' THEN 'other'
+                            WHEN LOWER(TRIM(Circumstance)) LIKE '%other%' THEN 'other'
+                            ELSE 'undetermined'  -- Default to undetermined for unmapped values
+                        END AS circumstance,
+                        'month' AS date_precision,
+                        CASE WHEN YearMonth IS NOT NULL THEN
+                            ROUND(
+                                date_diff('day', DATE '1970-01-01', make_date(CAST(substring(YearMonth, 1, 4) AS BIGINT), CAST(substring(YearMonth, 6, 2) AS BIGINT), 1)) - 1 +
+                                Incident * day(make_date(CAST(substring(YearMonth, 1, 4) AS BIGINT), CAST(substring(YearMonth, 6, 2) AS BIGINT), 1) + INTERVAL 1 MONTH - INTERVAL 1 DAY) /
+                                COUNT(*) OVER (PARTITION BY YearMonth)
+                            )
+                        ELSE NULL END AS midpoint_day,
+                        CAST(substring(YearMonth, 1, 4) AS INTEGER) AS year,
+                        CAST(substring(YearMonth, 6, 2) AS INTEGER) AS month,
+                        -- NULL AS lat,  -- SHR may not have precise coords; use NULL or default DC
+                        -- NULL AS lon,
+                        2 AS city_id  -- Corresponds to DC (PublicationID of Washi Post)
+                    FROM sqldb.shr
+                    WHERE State = 'District of Columbia' -- Only DC for now
+                    AND Year >= 1977 AND Year <= 1980 -- Limit to 1977-78 for now
+                ) AS shr_rows
                 """
             )
         ) ^
@@ -583,27 +588,32 @@ def match_article_to_shr_victims() -> Run[NextStep]:
                 """
                 CREATE OR REPLACE TABLE article_victims AS
                 SELECT
-                    victim_entity_id AS unique_id,
-                    city_id,
-                    entity_midpoint_day AS midpoint_day,
-                    entity_date_precision AS date_precision,
-                    -- lat_centroid AS lat,
-                    -- lon_centroid AS lon,
-                    extract(year from (DATE '1970-01-01' + to_days(entity_midpoint_day))) AS year,
-                    extract(year from (DATE '1970-01-01' + to_days(entity_midpoint_day))) AS year_block,
-                    extract(month from (DATE '1970-01-01' + to_days(entity_midpoint_day))) AS month,
-                    canonical_age AS victim_age,
-                    canonical_victim_count AS victim_count,
-                    canonical_sex AS victim_sex,
-                    canonical_race AS victim_race,
-                    canonical_ethnicity AS victim_ethnicity,
-                    canonical_offender_age AS offender_age,
-                    canonical_offender_sex AS offender_sex,
-                    canonical_offender_race AS offender_race,
-                    canonical_offender_ethnicity AS offender_ethnicity,
-                    mode_weapon AS weapon,
-                    mode_circumstance AS circumstance
-                FROM victim_entity_reps_new
+                    *,
+                    midpoint_day AS midpoint_day_block,
+                    year AS year_block
+                FROM (
+                    SELECT
+                        victim_entity_id AS unique_id,
+                        city_id,
+                        entity_midpoint_day AS midpoint_day,
+                        entity_date_precision AS date_precision,
+                        -- lat_centroid AS lat,
+                        -- lon_centroid AS lon,
+                        extract(year from (DATE '1970-01-01' + to_days(entity_midpoint_day))) AS year,
+                        extract(month from (DATE '1970-01-01' + to_days(entity_midpoint_day))) AS month,
+                        canonical_age AS victim_age,
+                        canonical_victim_count AS victim_count,
+                        canonical_sex AS victim_sex,
+                        canonical_race AS victim_race,
+                        canonical_ethnicity AS victim_ethnicity,
+                        canonical_offender_age AS offender_age,
+                        canonical_offender_sex AS offender_sex,
+                        canonical_offender_race AS offender_race,
+                        canonical_offender_ethnicity AS offender_ethnicity,
+                        mode_weapon AS weapon,
+                        mode_circumstance AS circumstance
+                    FROM victim_entity_reps_new
+                ) AS article_rows
                 """
             )
         ) ^
@@ -613,7 +623,7 @@ def match_article_to_shr_victims() -> Run[NextStep]:
             settings=shr_linkage_settings,
             predict_threshold=0.01,
             deterministic_rules=SHR_DETERMINISTIC_BLOCKS,
-            deterministic_recall=0.2,
+            deterministic_recall=0.6,
             pairs_out="shr_link_pairs",
             do_cluster=False,
             train_first=True,

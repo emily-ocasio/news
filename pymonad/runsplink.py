@@ -415,7 +415,7 @@ def _run_splink_dedupe_with_conn(
     linker.training.estimate_probability_two_random_records_match(
         list(job.deterministic_rules), recall=job.deterministic_recall
     )
-    linker.training.estimate_u_using_random_sampling(1e6)
+    linker.training.estimate_u_using_random_sampling(1e8)
 
     if job.train_first:
         # Prefer explicit training rule from intent, otherwise fall back
@@ -674,7 +674,7 @@ def _load_splink_model(
             return None
         db_api = DuckDBAPI(connection=con)
         return Linker(input_table, str(model_path), db_api=db_api)
-    except Exception:
+    except Exception: #pylint: disable=W0718
         return None
 
 

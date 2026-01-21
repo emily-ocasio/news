@@ -11,11 +11,25 @@ class BlockComp(StrEnum):
 
     SAME_CITY = "l.city_id = r.city_id"
     MIDPOINT_EXISTS = "l.midpoint_day IS NOT NULL AND r.midpoint_day IS NOT NULL"
+    MIDPOINT_BLOCK_EXISTS = (
+        "l.midpoint_day_block IS NOT NULL AND r.midpoint_day_block IS NOT NULL"
+    )
     MIDPOINT_7MONTH = (
         "floor(l.midpoint_day/213) = floor(r.midpoint_day/213) "
         "AND floor((l.midpoint_day+106)/213) = floor((r.midpoint_day+106)/213)"
     )
+    MIDPOINT_BLOCK_7MONTH = (
+        "floor(l.midpoint_day_block/213) = floor(r.midpoint_day_block/213) "
+        "AND floor((l.midpoint_day_block+106)/213) = "
+        "floor((r.midpoint_day_block+106)/213)"
+    )
+    MIDPOINT_BLOCK_2MONTH = (
+        "floor(l.midpoint_day_block/61) = floor(r.midpoint_day_block/61) "
+        "AND floor((l.midpoint_day_block+30)/61) = "
+        "floor((r.midpoint_day_block+30)/61)"
+    )
     YEAR_BLOCK_1 = "abs(l.year_block - r.year_block) <= 1"
+    EXACT_YEAR_BLOCK = "l.year_block = r.year_block"
     EXACT_YEAR = "l.year = r.year"
     EXACT_YEAR_MONTH = "l.year = r.year AND l.month = r.month"
     EXACT_YEAR_MONTH_DAY = "l.incident_date = r.incident_date"
@@ -26,11 +40,17 @@ class BlockComp(StrEnum):
     SAME_SURNAME_SOUNDEX = "l.victim_surname_soundex = r.victim_surname_soundex"
     SAME_FORENAME_SOUNDEX = "l.victim_forename_soundex = r.victim_forename_soundex"
     SAME_AGE_SEX = "l.victim_age = r.victim_age AND l.victim_sex = r.victim_sex"
+    SAME_OFFENDER_AGE_SEX = (
+        "l.offender_age = r.offender_age AND l.offender_sex = r.offender_sex"
+    )
     AGE_DIFF2_SEX = (
         "abs(l.victim_age - r.victim_age) <= 2 "
         "AND l.victim_sex = r.victim_sex"
     )
     SAME_SEX = 'l.victim_sex = r.victim_sex'
+    SAME_WEAPON = "l.weapon = r.weapon"
+    SAME_CIRCUMSTANCE = "l.circumstance = r.circumstance"
+    FIREARM_HANDGUN = "l.weapon = 'firearm' AND r.weapon = 'handgun'"
     MIDPOINT_30DAYS = "abs(l.midpoint_day - r.midpoint_day) <= 30"
     MIDPOINT_90DAYS = "abs(l.midpoint_day - r.midpoint_day) <= 90"
     DIFFERENT_ARTICLE = "l.exclusion_id <> r.exclusion_id"
@@ -64,6 +84,7 @@ class TrainBlockRule(StrEnum):
     YEAR = _train_block_from_comps(BlockComp.EXACT_YEAR)
     YEAR_MONTH = _train_block_from_comps(BlockComp.EXACT_YEAR_MONTH)
     YEAR_BLOCK_1 = _train_block_from_comps(BlockComp.YEAR_BLOCK_1)
+    EXACT_YEAR_BLOCK = _train_block_from_comps(BlockComp.EXACT_YEAR_BLOCK)
     SAME_NAMES = _train_block_from_comps(BlockComp.SAME_NAMES)
     LOCATION = _train_block_from_comps(BlockComp.LONG_LAT_EXISTS,
                                        BlockComp.CLOSE_LONG_LAT)
@@ -71,9 +92,40 @@ class TrainBlockRule(StrEnum):
     AGE_DIFF2_SEX = _train_block_from_comps(BlockComp.AGE_DIFF2_SEX)
     MIDPOINT_7MONTH = _train_block_from_comps(BlockComp.MIDPOINT_EXISTS,
                                               BlockComp.MIDPOINT_7MONTH)
+    MIDPOINT_BLOCK_7MONTH = _train_block_from_comps(
+        BlockComp.MIDPOINT_BLOCK_EXISTS,
+        BlockComp.MIDPOINT_BLOCK_7MONTH
+    )
+    MIDPOINT_BLOCK_2MONTH = _train_block_from_comps(
+        BlockComp.MIDPOINT_BLOCK_EXISTS,
+        BlockComp.MIDPOINT_BLOCK_2MONTH
+    )
     SUMMARY = _train_block_from_comps(BlockComp.CLOSE_SUMMARY)
     MONTH_AGE_SEX = _train_block_from_comps(
         BlockComp.EXACT_YEAR_MONTH,
+        BlockComp.SAME_AGE_SEX
+    )
+    MONTH_AGE_SEX_WEAPON = _train_block_from_comps(
+        BlockComp.EXACT_YEAR_MONTH,
+        BlockComp.SAME_AGE_SEX,
+        BlockComp.SAME_WEAPON
+    )
+    MONTH_AGE_SEX_FIREARM_HANDGUN = _train_block_from_comps(
+        BlockComp.EXACT_YEAR_MONTH,
+        BlockComp.SAME_AGE_SEX,
+        BlockComp.FIREARM_HANDGUN
+    )
+    YEAR_CIRCUMSTANCE = _train_block_from_comps(
+        BlockComp.EXACT_YEAR,
+        BlockComp.SAME_CIRCUMSTANCE
+    )
+    YEAR_OFFENDER_AGE_SEX = _train_block_from_comps(
+        BlockComp.EXACT_YEAR,
+        BlockComp.EXACT_YEAR_MONTH,
+        BlockComp.SAME_OFFENDER_AGE_SEX
+    )
+    YEAR_AGE_SEX = _train_block_from_comps(
+        BlockComp.EXACT_YEAR,
         BlockComp.SAME_AGE_SEX
     )
 
@@ -144,9 +196,12 @@ SHR_OVERALL_BLOCKS = [
 ]
 
 SHR_DETERMINISTIC_BLOCKS = [
-    TrainBlockRule.MONTH_AGE_SEX
+    TrainBlockRule.MONTH_AGE_SEX_WEAPON,
+    TrainBlockRule.MONTH_AGE_SEX_FIREARM_HANDGUN
 ]
 
 SHR_TRAINING_BLOCKS = [
-    TrainBlockRule.YEAR_BLOCK_1
+    TrainBlockRule.MIDPOINT_BLOCK_2MONTH,
+    TrainBlockRule.AGE_SEX,
+    TrainBlockRule.YEAR_OFFENDER_AGE_SEX,
 ]
