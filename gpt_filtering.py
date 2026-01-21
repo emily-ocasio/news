@@ -10,7 +10,7 @@ import re
 from appstate import user_name
 from pymonad import Run, with_namespace, to_prompts, Namespace, EnvKey, \
     PromptKey, pure, put_line, sql_query, SQL, SQLParams, Right, \
-    GPTModel, with_models, response_with_gpt_prompt, \
+    Left, Either, StopProcessing, GPTModel, with_models, response_with_gpt_prompt, \
     to_gpt_tuple, response_message, to_json, rethrow, from_either, sql_exec, \
     GPTResponseTuple, GPTFullResponse, String, input_number, throw, \
     ErrorPayload, Tuple, resolve_prompt_template, GPTPromptTemplate, wal, ask, \
@@ -247,7 +247,8 @@ def process_special_cases(special_failures: Array[ArticleFailures]) \
     Process special case article failures.
     """
     def process_all_special_cases() \
-        -> Run[V[ItemsFailures[ArticleFailures], Array[Unit]]]:
+        -> Run[Either[StopProcessing[ArticleFailures, Unit],
+                      V[ItemsFailures[ArticleFailures], Array[Unit]]]]:
         validators: Array[Validator[ArticleFailures]] = Array(())
         def happy_path(af: ArticleFailures) -> Run[Unit]:
             special_case_details = af.details.filter(is_special_case_detail)
@@ -278,7 +279,11 @@ def process_special_cases(special_failures: Array[ArticleFailures]) \
     return \
         put_line(f"{special_failures.length} " \
                 "special case article(s) skipped GPT filtering.\n") ^ \
-        process_all_special_cases() ^ \
+        process_all_special_cases() >> (lambda result:
+            put_line("Special case processing stopped by user.\n") ^ pure(unit)
+            if isinstance(result, Left)
+            else pure(unit)
+        ) ^ \
         pure(unit)
 
 def after_processing(v_process: V[Array[ArticleFailures], Array[Article]]) \
@@ -319,6 +324,28 @@ def render_as_failure(err: ErrorPayload) -> FailureDetails:
         s=ArticleErrInfo(f"Exception: {err}")
     ),))
 
+def after_processing_either(articles: Articles,
+                            result: Either[
+                                StopProcessing[Article, Article],
+                                V[Array[ArticleFailures], Array[Article]]
+                            ]) -> Run[NextStep]:
+    match result:
+        case Left(stop):
+            processed = stop.acc.processed
+            total = len(articles)
+            failures = stop.acc.failures.length
+            return \
+                put_line(
+                    "Processing stopped by user after "
+                    f"{processed} of {total} articles.\n"
+                ) ^ \
+                put_line(
+                    f"{failures} article(s) recorded failures before stop.\n"
+                ) ^ \
+                pure(NextStep.CONTINUE)
+        case Right(v_process):
+            return after_processing(v_process)
+
 def process_all_articles(articles: Articles) -> Run[NextStep]:
     """
     Process all articles to be filtered using applicative validation.
@@ -328,7 +355,7 @@ def process_all_articles(articles: Articles) -> Run[NextStep]:
         render=render_as_failure,
         happy=filter_single_article,
         items=articles
-    ) >> after_processing
+    ) >> (lambda result: after_processing_either(articles, result))
 
 def second_filter() -> Run[NextStep]:
     """

@@ -100,5 +100,6 @@ from .validate_run import (
     ItemFailures,
     validate_item,
     process_all,
+    StopProcessing,
     ItemsFailures,
 )

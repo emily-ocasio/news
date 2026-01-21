@@ -29,7 +29,11 @@ from pymonad import (
     Unit,
     unit,
     Array,
-    sql_script
+    sql_script,
+    Left,
+    Right,
+    Either,
+    StopProcessing
 )
 from incidents_setup import CREATE_VICTIMS_CACHED_ENH_SQL
 from menuprompts import NextStep
@@ -248,11 +252,20 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
             happy=happy,
             items=addr_items,
             unhappy=unhappy,
-        ) >> (
-            lambda v: (  # summary logging if any failures
-                put_line(f"[GEO] {v.validity.l.length} address failures accumulated.")
+        ) >> (lambda result:
+            (
+                put_line(
+                    "[GEO] Geocoding stopped by user after "
+                    f"{result.l.acc.processed} of {addr_items.length} addresses.\n"
+                ) ^ pure(None)
+            )
+            if isinstance(result, Left)
+            else (
+                put_line(
+                    f"[GEO] {result.r.validity.l.length} address failures accumulated."
+                )
                 ^ pure(None)
-                if isinstance(v.validity, Invalid)
+                if isinstance(result.r.validity, Invalid)
                 else pure(None)
             )
         )

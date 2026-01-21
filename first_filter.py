@@ -4,7 +4,7 @@ First filtering of articles using automatic regex classification
 from pymonad import Run, with_namespace, to_prompts, Namespace, PromptKey, \
     pure, put_line, sql_query, SQL, SQLParams, sql_exec, input_number, throw, \
     ErrorPayload, process_all, Array, V, Valid, Invalid, \
-    Validator, String, FailureDetail
+    Validator, String, FailureDetail, Left, Right, Either, StopProcessing
 from menuprompts import NextStep
 from article import Article, Articles, ArticleAppError, from_rows
 from calculations import articles_to_classify_sql, classify_sql, cleanup_sql
@@ -84,6 +84,28 @@ def after_processing(v_process: V[Array[ArticleFailures], Array[Article]]) \
                 put_line("[A] Dates cleanup applied.\n") ^ \
                 pure(NextStep.CONTINUE)
 
+def after_processing_either(articles: Articles,
+                            result: Either[
+                                StopProcessing[Article, Article],
+                                V[Array[ArticleFailures], Array[Article]]
+                            ]) -> Run[NextStep]:
+    match result:
+        case Left(stop):
+            processed = stop.acc.processed
+            total = len(articles)
+            failures = stop.acc.failures.length
+            return \
+                put_line(
+                    "Processing stopped by user after "
+                    f"{processed} of {total} articles.\n"
+                ) ^ \
+                put_line(
+                    f"{failures} article(s) recorded failures before stop.\n"
+                ) ^ \
+                pure(NextStep.CONTINUE)
+        case Right(v_process):
+            return after_processing(v_process)
+
 def process_all_articles(articles: Articles) -> Run[NextStep]:
     """
     Process all articles for auto-classification using applicative validation.
@@ -94,7 +116,7 @@ def process_all_articles(articles: Articles) -> Run[NextStep]:
         render=render_as_failure,
         happy=classify_single_article,
         items=articles
-    ) >> after_processing
+    ) >> (lambda result: after_processing_either(articles, result))
 
 def first_filter() -> Run[NextStep]:
     """

@@ -7,12 +7,12 @@ from collections.abc import Callable
 from typing import TypeVar
 
 from .array import Array
-from .run import Run, ErrorPayload, run_except
+from .run import Run, ErrorPayload, run_except, foldm_either_loop_bind, UserAbort
 from .semigroup import Semigroup
 from .either import Either, Left, Right
 from .string import String
 from .monad import Unit, unit
-from .traverse import array_sequence, array_traverse_run
+from .traverse import array_traverse_run
 from .validation import V, Valid, Invalid
 
 S = TypeVar('S')
@@ -48,6 +48,23 @@ type ItemsFailures[S] = Array[ItemFailures[S]] # All failures for many items
 # Even if only one failure, it is in an array to allow accumulation
 # If no failures, validator returns Valid(Unit) in Run context
 type Validator[S] = Callable[[S], Run[V[FailureDetails[S], Unit]]]
+
+@dataclass(frozen=True)
+class ProcessAllAcc[S, T]:
+    """
+    Accumulator for process_all fold.
+    """
+    results: Array[T]
+    failures: ItemsFailures[S]
+    processed: int
+
+@dataclass(frozen=True)
+class StopProcessing[S, T]:
+    """
+    Marker for short-circuiting process_all.
+    """
+    acc: ProcessAllAcc[S, T]
+    reason: ErrorPayload
 
 def no_op(_: ErrorPayload) -> Run[Unit]:
     """
@@ -101,44 +118,89 @@ def process_all(validators: Array[Validator[S]],
                 happy: Callable[[S], Run[T]],
                 items: Array[S],
                 unhappy: Callable[[ErrorPayload], Run[Unit]] = no_op ) \
-                -> Run[V[ItemsFailures[S], Array[T]]]:
+                -> Run[Either[StopProcessing[S, T],
+                              V[ItemsFailures[S], Array[T]]]]:
     """
     Given array of items, perform effectful validation on each,
     and if validations pass, perform a happy path action.
     Keep trying each subsequent item even if some fail validation or 
     final action.
     Collect all failures (validation or happy-path) using applicative V
+    Short-circuit with StopProcessing when a user-initiated abort is detected.
     """
 
-    def run_happy_catching(item: S) -> Run[V[ItemsFailures[S], T]]:
-        def catch_run_exceptions(result: Either[ErrorPayload, T]) \
-            -> Run[V[ItemsFailures, T]]:
-            match result:
-                case Right(r):
-                    # No run exception
-                    return Run.pure(V.pure(r))
-                case Left(err):
-                    # Run unhappy handler
-                    # Re-render run exception into item failure
-                    return \
-                        unhappy(err) ^ \
-                        Run.pure(
-                        V.invalid(Array((ItemFailures(item, render(err)),))))
-        return run_except(happy(item)) >> catch_run_exceptions
-    def process_validation(v_item: V[ItemsFailures[S], S]) \
-        -> Run[V[ItemsFailures[S], T]]:
-        # Run the happy path if validations pass
+    def acc_init() -> ProcessAllAcc[S, T]:
+        return ProcessAllAcc(Array.mempty(), Array.mempty(), 0)
+
+    def acc_with_result(acc: ProcessAllAcc[S, T], result: T) \
+        -> ProcessAllAcc[S, T]:
+        return ProcessAllAcc(
+            Array.snoc(acc.results, result),
+            acc.failures,
+            acc.processed + 1
+        )
+
+    def acc_with_failures(acc: ProcessAllAcc[S, T],
+                          failures: ItemsFailures[S]) \
+        -> ProcessAllAcc[S, T]:
+        return ProcessAllAcc(
+            acc.results,
+            acc.failures.append(failures),
+            acc.processed + 1
+        )
+
+    def acc_with_run_failure(acc: ProcessAllAcc[S, T],
+                             item: S,
+                             err: ErrorPayload) \
+        -> ProcessAllAcc[S, T]:
+        return ProcessAllAcc(
+            acc.results,
+            Array.snoc(acc.failures, ItemFailures(item, render(err))),
+            acc.processed + 1
+        )
+
+    def handle_run_result(acc: ProcessAllAcc[S, T],
+                          item: S,
+                          result: Either[ErrorPayload, T]) \
+        -> Run[Either[StopProcessing[S, T], ProcessAllAcc[S, T]]]:
+        match result:
+            case Right(r):
+                return Run.pure(Right(acc_with_result(acc, r)))
+            case Left(err):
+                if isinstance(err.app, UserAbort):
+                    return Run.pure(Left(StopProcessing(acc, err)))
+                return \
+                    unhappy(err) ^ \
+                    Run.pure(Right.pure(acc_with_run_failure(acc, item, err)))
+
+    def handle_validation(acc: ProcessAllAcc[S, T],
+                          item: S,
+                          v_item: V[ItemsFailures[S], S]) \
+        -> Run[Either[StopProcessing[S, T], ProcessAllAcc[S, T]]]:
         match v_item.validity:
             case Invalid(failures):
-                return Run.pure(V.invalid(failures))
-            case Valid(item):
-                return run_happy_catching(item)
-    def process_one(item: S) -> Run[V[ItemsFailures[S], T]]:
-        return \
-            validate_item(validators, item) >> process_validation
-    def combine_results(vs: Array[V[ItemsFailures[S], T]]) \
-        -> Run[V[ItemsFailures[S], Array[T]]]:
-        # Combine all the results into a single array
-        return Run.pure(array_sequence(vs))
-    return (array_traverse_run(items, process_one) >> combine_results) \
-        if items.length > 0 else Run.pure(V.pure(Array(())))
+                return Run.pure(Right(acc_with_failures(acc, failures)))
+            case Valid(valid_item):
+                return run_except(happy(valid_item)) >> \
+                    (lambda ei: handle_run_result(acc, item, ei))
+
+    def process_one(acc: ProcessAllAcc[S, T],
+                    item: S) -> Run[Either[StopProcessing[S, T],
+                                          ProcessAllAcc[S, T]]]:
+        return validate_item(validators, item) >> \
+            (lambda v_item: handle_validation(acc, item, v_item))
+
+    def to_v(acc: ProcessAllAcc[S, T]) \
+        -> V[ItemsFailures[S], Array[T]]:
+        if acc.failures.length > 0:
+            return V.invalid(acc.failures)
+        return V.pure(acc.results)
+
+    if items.length == 0:
+        return Run.pure(Right(V.pure(Array(()))))
+
+    return \
+        foldm_either_loop_bind(items, acc_init(), process_one) >> \
+        (lambda ei: Run.pure(
+            Left(ei.l) if isinstance(ei, Left) else Right(to_v(ei.r))
+        ))

@@ -277,6 +277,10 @@ DATE_COMP_SHR = cl.CustomComparison(
             )
         ).to_dict(),
         ComparisonLevel(
+            "exact year and month",
+            ComparisonComp.EXACT_YEAR_MONTH.value
+        ).to_dict(),
+        ComparisonLevel(
             "midpoint within 20 days",
             _clause_from_comps(
                 ComparisonComp.MIDPOINT_EXISTS,
@@ -284,18 +288,14 @@ DATE_COMP_SHR = cl.CustomComparison(
                 ComparisonComp.MONTH_PRECISION
             )
         ).to_dict(),
-        ComparisonLevel(
-            "exact year and month",
-            ComparisonComp.EXACT_YEAR_MONTH.value
-        ).to_dict(),
-        ComparisonLevel(
-            "midpoint within 30 days",
-            _clause_from_comps(
-                ComparisonComp.MIDPOINT_EXISTS,
-                ComparisonComp.MIDPOINT_30DAYS,
-                ComparisonComp.MONTH_PRECISION
-            )
-        ).to_dict(),
+        # ComparisonLevel(
+        #     "midpoint within 30 days",
+        #     _clause_from_comps(
+        #         ComparisonComp.MIDPOINT_EXISTS,
+        #         ComparisonComp.MIDPOINT_30DAYS,
+        #         ComparisonComp.MONTH_PRECISION
+        #     )
+        # ).to_dict(),
         ComparisonLevel(
             "midpoint within 90 days",
             _clause_from_comps(

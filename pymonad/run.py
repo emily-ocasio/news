@@ -109,6 +109,12 @@ class _Thrown(Exception):
     def __init__(self, payload: ErrorPayload[Any]):
         self.payload: ErrorPayload[Any] = payload
 
+
+class UserAbort(Exception):
+    """
+    Raised to signal user-initiated cancellation without a traceback.
+    """
+
 # ===== Run carrier =====
 
 SplinkState = dict[Any, Any]
@@ -364,6 +370,8 @@ def run_except(prog: Run[A]) -> Run[Either[ErrorPayload, A]]:
             return Right(inner._step(inner))
         except _Thrown as te:
             return Left(te.payload)
+        except UserAbort as ex:
+            return Left(ErrorPayload("", ex))
         except Exception as ex: # pylint: disable=broad-except
             tb_exc = traceback.TracebackException.from_exception(ex)
             tb_str = ''.join(tb_exc.format())

@@ -21,7 +21,7 @@ from .environment import PromptKey, Environment, EnvKey, all_prompts
 from .openai import GPTModel, GPTPrompt, GPTFullResponse, GPTResponseTuple, \
     GPTPromptTemplate
 from .run import ErrorPayload, throw, Run, _unhandled, ask, local, pure, \
-    put_line
+    put_line, UserAbort
 
 A = TypeVar('A')
 P = TypeVar('P', bound=BaseModel)
@@ -48,6 +48,8 @@ def _with_elapsed_timer(fn: Callable[[], A]) -> A:
     thread.start()
     try:
         return fn()
+    except KeyboardInterrupt as ex:
+        raise UserAbort() from ex
     finally:
         stop.set()
         thread.join()
