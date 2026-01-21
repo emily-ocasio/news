@@ -663,6 +663,21 @@ def articles_to_filter_sql() -> str:
         LIMIT ?
     """
 
+def articles_ready_for_filter_counts_sql() -> str:
+    """
+    SQL statement to return counts of articles ready for filtering
+    grouped by publication year.
+    """
+    return """
+        SELECT SUBSTR(PubDate, 1, 4) AS PubYear, COUNT(*) AS ReadyCount
+        FROM articles
+        WHERE Dataset = 'CLASS_WP'
+        AND AutoClass = 'M'
+        AND gptClass IS NULL
+        GROUP BY PubYear
+        ORDER BY PubYear
+    """
+
 def articles_to_extract_sql() -> str:
     """
     SQL statement to return articles to extract based on a limit
@@ -677,6 +692,21 @@ def articles_to_extract_sql() -> str:
         AND gptClass IS 'M_PRELIM'
         ORDER BY PubDate
         LIMIT ?
+    """
+
+def articles_ready_for_extract_counts_sql() -> str:
+    """
+    SQL statement to return counts of articles ready for extraction
+    grouped by publication year.
+    """
+    return """
+        SELECT SUBSTR(PubDate, 1, 4) AS PubYear, COUNT(*) AS ReadyCount
+        FROM articles
+        WHERE Dataset = 'CLASS_WP'
+        AND AutoClass = 'M'
+        AND gptClass IS 'M_PRELIM'
+        GROUP BY PubYear
+        ORDER BY PubYear
     """
 
 def articles_by_victim_sql() -> str:

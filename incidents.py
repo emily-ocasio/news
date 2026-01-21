@@ -14,7 +14,7 @@ from pymonad import Run, with_namespace, to_prompts, Namespace, EnvKey, \
 from menuprompts import NextStep
 from article import Article, Articles, ArticleAppError, from_rows
 from calculations import articles_to_extract_sql, \
-    gpt_victims_sql
+    articles_ready_for_extract_counts_sql, gpt_victims_sql
 from gpt_filtering import render_as_failure, save_gpt_fn, \
     save_article_class, ArticleClassTuple, _to_full, \
     print_gpt_response, GPTFullKreisli
@@ -49,6 +49,29 @@ def input_number_to_extract() -> Run[int]:
             pure(num)
     return \
         input_number(PromptKey("extractnumber")) >> check_if_zero >> after_input
+
+def retrieve_extract_counts() -> Run[Array]:
+    """
+    Retrieve counts of articles ready for extraction grouped by year.
+    """
+    return sql_query(SQL(articles_ready_for_extract_counts_sql()))
+
+def display_extract_counts(rows: Array) -> Run[Unit]:
+    """
+    Display grouped counts before asking how many records to process.
+    """
+    if len(rows) == 0:
+        return put_line(
+            "No records ready for extraction (gptClass = M_PRELIM).\n"
+        ) ^ pure(unit)
+    lines = "\n".join(
+        f"{row['PubYear']}: {row['ReadyCount']}"
+        for row in rows
+    )
+    return put_line(
+        "Ready for extraction (gptClass = M_PRELIM) by year:\n"
+        f"{lines}\n"
+    ) ^ pure(unit)
 
 def retrieve_articles(num: int) -> Run[Articles]:
     """
@@ -223,7 +246,9 @@ def gpt_incidents() -> Run[NextStep]:
     """
     def _extract() -> Run[NextStep]:
         return \
-            input_number_to_extract() >> \
+            retrieve_extract_counts() >> \
+            display_extract_counts >> \
+            (lambda _: input_number_to_extract()) >> \
             retrieve_articles >> \
             process_all_articles
 

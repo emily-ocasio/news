@@ -18,7 +18,8 @@ from pymonad import Run, with_namespace, to_prompts, Namespace, EnvKey, \
     ItemsFailures, FailureDetails, Valid, Invalid, Validator
 from menuprompts import NextStep
 from article import Article, Articles, ArticleAppError, from_rows
-from calculations import articles_to_filter_sql, gpt_homicide_class_sql, \
+from calculations import articles_to_filter_sql, \
+    articles_ready_for_filter_counts_sql, gpt_homicide_class_sql, \
     insert_gptresults_sql
 from state import WashingtonPostArticleHomicideClassification
 from validate import ArticleValidator, ArticleFailureDetail, \
@@ -67,6 +68,29 @@ def input_number_to_filter() -> Run[int]:
             pure(num)
     return \
         input_number(PromptKey("filternumber")) >> check_if_zero >> after_input
+
+def retrieve_filter_counts() -> Run[Array]:
+    """
+    Retrieve counts of articles ready for filtering grouped by year.
+    """
+    return sql_query(SQL(articles_ready_for_filter_counts_sql()))
+
+def display_filter_counts(rows: Array) -> Run[Unit]:
+    """
+    Display grouped counts before asking how many records to process.
+    """
+    if len(rows) == 0:
+        return put_line(
+            "No records ready for filtering (gptClass IS NULL).\n"
+        ) ^ pure(unit)
+    lines = "\n".join(
+        f"{row['PubYear']}: {row['ReadyCount']}"
+        for row in rows
+    )
+    return put_line(
+        "Ready for filtering (AutoClass = M, gptClass IS NULL) by year:\n"
+        f"{lines}\n"
+    ) ^ pure(unit)
 
 def retrieve_articles(num: int) -> Run[Articles]:
     """
@@ -364,7 +388,9 @@ def second_filter() -> Run[NextStep]:
     """
     def _second_filter() -> Run[NextStep]:
         return \
-            input_number_to_filter() >> \
+            retrieve_filter_counts() >> \
+            display_filter_counts >> \
+            (lambda _: input_number_to_filter()) >> \
             retrieve_articles >> \
             process_all_articles
 
