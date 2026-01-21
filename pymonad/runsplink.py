@@ -360,6 +360,8 @@ def _run_splink_visualize(job: SplinkVisualizeJob) -> None:
 
     chart = linker.visualisations.match_weights_chart()
     chart.show()  # type: ignore
+    chart = linker.visualisations.m_u_parameters_chart()
+    chart.show()  # type: ignore
 
     if link_type == "dedupe_only":
         print("\nGenerating constrained clusters with article exclusion…")
