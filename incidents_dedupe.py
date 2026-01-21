@@ -72,7 +72,7 @@ def _dedupe_named_victims(_: Unit) -> Run[Unit]:
         input_table="victims_named",
         settings=_settings_for_victim_dedupe(),
         predict_threshold=0.1,
-        cluster_threshold=0.65,
+        cluster_threshold=0.5,
         pairs_out="victim_pairs",
         clusters_out="victim_clusters",
         train_first=True,
