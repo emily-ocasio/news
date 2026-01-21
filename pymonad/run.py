@@ -7,9 +7,9 @@ from __future__ import annotations
 # pylint: disable=E1101
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import traceback
-from typing import cast, Any, TypeVar
+from typing import cast, Any, Generic, TypeVar
 
 from .applicative import Applicative
 from .array import Array
@@ -71,6 +71,19 @@ class Put:
 
 
 @dataclass(frozen=True)
+class GetSplinkLinker:
+    """Splink linker get intent."""
+    key: Any
+
+
+@dataclass(frozen=True)
+class PutSplinkLinker:
+    """Splink linker put intent."""
+    key: Any
+    linker: Any
+
+
+@dataclass(frozen=True)
 class Throw:
     """Except.throw intent (payload is user data)."""
     e: ErrorPayload[Any]
@@ -91,6 +104,21 @@ class _Thrown(Exception):
         self.payload: ErrorPayload[Any] = payload
 
 # ===== Run carrier =====
+
+SplinkState = dict[Any, Any]
+
+
+@dataclass(frozen=True)
+class StateRegistry(Generic[M]):
+    """
+    Registry for application state and Splink-related state.
+    """
+    app_state: M
+    splink_state: SplinkState
+
+    @classmethod
+    def from_state(cls, app_state: M) -> "StateRegistry[M]":
+        return cls(app_state=app_state, splink_state={})
 
 
 @dataclass(slots=True, frozen=True)
@@ -200,6 +228,19 @@ def put(s: Any) -> Run[None]:
     return Run(lambda self: self._perform(Put(s), self), _unhandled)
 
 
+def get_splink_linker(key: Any) -> Run[Any]:
+    """Create a Run action to get a Splink linker by key."""
+    return Run(lambda self: self._perform(GetSplinkLinker(key), self), _unhandled)
+
+
+def put_splink_linker(key: Any, linker: Any) -> Run[None]:
+    """Create a Run action to set a Splink linker by key."""
+    return Run(
+        lambda self: self._perform(PutSplinkLinker(key, linker), self),
+        _unhandled,
+    )
+
+
 def throw(e: Any) -> Run[Any]:
     """Create a Run action to throw an error (Except effect)."""
     return Run(lambda self: self._perform(Throw(e), self), _unhandled)
@@ -254,28 +295,38 @@ def local(modify: Callable[[Environment], Environment], prog: "Run[A]")\
         run_reader(modify(env), prog)
         )
 
-def run_state(initial: M, prog: Run[A]) -> Run[Tuple[M, A]]:
+def run_state(initial: StateRegistry[M] | M, prog: Run[A]) \
+    -> Run[Tuple[StateRegistry[M], A]]:
     """
     Interprets State intents by managing and updating the state
         throughout the computation.
-    Returns a Run containing a tuple of the final state and the result.
+    Returns a Run containing a tuple of the final StateRegistry and the result.
     """
-    def step(self_run: Run[Any]) -> Tuple[M, A]:
+    def step(self_run: Run[Any]) -> Tuple[StateRegistry[M], A]:
         parent = self_run._perform
-        box = {"s": initial}
+        registry: StateRegistry[M] = initial if isinstance(initial, StateRegistry) \
+            else StateRegistry.from_state(initial)
 
         def perform(intent, current):
+            nonlocal registry
             match intent:
                 case Get():
-                    return box["s"]
+                    return registry.app_state
                 case Put(s):
-                    box["s"] = s
+                    registry = replace(registry, app_state=s)
+                    return None
+                case GetSplinkLinker(key):
+                    return registry.splink_state.get(key)
+                case PutSplinkLinker(key, linker):
+                    updated_splink = dict(registry.splink_state)
+                    updated_splink[key] = linker
+                    registry = replace(registry, splink_state=updated_splink)
                     return None
                 case _:
                     return parent(intent, current)
         inner = Run(prog._step, perform)
         v = inner._step(inner)
-        return Tuple(box["s"], v)
+        return Tuple(registry, v)
     return Run(step, lambda i, c: c._perform(i, c))
 
 

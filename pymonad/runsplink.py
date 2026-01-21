@@ -15,7 +15,7 @@ from splink.internals.blocking_rule_creator import BlockingRuleCreator
 
 # pylint:disable=W0212
 from .environment import DbBackend, Environment
-from .run import Run, ask, throw, ErrorPayload
+from .run import Run, ask, throw, ErrorPayload, put_splink_linker
 
 A = TypeVar("A")
 
@@ -44,6 +44,7 @@ class SplinkDedupeJob:
     em_max_runs: int = 3
     em_min_runs: int = 1
     em_stop_delta: float = 0.002
+    splink_key: Any = None
 
 
 @dataclass(frozen=True)
@@ -245,7 +246,8 @@ def splink_dedupe_job(
     unique_pairs_table: str = "unique_pairs",
     em_max_runs: int = 3,
     em_min_runs: int = 1,
-    em_stop_delta: float = 0.002
+    em_stop_delta: float = 0.002,
+    splink_key: Any = None
 
 
 ) -> Run[tuple[Any, str, str]]:
@@ -273,6 +275,7 @@ def splink_dedupe_job(
                 em_max_runs,
                 em_min_runs,
                 em_stop_delta,
+                splink_key,
             ),
             self,
         ),
@@ -645,6 +648,7 @@ def run_splink(prog: Run[A]) -> Run[A]:
                     out = _run_splink_dedupe_with_conn(intent, con)
                     global _SPLINK_LINKER #pylint: disable=W0603
                     _SPLINK_LINKER = out[0]
+                    put_splink_linker(intent.splink_key, out[0])._step(current)
                     return out
                 case SplinkVisualizeJob():
                     return _run_splink_visualize(intent)

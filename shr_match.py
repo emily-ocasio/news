@@ -3,6 +3,7 @@ Match article victim entities to SHR victims using Splink linkage.
 """
 import splink.internals.comparison_library as cl
 
+from splink_types import SplinkType
 from pymonad import (
     Run,
     SQL,
@@ -619,7 +620,8 @@ def match_article_to_shr_victims() -> Run[NextStep]:
             training_blocking_rules=SHR_TRAINING_BLOCKS,
             unique_matching=True,
             unique_pairs_table="shr_max_weight_matches",
-            visualize=False
+            visualize=False,
+            splink_key=SplinkType.SHR,
         ) >>
         (lambda pairs_clusters: put_line(
             f"Linkage complete. Pairs table: {pairs_clusters[1]}, Clusters table: {pairs_clusters[2]}"

@@ -4,6 +4,7 @@ Main menu constructor
 
 from enum import Enum
 from pymonad import Run, Tuple, pure, put_line
+from pymonad.run import StateRegistry
 from appstate import AppState
 from choose import initial_prompts as mainmenu_prompts
 from menuprompts import MenuChoice, MenuPrompts, input_from_menu, NextStep
@@ -47,7 +48,7 @@ class MainChoice(Enum):
     QUIT = MenuChoice("Q")
 
 
-class AfterTick(Tuple[AppState, NextStep]):
+class AfterTick(Tuple[StateRegistry[AppState], NextStep]):
     """
     Represents the state and the next step after the tick.
     """
@@ -57,7 +58,7 @@ class AfterTick(Tuple[AppState, NextStep]):
         return cls(fst, snd)
 
     @property
-    def state(self) -> AppState:
+    def state(self) -> StateRegistry[AppState]:
         """
         State of the application
         """

@@ -22,6 +22,7 @@ from comparison import (
     SUMMARY_COMP
 )
 from menuprompts import NextStep
+from splink_types import SplinkType
 from pymonad import (
     Run,
     SQL,
@@ -79,7 +80,8 @@ def _dedupe_named_victims(_: Unit) -> Run[Unit]:
         training_blocking_rules=NAMED_VICTIM_BLOCKS_FOR_TRAINING,
         deterministic_rules=NAMED_VICTIM_DETERMINISTIC_BLOCKS,
         deterministic_recall=0.8,
-        visualize=False
+        visualize=False,
+        splink_key=SplinkType.DEDUP,
     ) >> (
         lambda outnames: put_line(
             f"[D] Wrote {outnames[1]} and {outnames[2]} in DuckDB."

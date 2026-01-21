@@ -40,6 +40,7 @@ from .run import (
     throw,
     rethrow,
     run_state,
+    StateRegistry,
     run_except,
     run_base_effect,
     run_reader,

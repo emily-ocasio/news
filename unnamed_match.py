@@ -24,6 +24,7 @@ from comparison import (
 )
 
 from menuprompts import NextStep
+from splink_types import SplinkType
 from pymonad import (
     Environment,
     Run,
@@ -366,7 +367,8 @@ def _link_orphans_to_entities(env: Environment) -> Run[Unit]:
         training_blocking_rules=ORPHAN_TRAINING_BLOCKS,
         do_cluster=False,
         visualize=False,
-        em_max_runs=5
+        em_max_runs=5,
+        splink_key=SplinkType.ORPHAN,
     ) >> (
         lambda outnames: put_line(f"[D] Wrote {outnames[1]} in DuckDB.")
     ) ^ pure(unit)

@@ -8,7 +8,8 @@ import duckdb
 from openai import OpenAI
 from pymonad import Run, run_reader, run_state, run_base_effect, run_except, \
     run_sql, run_openai, run_splink, Environment, Namespace, ErrorPayload, \
-    REAL_DISPATCH, Left, Right, Either, Tuple, put_line, pure, GPTModel, DbBackend
+    REAL_DISPATCH, Left, Right, Either, Tuple, put_line, pure, GPTModel, DbBackend, \
+    StateRegistry
 from pymonad import runsplink
 from article import ArticleAppError
 from runinitial import initialize_program
@@ -61,7 +62,8 @@ def main() -> None:
         "extras": {}
     }
     try:
-        prog = run_reader(env, run_splink(run_state(AppState.mempty(), \
+        prog = run_reader(env, run_splink(run_state(StateRegistry.from_state(
+                AppState.mempty()), \
                 run_except(initialize_program()))))
         run_result = run_base_effect(REAL_DISPATCH, prog)
         prev_state = run_result.fst
@@ -73,11 +75,11 @@ def main() -> None:
 # run_openai, run_base_effect
 # and your AppState dataclass plus intents (console/db/openai)
 
-def build_tick(env: Environment, state0: AppState)\
+def build_tick(env: Environment, state0: StateRegistry[AppState])\
     -> Run[AfterTick]:
     """
     Returns Run[MainResult]
-    MainResult is Tuple[AppState, MainChoice]
+    MainResult is Tuple[StateRegistry[AppState], MainChoice]
     """
     tick = main_menu_tick()  # Run[NextAction] inside your controller layer
 
@@ -88,17 +90,17 @@ def build_tick(env: Environment, state0: AppState)\
                     run_sql(
                         run_openai(env["openai_client"],
                             run_splink(
-                                run_state(state0, tick) # Run[Either e (AppState, NextAction)]
-                            )
+                            run_state(state0, tick)
                         )
                     )
                 )
             )
+            )
 
-    # Map Either to always produce AfterTick = (AppState, NextStep),
+    # Map Either to always produce AfterTick = (StateRegistry[AppState], NextStep),
     # deciding what to do on errors
     # Also runtime "cast" into AfterTick class
-    def normalize(ei: Either[ErrorPayload, Tuple[AppState, NextStep]]) \
+    def normalize(ei: Either[ErrorPayload, Tuple[StateRegistry[AppState], NextStep]]) \
         -> Run[AfterTick]:
         match ei:
             case Left(err):
@@ -114,7 +116,7 @@ def build_tick(env: Environment, state0: AppState)\
 
     return wrapped >> normalize
 
-def main_trampoline(env: Environment, state0: AppState) -> None:
+def main_trampoline(env: Environment, state0: StateRegistry[AppState]) -> None:
     """
     Main loop for the application.
     """
