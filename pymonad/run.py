@@ -84,6 +84,12 @@ class PutSplinkLinker:
 
 
 @dataclass(frozen=True)
+class HasSplinkLinker:
+    """Splink linker presence intent."""
+    key: Any
+
+
+@dataclass(frozen=True)
 class Throw:
     """Except.throw intent (payload is user data)."""
     e: ErrorPayload[Any]
@@ -241,6 +247,11 @@ def put_splink_linker(key: Any, linker: Any) -> Run[None]:
     )
 
 
+def has_splink_linker(key: Any) -> Run[bool]:
+    """Create a Run action to check for a Splink linker by key."""
+    return Run(lambda self: self._perform(HasSplinkLinker(key), self), _unhandled)
+
+
 def throw(e: Any) -> Run[Any]:
     """Create a Run action to throw an error (Except effect)."""
     return Run(lambda self: self._perform(Throw(e), self), _unhandled)
@@ -322,6 +333,8 @@ def run_state(initial: StateRegistry[M] | M, prog: Run[A]) \
                     updated_splink[key] = linker
                     registry = replace(registry, splink_state=updated_splink)
                     return None
+                case HasSplinkLinker(key):
+                    return key in registry.splink_state
                 case _:
                     return parent(intent, current)
         inner = Run(prog._step, perform)

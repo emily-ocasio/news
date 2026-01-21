@@ -37,6 +37,7 @@ from .run import (
     ask,
     get,
     put,
+    has_splink_linker,
     throw,
     rethrow,
     run_state,

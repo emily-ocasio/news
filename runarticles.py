@@ -10,7 +10,6 @@ from pymonad import Run, run_reader, run_state, run_base_effect, run_except, \
     run_sql, run_openai, run_splink, Environment, Namespace, ErrorPayload, \
     REAL_DISPATCH, Left, Right, Either, Tuple, put_line, pure, GPTModel, DbBackend, \
     StateRegistry
-from pymonad import runsplink
 from article import ArticleAppError
 from runinitial import initialize_program
 from appstate import AppState
@@ -135,7 +134,6 @@ def exit_program(connections) -> None:
     """
     print("Exiting program...")
     # Perform any necessary cleanup here
-    runsplink.close_splink_resources()
     for con in connections.values():
         try:
             con.close()

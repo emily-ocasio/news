@@ -15,12 +15,11 @@ from splink.internals.blocking_rule_creator import BlockingRuleCreator
 
 # pylint:disable=W0212
 from .environment import DbBackend, Environment
-from .run import Run, ask, throw, ErrorPayload, put_splink_linker
+from .run import Run, ask, throw, ErrorPayload, put_splink_linker, get_splink_linker
+from .runsql import SQL, sql_exec, sql_query, sql_register, with_duckdb
+from .array import Array
 
 A = TypeVar("A")
-
-_SPLINK_LINKER: Linker | None = None
-
 
 @dataclass(frozen=True)
 class SplinkDedupeJob:
@@ -52,24 +51,9 @@ class SplinkVisualizeJob:
     """
     Splink visualization intent
     """
-    linker: Linker
+    splink_key: Any
     left_midpoints: Sequence[int] | None = None
     right_midpoints: Sequence[int] | None = None
-
-
-def get_latest_splink_linker() -> Linker | None:
-    """
-    Return the latest Linker produced by Splink jobs in this process.
-    """
-    return _SPLINK_LINKER
-
-
-def close_splink_resources() -> None:
-    """
-    Close any cached Splink resources for this process.
-    """
-    global _SPLINK_LINKER #pylint: disable=W0603
-    _SPLINK_LINKER = None
 
 
 def _extract_em_params(
@@ -97,35 +81,33 @@ def _cluster_counts_table_name(clusters_table: str) -> str:
     return f"{clusters_table}_counts"
 
 
+def _resolve_pair_id_cols(
+    pair_cols: set[str],
+    unique_id_column_name: str,
+    pairs_table: str,
+) -> tuple[str, str]:
+    left_id_col = f"{unique_id_column_name}_l"
+    right_id_col = f"{unique_id_column_name}_r"
+    if left_id_col in pair_cols and right_id_col in pair_cols:
+        return left_id_col, right_id_col
+    if "unique_id_l" in pair_cols and "unique_id_r" in pair_cols:
+        return "unique_id_l", "unique_id_r"
+    raise RuntimeError(
+        f"Constrained clustering cannot find id columns in {pairs_table}. "
+        f"Expected ({left_id_col}, {right_id_col}) or (unique_id_l, unique_id_r)."
+    )
+
+
 def _constrained_greedy_clusters(
     *,
-    con: duckdb.DuckDBPyConnection,
-    input_table: str,
+    nodes: list[tuple[str, str]],
+    edges: list[tuple[str, str, float]],
     unique_id_column_name: str,
-    exclusion_id_column_name: str,
-    pairs_table: str,
-    match_probability_threshold: float,
 ) -> DataFrame:
     """
     Build clusters using a greedy union-find over pairwise edges, with a hard constraint:
     no resulting cluster may contain two rows with the same exclusion id (e.g. article id).
     """
-    # Load all nodes and their exclusion ids so we can ensure singleton clusters exist.
-    try:
-        nodes = con.execute(
-            f"""
-            SELECT
-              CAST({unique_id_column_name} AS VARCHAR) AS unique_id,
-              CAST({exclusion_id_column_name} AS VARCHAR) AS exclusion_id
-            FROM {input_table}
-            """
-        ).fetchall()
-    except duckdb.Error as e:
-        raise RuntimeError(
-            "Constrained clustering requires an exclusion id column on the input table; "
-            f"failed selecting ({unique_id_column_name}, {exclusion_id_column_name}) from {input_table}."
-        ) from e
-
     unique_ids: list[str] = []
     exclusion_by_id: dict[str, str] = {}
     for uid, excl in nodes:
@@ -140,24 +122,6 @@ def _constrained_greedy_clusters(
     for uid in unique_ids:
         excl = exclusion_by_id.get(uid, "")
         exclusions_in_component[uid] = set([excl]) if excl not in ("", "None") else set()
-
-    pair_cols = {
-        r[0]
-        for r in con.execute(
-            f"SELECT name FROM pragma_table_info('{pairs_table}')"
-        ).fetchall()
-    }
-    left_id_col = f"{unique_id_column_name}_l"
-    right_id_col = f"{unique_id_column_name}_r"
-    if left_id_col in pair_cols and right_id_col in pair_cols:
-        pass
-    elif "unique_id_l" in pair_cols and "unique_id_r" in pair_cols:
-        left_id_col, right_id_col = "unique_id_l", "unique_id_r"
-    else:
-        raise RuntimeError(
-            f"Constrained clustering cannot find id columns in {pairs_table}. "
-            f"Expected ({left_id_col}, {right_id_col}) or (unique_id_l, unique_id_r)."
-        )
 
     def find(x: str) -> str:
         # Path compression
@@ -184,22 +148,6 @@ def _constrained_greedy_clusters(
         size[ra] += size[rb]
         exclusions_in_component[ra].update(exclusions_in_component[rb])
         return True
-
-    # Greedily merge edges by descending match probability.
-    edges = con.execute(
-        f"""
-        SELECT
-          CAST({left_id_col} AS VARCHAR) AS uid_l,
-          CAST({right_id_col} AS VARCHAR) AS uid_r,
-          match_probability
-        FROM {pairs_table}
-        WHERE match_probability >= {match_probability_threshold}
-        ORDER BY
-          match_probability DESC,
-          CAST({left_id_col} AS VARCHAR),
-          CAST({right_id_col} AS VARCHAR)
-        """
-    ).fetchall()
 
     # Ensure we don't error if an edge references a missing node (shouldn't happen).
     known = set(parent.keys())
@@ -284,7 +232,7 @@ def splink_dedupe_job(
 
 
 def splink_visualize_job(
-    linker: Any,
+    splink_key: Any,
     left_midpoints: Sequence[int] | None = None,
     right_midpoints: Sequence[int] | None = None,
 ) -> Run[None]:
@@ -294,7 +242,7 @@ def splink_visualize_job(
     return Run(
         lambda self: self._perform(
             SplinkVisualizeJob(
-                linker=linker,
+                splink_key=splink_key,
                 left_midpoints=list(left_midpoints) if left_midpoints else None,
                 right_midpoints=list(right_midpoints) if right_midpoints else None,
             ),
@@ -304,8 +252,7 @@ def splink_visualize_job(
     )
 
 
-def _run_splink_visualize(job: SplinkVisualizeJob) -> None:
-    linker = job.linker
+def _run_splink_visualize(linker: Linker, job: SplinkVisualizeJob) -> None:
     alt.renderers.enable("browser")
     settings = linker.misc.save_model_to_json(out_path=None)
     link_type = settings.get("link_type", "dedupe_only")
@@ -375,9 +322,9 @@ def _run_splink_visualize(job: SplinkVisualizeJob) -> None:
     print("Comparison viewer dashboard written to comparison_viewer.html")
 
     if link_type == "dedupe_only":
-        print("\nGenerating constrained clusters with article exclusion…")
+        print("\nGenerating unconstrained clusters for charting…")
         df_clustered = linker.clustering.cluster_pairwise_predictions_at_threshold(
-            df_pairs, 0
+            df_pairs, 0.01
         )
         inspect_ids: set[Any] = set()
         if left_id_col and left_id_col in inspect_df.columns:
@@ -431,7 +378,17 @@ def _run_splink_visualize(job: SplinkVisualizeJob) -> None:
 def _run_splink_dedupe_with_conn(
     job: SplinkDedupeJob,
     con: duckdb.DuckDBPyConnection,
+    current: "Run[Any]",
 ) -> tuple[Linker, str, str]:
+    def _duckdb_exec(sql: str) -> None:
+        with_duckdb(sql_exec(SQL(sql)))._step(current)
+
+    def _duckdb_query(sql: str) -> Array:
+        return with_duckdb(sql_query(SQL(sql)))._step(current)
+
+    def _duckdb_register(name: str, df: DataFrame) -> None:
+        with_duckdb(sql_register(name, df))._step(current)
+
     db_api = DuckDBAPI(connection=con)
     linker = Linker(
         job.input_table,
@@ -513,12 +470,12 @@ def _run_splink_dedupe_with_conn(
     )
 
     # Persist outputs into stable tables in the same DB
-    con.execute(
+    _duckdb_exec(
         f"CREATE OR REPLACE TABLE {job.pairs_out} AS "
         f"SELECT * FROM {df_pairs.physical_name}"
     )
     if job.settings.get("link_type", "dedupe") == "link_only":
-        con.execute(f"""
+        _duckdb_exec(f"""
             CREATE OR REPLACE TABLE {job.pairs_out}_top1 AS
             WITH ranked AS (
             SELECT
@@ -539,20 +496,20 @@ def _run_splink_dedupe_with_conn(
             """)
     if job.unique_matching and job.unique_pairs_table:
         # Query all pairs with match_probability > 0
-        pairs = con.execute(
+        pairs = _duckdb_query(
             f"""
             SELECT unique_id_l, unique_id_r, match_probability 
             FROM {job.pairs_out} WHERE match_probability > 0
             """
-            ).fetchall()
+        )
         # Create bipartite graph
         G: nx.Graph = nx.Graph() #pylint: disable=C0103
         # Add edges with weights
         for row in pairs:
             G.add_edge(
-                f"l_{row[0]}",
-                f"r_{row[1]}",
-                weight=row[2]
+                f"l_{row['unique_id_l']}",
+                f"r_{row['unique_id_r']}",
+                weight=row["match_probability"]
             )
         # Compute maximum weight matching
         matching = nx.max_weight_matching(G)
@@ -570,10 +527,14 @@ def _run_splink_dedupe_with_conn(
         # Persist to unique_pairs_table
         if matched_pairs:
             values_str = ', '.join(f"({repr(u)}, {repr(v)}, {w})" for u, v, w in matched_pairs)
-            con.execute(f"CREATE OR REPLACE TABLE {job.unique_pairs_table} AS SELECT * FROM (VALUES {values_str}) AS t(unique_id_l, unique_id_r, match_probability)")
+            _duckdb_exec(
+                f"CREATE OR REPLACE TABLE {job.unique_pairs_table} "
+                f"AS SELECT * FROM (VALUES {values_str}) "
+                "AS t(unique_id_l, unique_id_r, match_probability)"
+            )
         else:
             # Create empty table
-            con.execute(f"""--sql
+            _duckdb_exec(f"""--sql
                 CREATE OR REPLACE TABLE {job.unique_pairs_table}
                 (
                     unique_id_l VARCHAR, 
@@ -589,32 +550,75 @@ def _run_splink_dedupe_with_conn(
             )
 
         unique_id_col = cast(str, job.settings.get("unique_id_column_name", "unique_id"))
-        clusters_df = _constrained_greedy_clusters(
-            con=con,
-            input_table=job.input_table,
-            unique_id_column_name=unique_id_col,
-            exclusion_id_column_name="exclusion_id",
-            pairs_table=job.pairs_out,
-            match_probability_threshold=job.cluster_threshold,
+        nodes_rows = _duckdb_query(
+            f"""
+            SELECT
+              CAST({unique_id_col} AS VARCHAR) AS unique_id,
+              CAST(exclusion_id AS VARCHAR) AS exclusion_id
+            FROM {job.input_table}
+            """
         )
-        con.register("_constrained_clusters_df", clusters_df)
-        con.execute(
+        nodes = [
+            (row["unique_id"], row["exclusion_id"])
+            for row in nodes_rows
+        ]
+        pair_cols = {
+            row["name"]
+            for row in _duckdb_query(
+                f"SELECT name FROM pragma_table_info('{job.pairs_out}')"
+            )
+        }
+        left_id_col, right_id_col = _resolve_pair_id_cols(
+            pair_cols,
+            unique_id_col,
+            job.pairs_out,
+        )
+        edges_rows = _duckdb_query(
+            f"""
+            SELECT
+              CAST({left_id_col} AS VARCHAR) AS uid_l,
+              CAST({right_id_col} AS VARCHAR) AS uid_r,
+              match_probability
+            FROM {job.pairs_out}
+            WHERE match_probability >= {job.cluster_threshold}
+            ORDER BY
+              match_probability DESC,
+              CAST({left_id_col} AS VARCHAR),
+              CAST({right_id_col} AS VARCHAR)
+            """
+        )
+        edges = [
+            (row["uid_l"], row["uid_r"], row["match_probability"])
+            for row in edges_rows
+        ]
+        clusters_df = _constrained_greedy_clusters(
+            nodes=nodes,
+            edges=edges,
+            unique_id_column_name=unique_id_col,
+        )
+        _duckdb_register("_constrained_clusters_df", clusters_df)
+        _duckdb_exec(
             f"CREATE OR REPLACE TABLE {job.clusters_out} AS "
             "SELECT * FROM _constrained_clusters_df"
         )
 
         counts_table = _cluster_counts_table_name(job.clusters_out)
-        # Some downstream code creates `{x}_cluster_counts` as a VIEW; ensure
-        # we don't fail if the object exists with a different type.
-        try:
-            con.execute(f"DROP VIEW IF EXISTS {counts_table}")
-        except duckdb.Error:
-            pass
-        try:
-            con.execute(f"DROP TABLE IF EXISTS {counts_table}")
-        except duckdb.Error:
-            pass
-        con.execute(
+        # Always materialize cluster counts as a table, but handle legacy views.
+        existing = _duckdb_query(
+            f"""
+            SELECT table_type
+            FROM information_schema.tables
+            WHERE table_schema = 'main'
+              AND table_name = '{counts_table}'
+            """
+        )
+        if existing:
+            table_type = str(existing[0]["table_type"]).upper()
+            if table_type == "VIEW":
+                _duckdb_exec(f"DROP VIEW IF EXISTS {counts_table}")
+            else:
+                _duckdb_exec(f"DROP TABLE IF EXISTS {counts_table}")
+        _duckdb_exec(
             f"""
             CREATE OR REPLACE TABLE {counts_table} AS
             SELECT cluster_id, COUNT(*)::BIGINT AS member_count
@@ -645,13 +649,16 @@ def run_splink(prog: Run[A]) -> Run[A]:
                         return throw(
                             ErrorPayload("Splink requires a DuckDB connection.")
                         )._step(current)
-                    out = _run_splink_dedupe_with_conn(intent, con)
-                    global _SPLINK_LINKER #pylint: disable=W0603
-                    _SPLINK_LINKER = out[0]
+                    out = _run_splink_dedupe_with_conn(intent, con, current)
                     put_splink_linker(intent.splink_key, out[0])._step(current)
                     return out
                 case SplinkVisualizeJob():
-                    return _run_splink_visualize(intent)
+                    linker = get_splink_linker(intent.splink_key)._step(current)
+                    if linker is None:
+                        return throw(
+                            ErrorPayload("No Splink linker stored for visualization.")
+                        )._step(current)
+                    return _run_splink_visualize(linker, intent)
                 case _:
                     return parent(intent, current)
 

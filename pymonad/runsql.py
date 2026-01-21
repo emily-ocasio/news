@@ -125,6 +125,15 @@ class SqlExport:
     band_wrap: int = 2  # how many alternating bands/colors
 
 
+@dataclass(frozen=True)
+class SqlRegister:
+    """
+    Intent to register a pandas DataFrame with DuckDB.
+    """
+    name: str
+    df: pd.DataFrame
+
+
 def sql_query(sql: SQL, params: SQLParams = SQLParams(())) -> Run[Array]:
     """
     Smart constructor for SQL queries with intent.
@@ -170,6 +179,13 @@ def sql_export(
         ),
         _unhandled,
     )
+
+
+def sql_register(name: str, df: pd.DataFrame) -> Run[None]:
+    """
+    Smart constructor for registering a pandas DataFrame in DuckDB.
+    """
+    return Run(lambda self: self._perform(SqlRegister(name, df), self), _unhandled)
 
 
 A = TypeVar("A")
@@ -422,6 +438,19 @@ def run_sql(prog: Run[A]) -> Run[A]:
                         raise SQLExecutionError(str(sql), None, ex) from ex
                     _sql_export(df, filename, sheet, band_by_group_col, band_wrap)
                     return None
+                case SqlRegister(name, df):
+                    backend, con = _get_backend_and_conn_run()._step(current)
+                    if backend != DbBackend.DUCKDB:
+                        raise SQLExecutionError(
+                            f"REGISTER {name}",
+                            None,
+                            RuntimeError("SqlRegister requires DuckDB backend."),
+                        )
+                    try:
+                        con.register(name, df)
+                        return None
+                    except Exception as ex:  # noqa: BLE001
+                        raise SQLExecutionError(f"REGISTER {name}", None, ex) from ex
 
                 case InTransaction(subprog):
                     backend, con = _get_backend_and_conn_run()._step(current)

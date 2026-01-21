@@ -2,6 +2,7 @@
 Visualize the latest Splink dedupe/linkage run.
 """
 
+from enum import Enum
 from pymonad import (
     Run,
     InputPrompt,
@@ -10,9 +11,10 @@ from pymonad import (
     pure,
     splink_visualize_job,
     unit,
+    has_splink_linker,
 )
-from pymonad import runsplink
-from menuprompts import NextStep
+from splink_types import SplinkType
+from menuprompts import NextStep, MenuChoice, MenuPrompts, input_from_menu
 
 
 def _parse_midpoint_list(raw: str) -> tuple[list[int] | None, list[str]]:
@@ -32,7 +34,11 @@ def _parse_midpoint_list(raw: str) -> tuple[list[int] | None, list[str]]:
     return (values if values else None), invalid
 
 
-def _run_visualization(linker, left_raw: str, right_raw: str) -> Run[NextStep]:
+def _run_visualization(
+    splink_key: SplinkType,
+    left_raw: str,
+    right_raw: str,
+) -> Run[NextStep]:
     left_midpoints, left_invalid = _parse_midpoint_list(left_raw)
     right_midpoints, right_invalid = _parse_midpoint_list(right_raw)
     warnings: list[str] = []
@@ -45,7 +51,7 @@ def _run_visualization(linker, left_raw: str, right_raw: str) -> Run[NextStep]:
     return (
         warn_run
         ^ splink_visualize_job(
-            linker=linker,
+            splink_key=splink_key,
             left_midpoints=left_midpoints,
             right_midpoints=right_midpoints,
         )
@@ -53,17 +59,53 @@ def _run_visualization(linker, left_raw: str, right_raw: str) -> Run[NextStep]:
     )
 
 
-def _visualize_with_linker(linker) -> Run[NextStep]:
-    if linker is None:
-        return put_line(
-            "[C] No latest Splink linker found. Run a Splink job first."
-        ) ^ pure(NextStep.CONTINUE)
+SPLINK_PROMPTS = (
+    "[D]edup",
+    "[O]rphan",
+    "[S]HR",
+)
+
+
+class SplinkChoice(Enum):
+    """
+    Menu options for Splink visualization.
+    """
+    DEDUP = MenuChoice("D")
+    ORPHAN = MenuChoice("O")
+    SHR = MenuChoice("S")
+    QUIT = MenuChoice("Q")
+
+
+def _choice_to_type(choice: SplinkChoice) -> SplinkType:
+    match choice:
+        case SplinkChoice.DEDUP:
+            return SplinkType.DEDUP
+        case SplinkChoice.ORPHAN:
+            return SplinkType.ORPHAN
+        case SplinkChoice.SHR:
+            return SplinkType.SHR
+        case _:
+            return SplinkType.DEDUP
+
+
+def _visualize_for_type(splink_key: SplinkType) -> Run[NextStep]:
     return (
         put_line("For waterfall charts, provide the desired midpoint days for the records:")
         ^ get_line(InputPrompt("Left midpoint days> "))
         >> (
             lambda left_raw: get_line(InputPrompt("Right midpoint days> "))
-            >> (lambda right_raw: _run_visualization(linker, str(left_raw), str(right_raw)))
+            >> (lambda right_raw: _run_visualization(splink_key, str(left_raw), str(right_raw)))
+        )
+    )
+
+
+def _check_and_visualize(splink_key: SplinkType) -> Run[NextStep]:
+    return has_splink_linker(splink_key) >> (
+        lambda exists: (
+            _visualize_for_type(splink_key)
+            if exists
+            else put_line("No splink data available for visualization")
+            ^ pure(NextStep.CONTINUE)
         )
     )
 
@@ -72,4 +114,13 @@ def splink_charts() -> Run[NextStep]:
     """
     Entry point for controller to visualize the latest Splink run.
     """
-    return pure(runsplink.get_latest_splink_linker()) >> _visualize_with_linker
+    return (
+        put_line("Select Splink run type:")
+        ^ input_from_menu(MenuPrompts(SPLINK_PROMPTS))
+        >> (lambda choice: pure(SplinkChoice(choice)))
+        >> (
+            lambda choice: pure(NextStep.CONTINUE)
+            if choice == SplinkChoice.QUIT
+            else _check_and_visualize(_choice_to_type(choice))
+        )
+    )
