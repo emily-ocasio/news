@@ -21,7 +21,7 @@ from comparison import (
     AGE_COMP_SHR,
     VICTIM_COUNT_COMP,
     #DIST_COMP,
-    TF_WEAPON_COMP,
+    TF_WEAPON_COMP_SHR,
     CIRC_COMP,
     OFFENDER_AGE_COMP,
     OFFENDER_SEX_COMP,
@@ -43,7 +43,7 @@ shr_linkage_settings = {
         OFFENDER_AGE_COMP,
         OFFENDER_SEX_COMP,
         #DIST_COMP,  - no location in SHR for DC
-        TF_WEAPON_COMP,
+        TF_WEAPON_COMP_SHR,
         CIRC_COMP,
         cl.ExactMatch("victim_sex").configure(term_frequency_adjustments=True),
         cl.ExactMatch("victim_race"),
@@ -610,7 +610,10 @@ def match_article_to_shr_victims() -> Run[NextStep]:
                         canonical_offender_sex AS offender_sex,
                         canonical_offender_race AS offender_race,
                         canonical_offender_ethnicity AS offender_ethnicity,
-                        mode_weapon AS weapon,
+                        CASE
+                            WHEN LOWER(TRIM(mode_weapon)) = 'firearm' THEN 'handgun'
+                            ELSE mode_weapon
+                        END AS weapon,
                         mode_circumstance AS circumstance
                     FROM victim_entity_reps_new
                 ) AS article_rows

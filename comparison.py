@@ -472,6 +472,20 @@ TF_WEAPON_COMP = cl.CustomComparison(
     ]
 )
 
+TF_WEAPON_COMP_SHR = cl.CustomComparison(
+    output_column_name="weapon",
+    comparison_levels=[
+        NullComparisonLevel(
+            "weapon NULL",
+            ComparisonComp.WEAPON_NULL.value
+        ).to_dict(),
+        cll.ExactMatchLevel("weapon").configure(
+            tf_adjustment_column="weapon",
+            tf_minimum_u_value=0.001),
+        cll.ElseLevel()
+    ]
+)
+
 CIRC_COMP = cl.CustomComparison(
     output_column_name="circumstance",
     comparison_levels=[

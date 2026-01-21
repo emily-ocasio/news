@@ -3,6 +3,7 @@ Intent, eliminator, and smart constructors for Splink.
 """
 
 from dataclasses import dataclass
+from enum import Enum
 import logging
 import json
 from pathlib import Path
@@ -56,8 +57,19 @@ class SplinkVisualizeJob:
     Splink visualization intent
     """
     splink_key: Any
+    chart_type: "SplinkChartType"
     left_midpoints: Sequence[int] | None = None
     right_midpoints: Sequence[int] | None = None
+
+
+class SplinkChartType(str, Enum):
+    """
+    Visualization types for Splink.
+    """
+    MODEL = "model"
+    WATERFALL = "waterfall"
+    COMPARISON = "comparison"
+    CLUSTER = "cluster"
 
 
 def _extract_em_params(
@@ -237,6 +249,7 @@ def splink_dedupe_job(
 
 def splink_visualize_job(
     splink_key: Any,
+    chart_type: SplinkChartType,
     left_midpoints: Sequence[int] | None = None,
     right_midpoints: Sequence[int] | None = None,
 ) -> Run[None]:
@@ -247,6 +260,7 @@ def splink_visualize_job(
         lambda self: self._perform(
             SplinkVisualizeJob(
                 splink_key=splink_key,
+                chart_type=chart_type,
                 left_midpoints=list(left_midpoints) if left_midpoints else None,
                 right_midpoints=list(right_midpoints) if right_midpoints else None,
             ),
@@ -264,119 +278,136 @@ def _run_splink_visualize(linker: Linker, job: SplinkVisualizeJob) -> None:
     left_id_col: str | None = f"{unique_id_col}_l"
     right_id_col: str | None = f"{unique_id_col}_r"
 
+    if job.chart_type == SplinkChartType.MODEL:
+        chart = linker.visualisations.match_weights_chart()
+        chart.show()  # type: ignore
+        chart = linker.visualisations.m_u_parameters_chart()
+        chart.show()  # type: ignore
+        return
+
     df_pairs = linker.inference.predict(threshold_match_probability=0)
     pd_pairs = df_pairs.as_pandas_dataframe()
+
     inspect_df = pd_pairs
-
-    if job.left_midpoints:
-        if "midpoint_day_l" in inspect_df.columns:
-            inspect_df = inspect_df[inspect_df["midpoint_day_l"].isin(job.left_midpoints)]
-        else:
-            print("midpoint_day_l column not found; skipping left midpoint filter.")
-    if job.right_midpoints:
-        if "midpoint_day_r" in inspect_df.columns:
-            inspect_df = inspect_df[inspect_df["midpoint_day_r"].isin(job.right_midpoints)]
-        else:
-            print("midpoint_day_r column not found; skipping right midpoint filter.")
-
-    print(f"Total predictions within threshold: {len(pd_pairs)}")
-    print(f"Number of records in waterfall chart: {len(inspect_df)}\n")
-    print("Waterfall chart members:")
-
-    if left_id_col not in inspect_df.columns or right_id_col not in inspect_df.columns:
-        if "unique_id_l" in inspect_df.columns and "unique_id_r" in inspect_df.columns:
-            left_id_col, right_id_col = "unique_id_l", "unique_id_r"
-        else:
-            left_id_col, right_id_col = None, None
-
-    display_cols = [
-        col for col in [
-            "match_probability",
-            left_id_col,
-            right_id_col,
-            "midpoint_day_l",
-            "midpoint_day_r",
-        ]
-        if col and col in inspect_df.columns
-    ]
-    if display_cols:
-        print_df = inspect_df[display_cols].reset_index()
-        print(print_df)
-    else:
-        print(inspect_df.reset_index())
-
-    if len(inspect_df) > 0:
-        inspect_dict = cast(list[dict[str, Any]], inspect_df.to_dict(orient="records"))
-        waterfall = linker.visualisations.waterfall_chart(inspect_dict)
-        waterfall.show()  # type: ignore
-    else:
-        print("No records match the requested midpoint filters; skipping waterfall chart.")
-
-    chart = linker.visualisations.match_weights_chart()
-    chart.show()  # type: ignore
-    chart = linker.visualisations.m_u_parameters_chart()
-    chart.show()  # type: ignore
-    print("\nGenerating comparison viewer dashboard…")
-    linker.visualisations.comparison_viewer_dashboard(
-        df_pairs,
-        "comparison_viewer.html",
-        overwrite=True,
-        num_example_rows=5,
-    )
-    print("Comparison viewer dashboard written to comparison_viewer.html")
-
-    if link_type == "dedupe_only":
-        print("\nGenerating unconstrained clusters for charting…")
-        df_clustered = linker.clustering.cluster_pairwise_predictions_at_threshold(
-            df_pairs, 0.01
-        )
-        inspect_ids: set[Any] = set()
-        if left_id_col and left_id_col in inspect_df.columns:
-            inspect_ids.update(inspect_df[left_id_col].dropna().tolist())
-        if right_id_col and right_id_col in inspect_df.columns:
-            inspect_ids.update(inspect_df[right_id_col].dropna().tolist())
-        print("\nGenerating Cluster Studio dashboard…")
-        try:
-            clusters_df = df_clustered.as_pandas_dataframe()
-            if inspect_ids:
-                filtered = clusters_df[clusters_df[unique_id_col].isin(inspect_ids)]
+    if job.chart_type in (SplinkChartType.WATERFALL, SplinkChartType.CLUSTER):
+        if job.left_midpoints:
+            if "midpoint_day_l" in inspect_df.columns:
+                inspect_df = inspect_df[inspect_df["midpoint_day_l"].isin(job.left_midpoints)]
             else:
-                filtered = clusters_df.iloc[0:0]
-            cluster_ids = sorted(filtered["cluster_id"].dropna().unique().tolist())
-        except Exception as exc: #pylint: disable=W0718
-            print(f"Unable to compute cluster_ids for dashboard: {exc}")
-            cluster_ids = []
-        if not cluster_ids:
-            print("No clusters found for the waterfall chart rows; skipping dashboard.")
-            return
-        try:
-            pairs_df = df_pairs.as_pandas_dataframe()
-            mask = pd.Series(False, index=pairs_df.index)
-            if left_id_col and left_id_col in pairs_df.columns:
-                mask |= pairs_df[left_id_col].isin(inspect_ids)
-            if right_id_col and right_id_col in pairs_df.columns:
-                mask |= pairs_df[right_id_col].isin(inspect_ids)
-            filtered_pairs = pairs_df.loc[mask]
-            filtered_clusters = clusters_df[clusters_df[unique_id_col].isin(inspect_ids)]
-            df_pairs_filtered = linker._db_api.register_table(
-                filtered_pairs,
-                f"__splink__df_pairs_inspect_{id(filtered_pairs)}",
-            )
-            df_clustered_filtered = linker._db_api.register_table(
-                filtered_clusters,
-                f"__splink__df_clustered_inspect_{id(filtered_clusters)}",
-            )
-        except Exception as exc: #pylint: disable=W0718
-            print(f"Unable to filter dashboard inputs: {exc}")
-            return
-        linker.visualisations.cluster_studio_dashboard(
-            df_pairs_filtered,
-            df_clustered_filtered,
-            "cluster_studio.html",
-            cluster_ids=cluster_ids,
+                print("midpoint_day_l column not found; skipping left midpoint filter.")
+        if job.right_midpoints:
+            if "midpoint_day_r" in inspect_df.columns:
+                inspect_df = inspect_df[inspect_df["midpoint_day_r"].isin(job.right_midpoints)]
+            else:
+                print("midpoint_day_r column not found; skipping right midpoint filter.")
+
+        print(f"Total predictions within threshold: {len(pd_pairs)}")
+        print(f"Number of records in selection: {len(inspect_df)}\n")
+        if job.chart_type == SplinkChartType.WATERFALL:
+            print("Waterfall chart members:")
+        else:
+            print("Cluster chart members:")
+
+        if left_id_col not in inspect_df.columns or right_id_col not in inspect_df.columns:
+            if "unique_id_l" in inspect_df.columns and "unique_id_r" in inspect_df.columns:
+                left_id_col, right_id_col = "unique_id_l", "unique_id_r"
+            else:
+                left_id_col, right_id_col = None, None
+
+        display_cols = [
+            col for col in [
+                "match_probability",
+                left_id_col,
+                right_id_col,
+                "midpoint_day_l",
+                "midpoint_day_r",
+            ]
+            if col and col in inspect_df.columns
+        ]
+        if display_cols:
+            print_df = inspect_df[display_cols].reset_index()
+            print(print_df)
+        else:
+            print(inspect_df.reset_index())
+
+    if job.chart_type == SplinkChartType.WATERFALL:
+        if len(inspect_df) > 0:
+            inspect_dict = cast(list[dict[str, Any]], inspect_df.to_dict(orient="records"))
+            waterfall = linker.visualisations.waterfall_chart(inspect_dict)
+            waterfall.show()  # type: ignore
+        else:
+            print("No records match the requested midpoint filters; skipping waterfall chart.")
+        return
+
+    if job.chart_type == SplinkChartType.COMPARISON:
+        print("\nGenerating comparison viewer dashboard…")
+        linker.visualisations.comparison_viewer_dashboard(
+            df_pairs,
+            "comparison_viewer.html",
             overwrite=True,
+            num_example_rows=5,
         )
-        print("Cluster studio dashboard written to cluster_studio.html")
+        print("Comparison viewer dashboard written to comparison_viewer.html")
+        return
+
+    if job.chart_type != SplinkChartType.CLUSTER:
+        return
+
+    if link_type != "dedupe_only":
+        print("Cluster studio charts are only available for dedupe models.")
+        return
+
+    print("\nGenerating unconstrained clusters for charting…")
+    df_clustered = linker.clustering.cluster_pairwise_predictions_at_threshold(
+        df_pairs, 0.01
+    )
+    inspect_ids: set[Any] = set()
+    if left_id_col and left_id_col in inspect_df.columns:
+        inspect_ids.update(inspect_df[left_id_col].dropna().tolist())
+    if right_id_col and right_id_col in inspect_df.columns:
+        inspect_ids.update(inspect_df[right_id_col].dropna().tolist())
+    print("\nGenerating Cluster Studio dashboard…")
+    try:
+        clusters_df = df_clustered.as_pandas_dataframe()
+        if inspect_ids:
+            filtered = clusters_df[clusters_df[unique_id_col].isin(inspect_ids)]
+        else:
+            filtered = clusters_df.iloc[0:0]
+        cluster_ids = sorted(filtered["cluster_id"].dropna().unique().tolist())
+    except Exception as exc: #pylint: disable=W0718
+        print(f"Unable to compute cluster_ids for dashboard: {exc}")
+        cluster_ids = []
+    if not cluster_ids:
+        print("No clusters found for the selected rows; skipping dashboard.")
+        return
+    try:
+        pairs_df = df_pairs.as_pandas_dataframe()
+        mask = pd.Series(False, index=pairs_df.index)
+        if left_id_col and left_id_col in pairs_df.columns:
+            mask |= pairs_df[left_id_col].isin(inspect_ids)
+        if right_id_col and right_id_col in pairs_df.columns:
+            mask |= pairs_df[right_id_col].isin(inspect_ids)
+        filtered_pairs = pairs_df.loc[mask]
+        filtered_clusters = clusters_df[clusters_df[unique_id_col].isin(inspect_ids)]
+        df_pairs_filtered = linker._db_api.register_table(
+            filtered_pairs,
+            f"__splink__df_pairs_inspect_{id(filtered_pairs)}",
+        )
+        df_clustered_filtered = linker._db_api.register_table(
+            filtered_clusters,
+            f"__splink__df_clustered_inspect_{id(filtered_clusters)}",
+        )
+    except Exception as exc: #pylint: disable=W0718
+        print(f"Unable to filter dashboard inputs: {exc}")
+        return
+    linker.visualisations.cluster_studio_dashboard(
+        df_pairs_filtered,
+        df_clustered_filtered,
+        "cluster_studio.html",
+        cluster_ids=cluster_ids,
+        overwrite=True,
+    )
+    print("Cluster studio dashboard written to cluster_studio.html")
 
 
 def _run_splink_dedupe_with_conn(

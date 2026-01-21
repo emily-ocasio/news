@@ -133,6 +133,9 @@ class TrainBlockRule(StrEnum):
         BlockComp.EXACT_YEAR_MONTH,
         BlockComp.SAME_OFFENDER_AGE_SEX
     )
+    OFFENDER_AGE_SEX = _train_block_from_comps(
+        BlockComp.SAME_OFFENDER_AGE_SEX
+    )
     YEAR_AGE_SEX = _train_block_from_comps(
         BlockComp.EXACT_YEAR,
         BlockComp.SAME_AGE_SEX
@@ -205,12 +208,11 @@ SHR_OVERALL_BLOCKS = [
 ]
 
 SHR_DETERMINISTIC_BLOCKS = [
-    TrainBlockRule.MONTH_AGE_SEX_WEAPON,
-    TrainBlockRule.MONTH_AGE_SEX_FIREARM_HANDGUN
+    TrainBlockRule.MONTH_AGE_SEX_WEAPON
 ]
 
 SHR_TRAINING_BLOCKS = [
     TrainBlockRule.YEAR_MONTH,
     TrainBlockRule.AGE_SEX,
-    TrainBlockRule.YEAR_OFFENDER_AGE_SEX,
+    TrainBlockRule.OFFENDER_AGE_SEX,
 ]

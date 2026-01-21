@@ -10,6 +10,7 @@ from pymonad import (
     put_line,
     pure,
     splink_visualize_job,
+    SplinkChartType,
     unit,
     has_splink_linker,
 )
@@ -36,6 +37,7 @@ def _parse_midpoint_list(raw: str) -> tuple[list[int] | None, list[str]]:
 
 def _run_visualization(
     splink_key: SplinkType,
+    chart_type: SplinkChartType,
     left_raw: str,
     right_raw: str,
 ) -> Run[NextStep]:
@@ -52,6 +54,7 @@ def _run_visualization(
         warn_run
         ^ splink_visualize_job(
             splink_key=splink_key,
+            chart_type=chart_type,
             left_midpoints=left_midpoints,
             right_midpoints=right_midpoints,
         )
@@ -64,6 +67,15 @@ SPLINK_PROMPTS = (
     "[O]rphan",
     "[S]HR",
 )
+SPLINK_CHART_PROMPTS = (
+    "[M]odel charts",
+    "[W]aterfall",
+    "[C]omparison viewer",
+)
+SPLINK_CHART_PROMPTS_DEDUP = (
+    *SPLINK_CHART_PROMPTS,
+    "[U]nconstrained clusters",
+)
 
 
 class SplinkChoice(Enum):
@@ -73,6 +85,17 @@ class SplinkChoice(Enum):
     DEDUP = MenuChoice("D")
     ORPHAN = MenuChoice("O")
     SHR = MenuChoice("S")
+    QUIT = MenuChoice("Q")
+
+
+class SplinkChartChoice(Enum):
+    """
+    Menu options for Splink chart selection.
+    """
+    MODEL = MenuChoice("M")
+    WATERFALL = MenuChoice("W")
+    COMPARISON = MenuChoice("C")
+    CLUSTER = MenuChoice("U")
     QUIT = MenuChoice("Q")
 
 
@@ -88,24 +111,73 @@ def _choice_to_type(choice: SplinkChoice) -> SplinkType:
             return SplinkType.DEDUP
 
 
-def _visualize_for_type(splink_key: SplinkType) -> Run[NextStep]:
+def _chart_choice_to_type(choice: SplinkChartChoice) -> SplinkChartType:
+    match choice:
+        case SplinkChartChoice.MODEL:
+            return SplinkChartType.MODEL
+        case SplinkChartChoice.WATERFALL:
+            return SplinkChartType.WATERFALL
+        case SplinkChartChoice.COMPARISON:
+            return SplinkChartType.COMPARISON
+        case SplinkChartChoice.CLUSTER:
+            return SplinkChartType.CLUSTER
+        case _:
+            return SplinkChartType.MODEL
+
+
+def _chart_prompts_for_type(splink_key: SplinkType) -> MenuPrompts:
+    if splink_key == SplinkType.DEDUP:
+        return MenuPrompts(SPLINK_CHART_PROMPTS_DEDUP)
+    return MenuPrompts(SPLINK_CHART_PROMPTS)
+
+
+def _visualize_for_type(splink_key: SplinkType, chart_type: SplinkChartType) -> Run[NextStep]:
+    if chart_type == SplinkChartType.WATERFALL:
+        prompt = "For waterfall charts, provide the desired midpoint days for the records:"
+    elif chart_type == SplinkChartType.CLUSTER:
+        prompt = "For cluster charts, provide the desired midpoint days for the records:"
+    else:
+        return _run_visualization(splink_key, chart_type, "", "")
     return (
-        put_line("For waterfall charts, provide the desired midpoint days for the records:")
+        put_line(prompt)
         ^ get_line(InputPrompt("Left midpoint days> "))
         >> (
             lambda left_raw: get_line(InputPrompt("Right midpoint days> "))
-            >> (lambda right_raw: _run_visualization(splink_key, str(left_raw), str(right_raw)))
+            >> (
+                lambda right_raw: _run_visualization(
+                    splink_key,
+                    chart_type,
+                    str(left_raw),
+                    str(right_raw),
+                )
+            )
         )
     )
 
 
-def _check_and_visualize(splink_key: SplinkType) -> Run[NextStep]:
+def _check_and_visualize(
+    splink_key: SplinkType,
+    chart_type: SplinkChartType,
+) -> Run[NextStep]:
     return has_splink_linker(splink_key) >> (
         lambda exists: (
-            _visualize_for_type(splink_key)
+            _visualize_for_type(splink_key, chart_type)
             if exists
             else put_line("No splink data available for visualization")
             ^ pure(NextStep.CONTINUE)
+        )
+    )
+
+
+def _select_chart(splink_key: SplinkType) -> Run[NextStep]:
+    return (
+        put_line("Select chart type:")
+        ^ input_from_menu(_chart_prompts_for_type(splink_key))
+        >> (lambda choice: pure(SplinkChartChoice(choice)))
+        >> (
+            lambda choice: pure(NextStep.CONTINUE)
+            if choice == SplinkChartChoice.QUIT
+            else _check_and_visualize(splink_key, _chart_choice_to_type(choice))
         )
     )
 
@@ -121,6 +193,6 @@ def splink_charts() -> Run[NextStep]:
         >> (
             lambda choice: pure(NextStep.CONTINUE)
             if choice == SplinkChoice.QUIT
-            else _check_and_visualize(_choice_to_type(choice))
+            else _select_chart(_choice_to_type(choice))
         )
     )
