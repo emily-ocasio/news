@@ -621,9 +621,21 @@ def _run_splink_dedupe_with_conn(
             for training_rule in job.training_blocking_rules or job.settings.get(
                 "blocking_rules_to_generate_predictions", []
             ):
-                linker.training.estimate_parameters_using_expectation_maximisation(
-                    blocking_rule=training_rule
+                em_session = linker.training.estimate_parameters_using_expectation_maximisation(
+                    blocking_rule=training_rule,
+                    fix_probability_two_random_records_match=True
                 )
+                try:
+                    lambda_history = em_session._lambda_history_records
+                except AttributeError:
+                    lambda_history = []
+                if lambda_history:
+                    print("EM lambda history (probability_two_random_records_match):")
+                    for record in lambda_history:
+                        print(
+                            f"  iter {record['iteration']}: "
+                            f"{record['probability_two_random_records_match']:.6f}"
+                        )
                 current_settings = linker.misc.save_model_to_json(out_path=None)
                 current_params = _extract_em_params(current_settings)
                 deltas: list[float] = []

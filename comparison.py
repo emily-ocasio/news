@@ -37,6 +37,10 @@ class ComparisonComp(StrEnum):
     MIDPOINT_2DAYS = _distance_comp_builder("midpoint_day", 2)
     MIDPOINT_7DAYS = _distance_comp_builder("midpoint_day", 7)
     MIDPOINT_10DAYS = _distance_comp_builder("midpoint_day", 10)
+    MIDPOINT_15DAYS_RIGHT = (
+        _distance_comp_builder("midpoint_day", 15)
+        + " AND midpoint_day_l <= midpoint_day_r"
+    )
     MIDPOINT_20DAYS = _distance_comp_builder("midpoint_day", 20)
     MIDPOINT_30DAYS = _distance_comp_builder("midpoint_day", 30)
     MIDPOINT_90DAYS = _distance_comp_builder("midpoint_day", 90)
@@ -269,22 +273,14 @@ DATE_COMP_SHR = cl.CustomComparison(
             ComparisonComp.DATE_NULL.value
         ).to_dict(),
         ComparisonLevel(
-            "midpoint within 10 days",
-            _clause_from_comps(
-                ComparisonComp.MIDPOINT_EXISTS,
-                ComparisonComp.MIDPOINT_10DAYS,
-                ComparisonComp.MONTH_PRECISION
-            )
-        ).to_dict(),
-        ComparisonLevel(
             "exact year and month",
             ComparisonComp.EXACT_YEAR_MONTH.value
         ).to_dict(),
         ComparisonLevel(
-            "midpoint within 20 days",
+            "midpoint within 10 days",
             _clause_from_comps(
                 ComparisonComp.MIDPOINT_EXISTS,
-                ComparisonComp.MIDPOINT_20DAYS,
+                ComparisonComp.MIDPOINT_15DAYS_RIGHT,
                 ComparisonComp.MONTH_PRECISION
             )
         ).to_dict(),
