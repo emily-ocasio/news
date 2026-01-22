@@ -93,6 +93,7 @@ def _export_shr_final_matches_excel() -> Run[Unit]:
                 av.victim_count,
                 av.weapon, av.circumstance,
                 av.offender_age, av.offender_sex, av.offender_race, av.offender_ethnicity,
+                ver.article_ids_csv,
                 pr.match_probability,
                 pr.entity_uid,
                 pr.shr_uid,
@@ -124,6 +125,7 @@ def _export_shr_final_matches_excel() -> Run[Unit]:
                 sc.midpoint_day AS shr_midpoint_day
               FROM pairs_raw pr
               JOIN article_victims av ON pr.entity_uid = av.unique_id
+              LEFT JOIN victim_entity_reps_new ver ON av.unique_id = ver.victim_entity_id
               JOIN shr_cached sc ON pr.shr_uid = sc.unique_id
 
               UNION ALL
@@ -139,6 +141,7 @@ def _export_shr_final_matches_excel() -> Run[Unit]:
                 av.victim_count,
                 av.weapon, av.circumstance,
                 av.offender_age, av.offender_sex, av.offender_race, av.offender_ethnicity,
+                ver.article_ids_csv,
                 CAST(NULL AS DOUBLE) AS match_probability,
                 av.unique_id AS entity_uid,
                 CAST(NULL AS VARCHAR) AS shr_uid,
@@ -169,6 +172,7 @@ def _export_shr_final_matches_excel() -> Run[Unit]:
                 CAST(NULL AS VARCHAR) AS shr_date_precision,
                 CAST(NULL AS DOUBLE) AS shr_midpoint_day
               FROM article_victims av
+              LEFT JOIN victim_entity_reps_new ver ON av.unique_id = ver.victim_entity_id
               WHERE av.unique_id NOT IN (SELECT entity_uid FROM pairs_raw)
 
               UNION ALL
@@ -183,6 +187,7 @@ def _export_shr_final_matches_excel() -> Run[Unit]:
                 sc.victim_count,
                 sc.weapon, sc.circumstance,
                 sc.offender_age, sc.offender_sex, sc.offender_race, sc.offender_ethnicity,
+                CAST(NULL AS VARCHAR) AS article_ids_csv,
                 CAST(NULL AS DOUBLE) AS match_probability,
                 CAST(NULL AS VARCHAR) AS entity_uid,
                 sc.unique_id AS shr_uid,
@@ -250,6 +255,7 @@ def _export_shr_final_matches_excel() -> Run[Unit]:
               shr_offender_race AS s_orac,
               entity_offender_ethnicity AS e_oeth,
               shr_offender_ethnicity AS s_oeth,
+              article_ids_csv AS entity_article_ids,
               CASE WHEN rec_type = 'match' THEN 2
                   WHEN rec_type = 'entity' THEN 0
                   ELSE 1
@@ -308,6 +314,7 @@ def _export_shr_debug_matches_excel() -> Run[Unit]:
                 av.victim_count,
                 av.weapon, av.circumstance,
                 av.offender_age, av.offender_sex, av.offender_race, av.offender_ethnicity,
+                ver.article_ids_csv,
                 pr.match_probability,
                 pr.entity_uid,
                 pr.shr_uid,
@@ -339,6 +346,7 @@ def _export_shr_debug_matches_excel() -> Run[Unit]:
                 sc.midpoint_day AS shr_midpoint_day
               FROM pairs_raw pr
               JOIN article_victims av ON pr.entity_uid = av.unique_id
+              LEFT JOIN victim_entity_reps_new ver ON av.unique_id = ver.victim_entity_id
               JOIN shr_cached sc ON pr.shr_uid = sc.unique_id
 
               UNION ALL
@@ -353,6 +361,7 @@ def _export_shr_debug_matches_excel() -> Run[Unit]:
                 av.victim_count,
                 av.weapon, av.circumstance,
                 av.offender_age, av.offender_sex, av.offender_race, av.offender_ethnicity,
+                ver.article_ids_csv,
                 CAST(NULL AS DOUBLE) AS match_probability,
                 av.unique_id AS entity_uid,
                 CAST(NULL AS VARCHAR) AS shr_uid,
@@ -383,6 +392,7 @@ def _export_shr_debug_matches_excel() -> Run[Unit]:
                 CAST(NULL AS VARCHAR) AS shr_date_precision,
                 CAST(NULL AS DOUBLE) AS shr_midpoint_day
               FROM article_victims av
+              LEFT JOIN victim_entity_reps_new ver ON av.unique_id = ver.victim_entity_id
               WHERE av.unique_id NOT IN (SELECT entity_uid FROM pairs_raw)
 
               UNION ALL
@@ -397,6 +407,7 @@ def _export_shr_debug_matches_excel() -> Run[Unit]:
                 sc.victim_count,
                 sc.weapon, sc.circumstance,
                 sc.offender_age, sc.offender_sex, sc.offender_race, sc.offender_ethnicity,
+                CAST(NULL AS VARCHAR) AS article_ids_csv,
                 CAST(NULL AS DOUBLE) AS match_probability,
                 CAST(NULL AS VARCHAR) AS entity_uid,
                 sc.unique_id AS shr_uid,
@@ -464,6 +475,7 @@ def _export_shr_debug_matches_excel() -> Run[Unit]:
               shr_offender_race AS s_orac,
               entity_offender_ethnicity AS e_oeth,
               shr_offender_ethnicity AS s_oeth,
+              article_ids_csv AS entity_article_ids,
               CASE WHEN rec_type = 'match' THEN 2
                   WHEN rec_type = 'entity' THEN 0
                   ELSE 1
