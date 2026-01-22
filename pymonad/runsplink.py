@@ -8,6 +8,7 @@ import logging
 import json
 from pathlib import Path
 from typing import Any, Sequence, TypeVar, cast
+import uuid
 
 import altair as alt
 import duckdb
@@ -16,6 +17,9 @@ import pandas as pd
 from pandas import DataFrame
 from splink import Linker, DuckDBAPI, blocking_analysis
 from splink.internals.blocking_rule_creator import BlockingRuleCreator
+from splink.internals.cache_dict_with_logging import CacheDictWithLogging
+from splink.internals.charts import unlinkables_chart
+from splink.internals.pipeline import CTEPipeline
 
 # pylint:disable=W0212
 from .environment import DbBackend, Environment
@@ -70,6 +74,7 @@ class SplinkChartType(str, Enum):
     WATERFALL = "waterfall"
     COMPARISON = "comparison"
     CLUSTER = "cluster"
+    UNLINKABLES = "unlinkables"
 
 
 def _extract_em_params(
@@ -278,10 +283,155 @@ def _run_splink_visualize(linker: Linker, job: SplinkVisualizeJob) -> None:
     left_id_col: str | None = f"{unique_id_col}_l"
     right_id_col: str | None = f"{unique_id_col}_r"
 
+    def _sql_literal(value: Any) -> str:
+        return "'" + str(value).replace("'", "''") + "'"
+
+    def _distinct_sources(self_link_table: str, source_col: str) -> list[Any]:
+        source_col_sql = f'"{source_col}"'
+        suffix = abs(hash((self_link_table, source_col))) % 1000000
+        pipeline = CTEPipeline()
+        sql = (
+            f"select distinct {source_col_sql} as source_dataset "
+            f"from {self_link_table} where {source_col_sql} is not null"
+        )
+        pipeline.enqueue_sql(sql, f"__splink__unlinkable_sources_{suffix}")
+        data = linker._db_api.sql_pipeline_to_splink_dataframe(pipeline, use_cache=False)
+        rows = data.as_record_dict()
+        data.drop_table_from_database_and_remove_from_cache()
+        return [row["source_dataset"] for row in rows]
+
+    def _unlinkables_records(
+        self_link_table: str,
+        where_clause: str | None = None,
+    ) -> list[dict[str, Any]]:
+        suffix = abs(hash((self_link_table, where_clause))) % 1000000
+        round_table = f"__splink__df_round_self_link_{suffix}"
+        prop_table = f"__splink__df_unlinkables_proportions_{suffix}"
+        cum_table = f"__splink__df_unlinkables_proportions_cumulative_{suffix}"
+        pipeline = CTEPipeline()
+        where_sql = f"where {where_clause}" if where_clause else ""
+        sql = f"""
+            select
+            round(match_weight, 2) as match_weight,
+            round(match_probability, 5) as match_probability
+            from {self_link_table}
+            {where_sql}
+        """
+        pipeline.enqueue_sql(sql, round_table)
+        sql = f"""
+            select
+            max(match_weight) as match_weight,
+            match_probability,
+            count(*) / cast( sum(count(*)) over () as float) as prop
+            from {round_table}
+            group by match_probability
+            order by match_probability
+        """
+        pipeline.enqueue_sql(sql, prop_table)
+        sql = f"""
+            select *,
+            sum(prop) over(order by match_probability) as cum_prop
+            from {prop_table}
+            where match_probability < 1
+        """
+        pipeline.enqueue_sql(sql, cum_table)
+        data = linker._db_api.sql_pipeline_to_splink_dataframe(pipeline, use_cache=False)
+        records = data.as_record_dict()
+        data.drop_table_from_database_and_remove_from_cache()
+        return records
+
+    def _unlinkables_records_for_source(
+        self_link_table: str,
+        source_col: str,
+        source_value: Any,
+    ) -> list[dict[str, Any]]:
+        source_col_sql = f'"{source_col}"'
+        source_literal = _sql_literal(source_value)
+        where_clause = f"{source_col_sql} = {source_literal}"
+        return _unlinkables_records(self_link_table, where_clause)
+
+    def _with_cache_uid(new_uid: str, action):
+        old_uid = linker._db_api._cache_uid
+        linker._db_api._cache_uid = new_uid
+        try:
+            return action()
+        finally:
+            linker._db_api._cache_uid = old_uid
+
+    def _with_isolated_cache(action):
+        db_api = linker._db_api
+        old_cache = db_api._intermediate_table_cache
+        new_cache = CacheDictWithLogging()
+        db_api._intermediate_table_cache = new_cache
+        try:
+            return action(new_cache)
+        finally:
+            db_api._intermediate_table_cache = old_cache
+
     if job.chart_type == SplinkChartType.MODEL:
         chart = linker.visualisations.match_weights_chart()
         chart.show()  # type: ignore
         chart = linker.visualisations.m_u_parameters_chart()
+        chart.show()  # type: ignore
+        return
+    if job.chart_type == SplinkChartType.UNLINKABLES:
+        print("Generating unlinkables chart…")
+        if link_type == "link_only" and len(linker._input_tables_dict) == 2:
+            self_link_df = _with_cache_uid(
+                f"unlinkables_{uuid.uuid4().hex[:8]}",
+                linker._self_link,
+            )
+            col_names = [col.name for col in self_link_df.columns]
+            source_col = next(
+                (
+                    col
+                    for col in ("source_dataset_l", "source_dataset", "source_dataset_r")
+                    if col in col_names
+                ),
+                None,
+            )
+            if source_col:
+                sources = _distinct_sources(self_link_df.physical_name, source_col)
+                if sources:
+                    for source in sources:
+                        print(f"Generating unlinkables chart for {source}…")
+                        records = _unlinkables_records_for_source(
+                            self_link_df.physical_name,
+                            source_col,
+                            source,
+                        )
+                        chart = unlinkables_chart(records, "match_weight", str(source))
+                        chart.show()  # type: ignore
+                    self_link_df.drop_table_from_database_and_remove_from_cache()
+                    return
+            print("Source dataset column not found; using combined unlinkables chart.")
+            for alias, df in linker._input_tables_dict.items():
+                label = df.physical_name
+                print(f"Generating unlinkables chart for {label}…")
+                single_settings = dict(settings)
+                single_settings["link_type"] = "dedupe_only"
+                single_settings.pop("source_dataset_column_name", None)
+                single_settings["linker_uid"] = f"{label}_{uuid.uuid4().hex[:8]}"
+                temp_linker = Linker(
+                    df.physical_name,
+                    single_settings,
+                    db_api=linker._db_api,
+                )
+                def _run_self_link(cache):
+                    temp_linker._intermediate_table_cache = cache
+                    return _with_cache_uid(
+                        f"unlinkables_{uuid.uuid4().hex[:8]}",
+                        temp_linker._self_link,
+                    )
+                self_link_df = _with_isolated_cache(
+                    _run_self_link
+                )
+                records = _unlinkables_records(self_link_df.physical_name)
+                chart = unlinkables_chart(records, "match_weight", str(label))
+                chart.show()  # type: ignore
+                self_link_df.drop_table_from_database_and_remove_from_cache()
+            return
+        chart = linker.evaluation.unlinkables_chart()
         chart.show()  # type: ignore
         return
 

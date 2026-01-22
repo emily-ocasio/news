@@ -71,6 +71,7 @@ SPLINK_CHART_PROMPTS = (
     "[M]odel charts",
     "[W]aterfall",
     "[C]omparison viewer",
+    "[N]unlinkables",
 )
 SPLINK_CHART_PROMPTS_DEDUP = (
     *SPLINK_CHART_PROMPTS,
@@ -95,6 +96,7 @@ class SplinkChartChoice(Enum):
     MODEL = MenuChoice("M")
     WATERFALL = MenuChoice("W")
     COMPARISON = MenuChoice("C")
+    UNLINKABLES = MenuChoice("N")
     CLUSTER = MenuChoice("U")
     QUIT = MenuChoice("Q")
 
@@ -121,6 +123,8 @@ def _chart_choice_to_type(choice: SplinkChartChoice) -> SplinkChartType:
             return SplinkChartType.COMPARISON
         case SplinkChartChoice.CLUSTER:
             return SplinkChartType.CLUSTER
+        case SplinkChartChoice.UNLINKABLES:
+            return SplinkChartType.UNLINKABLES
         case _:
             return SplinkChartType.MODEL
 
