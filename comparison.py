@@ -135,24 +135,24 @@ NAME_COMP = cl.CustomComparison(
             "exact match victim name",
             ComparisonComp.EXACT_VICTIM_FULLNAME.value
         ).to_dict(),
+        # ComparisonLevel(
+        #     "JW >= 0.96 victim names",
+        #     _similarity_comp_builder2(
+        #         "victim_forename_norm", "victim_surname_norm", 0.96)
+        # ).to_dict(),
         ComparisonLevel(
-            "JW >= 0.96 victim names",
-            _similarity_comp_builder2(
-                "victim_forename_norm", "victim_surname_norm", 0.96)
-        ).to_dict(),
-        ComparisonLevel(
-            "Reversed exact or JW >= 0.92 victim names or exact single surname",
+            "Reversed exact or JW >= 0.80 victim names or exact single surname",
             ComparisonComp.VICTIM_EXACT_REVERSED.value + " OR " +
             _similarity_comp_builder2(
-                "victim_forename_norm", "victim_surname_norm", 0.92) + " OR " +
+                "victim_forename_norm", "victim_surname_norm", 0.80) + " OR " +
             "( " + ComparisonComp.EXACT_VICTIM_SURNAME.value + " AND " +
                 ComparisonComp.VICTIM_FORENAME_NULL.value + " )"
         ).to_dict(),
-        ComparisonLevel(
-            "JW > 0.80 victim names",
-            _similarity_comp_builder2(
-                "victim_forename_norm", "victim_surname_norm", 0.80)
-        ).to_dict(),
+        # ComparisonLevel(
+        #     "JW > 0.80 victim names",
+        #     _similarity_comp_builder2(
+        #         "victim_forename_norm", "victim_surname_norm", 0.80)
+        # ).to_dict(),
         # ComparisonLevel(
         #     "JW > 0.60 victim names",
         #     _similarity_comp_builder2(
@@ -182,6 +182,10 @@ DATE_COMP = cl.CustomComparison(
             ComparisonComp.EXACT_YEAR_MONTH_DAY.value
         ).to_dict(),
         ComparisonLevel(
+            "exact year and month",
+            ComparisonComp.EXACT_YEAR_MONTH.value
+        ).to_dict(),
+        ComparisonLevel(
             "midpoint within 2 days",
             _clause_from_comps(
                 ComparisonComp.MIDPOINT_EXISTS,
@@ -189,22 +193,22 @@ DATE_COMP = cl.CustomComparison(
                 ComparisonComp.DAY_PRECISION
             )
         ).to_dict(),
-        ComparisonLevel(
-            "midpoint within 10 days",
-            _clause_from_comps(
-                ComparisonComp.MIDPOINT_EXISTS,
-                ComparisonComp.MIDPOINT_10DAYS,
-                ComparisonComp.DAY_PRECISION
-            )
-        ).to_dict(),
-        ComparisonLevel(
-            "midpoint within 90 days",
-            _clause_from_comps(
-                ComparisonComp.MIDPOINT_EXISTS,
-                ComparisonComp.MIDPOINT_90DAYS,
-                ComparisonComp.MONTH_PRECISION
-            )
-        ).to_dict(),
+        # ComparisonLevel(
+        #     "midpoint within 10 days",
+        #     _clause_from_comps(
+        #         ComparisonComp.MIDPOINT_EXISTS,
+        #         ComparisonComp.MIDPOINT_10DAYS,
+        #         ComparisonComp.DAY_PRECISION
+        #     )
+        # ).to_dict(),
+        # ComparisonLevel(
+        #     "midpoint within 90 days",
+        #     _clause_from_comps(
+        #         ComparisonComp.MIDPOINT_EXISTS,
+        #         ComparisonComp.MIDPOINT_90DAYS,
+        #         ComparisonComp.MONTH_PRECISION
+        #     )
+        # ).to_dict(),
         ComparisonLevel(
             "midpoint within 7 months",
             _clause_from_comps(
@@ -563,5 +567,5 @@ OFFENDER_ETHNICITY_COMP = cl.CustomComparison(
 
 SUMMARY_COMP = cl.CosineSimilarityAtThresholds(
     col_name="summary_vec",
-    score_threshold_or_thresholds=[0.80, 0.65, 0.50, 0.35]
+    score_threshold_or_thresholds=[0.80, 0.65, 0.50]
 )

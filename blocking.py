@@ -37,6 +37,8 @@ class BlockComp(StrEnum):
         "l.victim_surname_norm = r.victim_surname_norm "
         "AND l.victim_forename_norm = r.victim_forename_norm"
     )
+    SAME_FULLNAME = (
+        "l.victim_fullname_concat = r.victim_fullname_concat")
     SAME_SURNAME_SOUNDEX = "l.victim_surname_soundex = r.victim_surname_soundex"
     SAME_FORENAME_SOUNDEX = "l.victim_forename_soundex = r.victim_forename_soundex"
     SAME_AGE_SEX = "l.victim_age = r.victim_age AND l.victim_sex = r.victim_sex"
@@ -68,6 +70,23 @@ class BlockComp(StrEnum):
 def _clause_from_comps(*components: StrEnum) -> str:
     return " AND ".join([component.value for component in components])
 
+def add_do_not_link_exclusion(
+    rule: str,
+    unique_id_column: str,
+    do_not_link_table: str = "do_not_link",
+    id_left_col: str = "id_l",
+    id_right_col: str = "id_r",
+) -> str:
+    return (
+        f"({rule}) AND NOT EXISTS ("
+        f"SELECT 1 FROM {do_not_link_table} d WHERE "
+        f"(d.{id_left_col} = l.{unique_id_column} AND "
+        f"d.{id_right_col} = r.{unique_id_column}) "
+        f"OR (d.{id_left_col} = r.{unique_id_column} AND "
+        f"d.{id_right_col} = l.{unique_id_column})"
+        f")"
+    )
+
 def _block_from_comps(
     *components: BlockComp, add_article_exclusion: bool = True
 ) -> str:
@@ -90,6 +109,7 @@ class TrainBlockRule(StrEnum):
     YEAR_BLOCK_1 = _train_block_from_comps(BlockComp.YEAR_BLOCK_1)
     EXACT_YEAR_BLOCK = _train_block_from_comps(BlockComp.EXACT_YEAR_BLOCK)
     SAME_NAMES = _train_block_from_comps(BlockComp.SAME_NAMES)
+    SAME_FULLNAME = _train_block_from_comps(BlockComp.SAME_FULLNAME)
     LOCATION = _train_block_from_comps(BlockComp.LONG_LAT_EXISTS,
                                        BlockComp.CLOSE_LONG_LAT)
     AGE_SEX = _train_block_from_comps(BlockComp.SAME_AGE_SEX)
@@ -152,9 +172,23 @@ class DedupBlockRule(StrEnum):
                                         BlockComp.LONG_LAT_EXISTS,
                                         BlockComp.CLOSE_LONG_LAT)
     SAME_NAMES = _block_from_comps(BlockComp.SAME_NAMES)
+    YEAR_SAME_NAMES = _block_from_comps(
+        BlockComp.EXACT_YEAR,
+        BlockComp.SAME_NAMES
+    )
     SURNAME_SOUNDEX = _block_from_comps(BlockComp.SAME_SURNAME_SOUNDEX)
+    YEAR_SURNAME_SOUNDEX = _block_from_comps(
+        BlockComp.EXACT_YEAR,
+        BlockComp.SAME_SURNAME_SOUNDEX)
     FORENAME_SOUNDEX = _block_from_comps(BlockComp.SAME_FORENAME_SOUNDEX)
+    YEAR_FORENAME_SOUNDEX = _block_from_comps(
+        BlockComp.EXACT_YEAR,
+        BlockComp.SAME_FORENAME_SOUNDEX)
     AGE_SEX = _block_from_comps(BlockComp.SAME_AGE_SEX)
+    YEAR_AGE_SEX = _block_from_comps(
+        BlockComp.EXACT_YEAR,
+        BlockComp.SAME_AGE_SEX
+    )
     SAME_NAMES_30DAYS = _block_from_comps(
         BlockComp.SAME_NAMES, BlockComp.MIDPOINT_30DAYS)
     DATE_LOCATION_AGE_SEX = _block_from_comps(
@@ -167,20 +201,26 @@ class DedupBlockRule(StrEnum):
         BlockComp.LONG_LAT_EXISTS,
         BlockComp.CLOSE_LONG_LAT,
         BlockComp.SAME_SEX)
+    OFFENDER_AGE_SEX = _block_from_comps(
+        BlockComp.SAME_OFFENDER_AGE_SEX
+    )
 
 
 
 NAMED_VICTIM_BLOCKS = [
-    DedupBlockRule.SAME_NAMES,
+    DedupBlockRule.YEAR_SAME_NAMES,
     DedupBlockRule.YEAR_MONTH,
     DedupBlockRule.DATE_LOCATION,
-    DedupBlockRule.SURNAME_SOUNDEX,
-    DedupBlockRule.FORENAME_SOUNDEX,
-    DedupBlockRule.AGE_SEX
+    DedupBlockRule.YEAR_SURNAME_SOUNDEX,
+    DedupBlockRule.YEAR_FORENAME_SOUNDEX,
+    DedupBlockRule.YEAR_AGE_SEX
 ]
 
 NAMED_VICTIM_BLOCKS_FOR_TRAINING = [
-    TrainBlockRule.YEAR_BLOCK_1
+    DedupBlockRule.YEAR_MONTH,
+    DedupBlockRule.SAME_NAMES,
+    DedupBlockRule.AGE_SEX,
+    DedupBlockRule.OFFENDER_AGE_SEX
 ]
 
 NAMED_VICTIM_DETERMINISTIC_BLOCKS = [
@@ -199,7 +239,10 @@ ORPHAN_DETERMINISTIC_BLOCKS = [
 ]
 
 ORPHAN_TRAINING_BLOCKS = [
-    TrainBlockRule.YEAR_BLOCK_1
+    TrainBlockRule.YEAR_MONTH,
+    TrainBlockRule.SAME_NAMES,
+    TrainBlockRule.AGE_SEX,
+    TrainBlockRule.OFFENDER_AGE_SEX
 ]
 
 SHR_OVERALL_BLOCKS = [

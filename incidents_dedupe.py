@@ -17,6 +17,8 @@ from comparison import (
     VICTIM_COUNT_COMP,
     DIST_COMP,
     OFFENDER_COMP,
+    OFFENDER_AGE_COMP,
+    OFFENDER_SEX_COMP,
     WEAPON_COMP,
     CIRC_COMP,
     SUMMARY_COMP
@@ -80,8 +82,11 @@ def _dedupe_named_victims(_: Unit) -> Run[Unit]:
         training_blocking_rules=NAMED_VICTIM_BLOCKS_FOR_TRAINING,
         deterministic_rules=NAMED_VICTIM_DETERMINISTIC_BLOCKS,
         deterministic_recall=0.8,
+        em_max_runs=1,
         visualize=False,
         splink_key=SplinkType.DEDUP,
+        capture_blocked_edges=True,
+        blocked_pairs_out="victim_cluster_exclusion",
     ) >> (
         lambda outnames: put_line(
             f"[D] Wrote {outnames[1]} and {outnames[2]} in DuckDB."
@@ -297,6 +302,7 @@ def _build_representative_victims() -> Run[Unit]:
                     -- canonical age: mode excluding NULLs
                     mode(m.victim_age) FILTER (WHERE m.victim_age IS NOT NULL) AS canonical_age,
                     max(m.victim_count) FILTER (WHERE m.victim_count IS NOT NULL) AS canonical_victim_count,
+                    max(m.offender_count) FILTER (WHERE m.offender_count IS NOT NULL) AS canonical_offender_count,
                     -- keep these if you still want distribution context
                     avg(m.victim_age) FILTER (WHERE m.victim_age IS NOT NULL) AS avg_age,
                     min(m.victim_age) FILTER (WHERE m.victim_age IS NOT NULL) AS min_age,
@@ -491,6 +497,7 @@ def _build_representative_victims() -> Run[Unit]:
                   onm.offender_sex AS canonical_offender_sex,
                   onm.offender_race AS canonical_offender_race,
                   onm.offender_ethnicity AS canonical_offender_ethnicity,
+                  a.canonical_offender_count,
 
                   -- location/age
                   a.lat_centroid,
@@ -561,6 +568,7 @@ def _export_final_clusters_excel() -> Run[Unit]:
               v.victim_surname_norm,
               v.victim_age,
               v.victim_count,
+              v.offender_count,
               v.victim_sex,
               v.lat,
               v.lon,
@@ -603,7 +611,6 @@ def dedupe_incidents_with_splink() -> Run[NextStep]:
         _create_victims_named_table()
         >> _dedupe_named_victims
         ^ _create_cluster_tables()
-        ^ _show_initial_clusters()
         ^ _build_representative_victims()
         ^ _export_final_clusters_excel()
         ^ pure(NextStep.CONTINUE)
@@ -639,6 +646,8 @@ def _settings_for_victim_dedupe() -> dict:
         DIST_COMP,
         cl.ExactMatch("victim_sex"),
         OFFENDER_COMP,
+        OFFENDER_AGE_COMP,
+        OFFENDER_SEX_COMP,
         WEAPON_COMP,
         CIRC_COMP,
         SUMMARY_COMP

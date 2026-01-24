@@ -622,6 +622,7 @@ def match_article_to_shr_victims() -> Run[NextStep]:
                         canonical_offender_sex AS offender_sex,
                         canonical_offender_race AS offender_race,
                         canonical_offender_ethnicity AS offender_ethnicity,
+                        canonical_offender_count AS offender_count,
                         CASE
                             WHEN LOWER(TRIM(mode_weapon)) = 'firearm' THEN 'handgun'
                             ELSE mode_weapon

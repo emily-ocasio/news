@@ -113,6 +113,7 @@ SELECT
 
   -- keep raw offender_name so we can normalize it with the same logic as victims
   a.offender_name,
+  a.offender_count,
 
   coalesce(
     try_cast(json_extract_string(v.value, '$.victim_count') AS INTEGER),
@@ -251,6 +252,9 @@ SELECT
 
   -- Offender age from incidents
   i.offender_age,
+
+  -- Offender count from incidents
+  i.offender_count,
 
   -- Offender sex from incidents
   i.offender_sex,

@@ -17,6 +17,7 @@ import pandas as pd
 from pandas import DataFrame
 from splink import Linker, DuckDBAPI, blocking_analysis
 from splink.internals.blocking_rule_creator import BlockingRuleCreator
+from splink.internals.blocking_rule_creator_utils import to_blocking_rule_creator
 from splink.internals.cache_dict_with_logging import CacheDictWithLogging
 from splink.internals.charts import unlinkables_chart
 from splink.internals.pipeline import CTEPipeline
@@ -53,6 +54,11 @@ class SplinkDedupeJob:
     em_min_runs: int = 1
     em_stop_delta: float = 0.002
     splink_key: Any = None
+    do_not_link_table: str | None = None
+    do_not_link_left_col: str = "id_l"
+    do_not_link_right_col: str = "id_r"
+    capture_blocked_edges: bool = False
+    blocked_pairs_out: str = ""
 
 
 @dataclass(frozen=True)
@@ -118,13 +124,152 @@ def _resolve_pair_id_cols(
         f"Expected ({left_id_col}, {right_id_col}) or (unique_id_l, unique_id_r)."
     )
 
+def _apply_do_not_link_rules(
+    rules: Sequence[str | BlockingRuleCreator],
+    unique_id_column_name: str,
+    do_not_link_table: str | None,
+    id_left_col: str,
+    id_right_col: str,
+) -> list[str | BlockingRuleCreator]:
+    return list(rules)
+
+
+def _with_temp_blocking_rules_on_linker(
+    linker: Linker,
+    rules: Sequence[str | BlockingRuleCreator],
+    action,
+):
+    settings_obj = linker._settings_obj
+    old_rules = settings_obj._blocking_rules_to_generate_predictions
+    try:
+        sql_dialect = cast(str, linker._db_api.sql_dialect.sql_dialect_str)
+        blocking_rules_dialected = [
+            to_blocking_rule_creator(rule).get_blocking_rule(sql_dialect)
+            for rule in rules
+        ]
+        for idx, br in enumerate(blocking_rules_dialected):
+            br.add_preceding_rules(blocking_rules_dialected[:idx])
+        settings_obj._blocking_rules_to_generate_predictions = blocking_rules_dialected
+        return action()
+    finally:
+        settings_obj._blocking_rules_to_generate_predictions = old_rules
+
+def _append_clause_to_rules(
+    rules: Sequence[str | BlockingRuleCreator],
+    clause: str,
+) -> list[str | BlockingRuleCreator]:
+    updated: list[str | BlockingRuleCreator] = []
+    for rule in rules:
+        if isinstance(rule, BlockingRuleCreator):
+            updated.append(rule)
+        else:
+            updated.append(f"({rule}) AND {clause}")
+    return updated
+
+
+def _create_exclusion_list_table(
+    *,
+    input_table: str,
+    output_table: str,
+    do_not_link_table: str,
+    unique_id_column_name: str,
+    id_left_col: str,
+    id_right_col: str,
+    exec_fn,
+) -> None:
+    exec_fn(
+        f"""
+        CREATE OR REPLACE TABLE {output_table} AS
+        WITH pairs AS (
+          SELECT
+            CAST({id_left_col} AS VARCHAR) AS victim_id,
+            CAST({id_right_col} AS VARCHAR) AS other_id
+          FROM {do_not_link_table}
+          UNION ALL
+          SELECT
+            CAST({id_right_col} AS VARCHAR) AS victim_id,
+            CAST({id_left_col} AS VARCHAR) AS other_id
+          FROM {do_not_link_table}
+        ),
+        agg AS (
+          SELECT
+            victim_id,
+            array_agg(DISTINCT other_id) AS exclusion_ids
+          FROM pairs
+          GROUP BY victim_id
+        )
+        SELECT
+          v.*,
+          COALESCE(a.exclusion_ids, []::VARCHAR[]) AS exclusion_ids
+        FROM {input_table} v
+        LEFT JOIN agg a
+          ON CAST(v.{unique_id_column_name} AS VARCHAR) = a.victim_id
+        """
+    )
+
+def _filter_pairs_table_do_not_link(
+    *,
+    pairs_table: str,
+    do_not_link_table: str,
+    id_left_col: str,
+    id_right_col: str,
+    unique_id_column_name: str,
+    query_fn,
+    exec_fn,
+) -> None:
+    pair_cols = {
+        row["name"]
+        for row in query_fn(
+            f"SELECT name FROM pragma_table_info('{pairs_table}')"
+        )
+    }
+    left_id_col, right_id_col = _resolve_pair_id_cols(
+        pair_cols,
+        unique_id_column_name,
+        pairs_table,
+    )
+    exec_fn(
+        f"""
+        CREATE OR REPLACE TABLE {pairs_table} AS
+        SELECT p.*
+        FROM {pairs_table} p
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM {do_not_link_table} d
+          WHERE (
+            CAST(d.{id_left_col} AS VARCHAR) = CAST(p.{left_id_col} AS VARCHAR)
+            AND CAST(d.{id_right_col} AS VARCHAR) = CAST(p.{right_id_col} AS VARCHAR)
+          ) OR (
+            CAST(d.{id_left_col} AS VARCHAR) = CAST(p.{right_id_col} AS VARCHAR)
+            AND CAST(d.{id_right_col} AS VARCHAR) = CAST(p.{left_id_col} AS VARCHAR)
+          )
+        )
+        """
+    )
+
+def _drop_all_splink_tables(exec_fn, query_fn) -> None:
+    rows = query_fn(
+        "SELECT table_name, table_type "
+        "FROM information_schema.tables "
+        "WHERE table_name LIKE '__splink__%'"
+    )
+    for row in rows:
+        name = row["table_name"]
+        table_type = str(row["table_type"]).upper()
+        if table_type == "VIEW":
+            exec_fn(f"DROP VIEW IF EXISTS {name}")
+        else:
+            exec_fn(f"DROP TABLE IF EXISTS {name}")
+
 
 def _constrained_greedy_clusters(
     *,
     nodes: list[tuple[str, str]],
     edges: list[tuple[str, str, float]],
     unique_id_column_name: str,
-) -> DataFrame:
+    capture_blocked: bool = False,
+    blocked_id_cols: tuple[str, str] = ("id_l", "id_r"),
+) -> tuple[DataFrame, DataFrame | None]:
     """
     Build clusters using a greedy union-find over pairwise edges, with a hard constraint:
     no resulting cluster may contain two rows with the same exclusion id (e.g. article id).
@@ -159,6 +304,13 @@ def _constrained_greedy_clusters(
         sb = exclusions_in_component[rb]
         return len(sa.intersection(sb)) == 0
 
+    def union_status(a: str, b: str) -> tuple[bool, set[str], bool]:
+        ra, rb = find(a), find(b)
+        if ra == rb:
+            return False, set(), True
+        shared = exclusions_in_component[ra].intersection(exclusions_in_component[rb])
+        return len(shared) == 0, shared, False
+
     def union(a: str, b: str) -> bool:
         if not can_union(a, b):
             return False
@@ -172,9 +324,28 @@ def _constrained_greedy_clusters(
 
     # Ensure we don't error if an edge references a missing node (shouldn't happen).
     known = set(parent.keys())
-    for uid_l, uid_r, _prob in edges:
+    blocked_rows: list[dict[str, Any]] = []
+    id_left_col, id_right_col = blocked_id_cols
+    for uid_l, uid_r, prob in edges:
         if uid_l in known and uid_r in known:
-            union(uid_l, uid_r)
+            ok, shared, same_component = union_status(uid_l, uid_r)
+            if ok:
+                union(uid_l, uid_r)
+            elif capture_blocked and not same_component and shared:
+                print(
+                    "Blocked union: "
+                    f"{uid_l} vs {uid_r} "
+                    f"shared_exclusion_ids={sorted(shared)} "
+                    f"match_probability={prob}"
+                )
+                blocked_rows.append(
+                    {
+                        id_left_col: uid_l,
+                        id_right_col: uid_r,
+                        "match_probability": prob,
+                        "shared_exclusion_ids": ",".join(sorted(shared)),
+                    }
+                )
 
     # Materialize components (including singletons) deterministically.
     components: dict[str, list[str]] = {}
@@ -195,7 +366,14 @@ def _constrained_greedy_clusters(
         for uid in members:
             rows.append({"cluster_id": cluster_id, unique_id_column_name: uid})
 
-    return DataFrame(rows, columns=["cluster_id", unique_id_column_name])
+    clusters_df = DataFrame(rows, columns=["cluster_id", unique_id_column_name])
+    blocked_df = None
+    if capture_blocked:
+        blocked_df = DataFrame(
+            blocked_rows,
+            columns=[id_left_col, id_right_col, "match_probability", "shared_exclusion_ids"],
+        )
+    return clusters_df, blocked_df
 
 
 def splink_dedupe_job(
@@ -216,7 +394,12 @@ def splink_dedupe_job(
     em_max_runs: int = 3,
     em_min_runs: int = 1,
     em_stop_delta: float = 0.002,
-    splink_key: Any = None
+    splink_key: Any = None,
+    do_not_link_table: str | None = None,
+    do_not_link_left_col: str = "id_l",
+    do_not_link_right_col: str = "id_r",
+    capture_blocked_edges: bool = False,
+    blocked_pairs_out: str = ""
 
 
 ) -> Run[tuple[Any, str, str]]:
@@ -245,6 +428,11 @@ def splink_dedupe_job(
                 em_min_runs,
                 em_stop_delta,
                 splink_key,
+                do_not_link_table,
+                do_not_link_left_col,
+                do_not_link_right_col,
+                capture_blocked_edges,
+                blocked_pairs_out,
             ),
             self,
         ),
@@ -282,6 +470,40 @@ def _run_splink_visualize(linker: Linker, job: SplinkVisualizeJob) -> None:
     unique_id_col = settings.get("unique_id_column_name", "unique_id")
     left_id_col: str | None = f"{unique_id_col}_l"
     right_id_col: str | None = f"{unique_id_col}_r"
+    df_clustered = None
+    clustered_df = None
+    cluster_id_map: dict[Any, Any] = {}
+
+    def _midpoint_blocking_rule(
+        left_midpoints: Sequence[int] | None,
+        right_midpoints: Sequence[int] | None,
+    ) -> str | None:
+        clauses: list[str] = []
+        if left_midpoints:
+            left_vals = ",".join(str(int(v)) for v in left_midpoints)
+            clauses.append(f"l.midpoint_day in ({left_vals})")
+        if right_midpoints:
+            right_vals = ",".join(str(int(v)) for v in right_midpoints)
+            clauses.append(f"r.midpoint_day in ({right_vals})")
+        if not clauses:
+            return None
+        return " and ".join(clauses)
+
+    def _with_temp_blocking_rules(rules: list[str | BlockingRuleCreator], action):
+        settings_obj = linker._settings_obj
+        old_rules = settings_obj._blocking_rules_to_generate_predictions
+        try:
+            sql_dialect = cast(str, linker._db_api.sql_dialect.sql_dialect_str)
+            blocking_rules_dialected = [
+                to_blocking_rule_creator(rule).get_blocking_rule(sql_dialect)
+                for rule in rules
+            ]
+            for idx, br in enumerate(blocking_rules_dialected):
+                br.add_preceding_rules(blocking_rules_dialected[:idx])
+            settings_obj._blocking_rules_to_generate_predictions = blocking_rules_dialected
+            return action()
+        finally:
+            settings_obj._blocking_rules_to_generate_predictions = old_rules
 
     def _sql_literal(value: Any) -> str:
         return "'" + str(value).replace("'", "''") + "'"
@@ -435,10 +657,38 @@ def _run_splink_visualize(linker: Linker, job: SplinkVisualizeJob) -> None:
         chart.show()  # type: ignore
         return
 
-    df_pairs = linker.inference.predict(threshold_match_probability=0)
+    if job.chart_type == SplinkChartType.COMPARISON:
+        def _query_dicts(sql: str) -> list[dict]:
+            rel = linker._db_api._execute_sql_against_backend(sql)
+            cols = [d[0] for d in (rel.description or [])]
+            rows = rel.fetchall()
+            return [dict(zip(cols, row)) for row in rows]
+        try:
+            linker.table_management.invalidate_cache()
+            _drop_all_splink_tables(linker._db_api._execute_sql_against_backend, _query_dicts)
+        except Exception: #pylint: disable=W0718
+            pass
+
+    use_midpoint_blocking = job.chart_type in (
+        SplinkChartType.WATERFALL,
+        SplinkChartType.CLUSTER,
+    ) and (job.left_midpoints or job.right_midpoints)
+    if use_midpoint_blocking:
+        rule = _midpoint_blocking_rule(job.left_midpoints, job.right_midpoints)
+        if rule:
+            print("Using midpoint-only blocking for prediction.")
+            df_pairs = _with_temp_blocking_rules(
+                [rule],
+                lambda: linker.inference.predict(threshold_match_probability=0),
+            )
+        else:
+            df_pairs = linker.inference.predict(threshold_match_probability=0)
+    else:
+        df_pairs = linker.inference.predict(threshold_match_probability=0)
     pd_pairs = df_pairs.as_pandas_dataframe()
 
     inspect_df = pd_pairs
+    inspect_ids: set[Any] = set()
     if job.chart_type in (SplinkChartType.WATERFALL, SplinkChartType.CLUSTER):
         if job.left_midpoints:
             if "midpoint_day_l" in inspect_df.columns:
@@ -464,8 +714,38 @@ def _run_splink_visualize(linker: Linker, job: SplinkVisualizeJob) -> None:
             else:
                 left_id_col, right_id_col = None, None
 
+        if left_id_col and left_id_col in inspect_df.columns:
+            inspect_ids.update(inspect_df[left_id_col].dropna().tolist())
+        if right_id_col and right_id_col in inspect_df.columns:
+            inspect_ids.update(inspect_df[right_id_col].dropna().tolist())
+
+        if job.chart_type == SplinkChartType.CLUSTER and left_id_col:
+            try:
+                if df_clustered is None:
+                    df_clustered = linker.clustering.cluster_pairwise_predictions_at_threshold(
+                        df_pairs, 0.01
+                    )
+                clustered_df = df_clustered.as_pandas_dataframe()
+                cluster_id_map = dict(
+                    zip(clustered_df[unique_id_col], clustered_df["cluster_id"])
+                )
+                cluster_id_series = None
+                if left_id_col in inspect_df.columns:
+                    cluster_id_series = inspect_df[left_id_col].map(cluster_id_map)
+                if right_id_col and right_id_col in inspect_df.columns:
+                    right_cluster = inspect_df[right_id_col].map(cluster_id_map)
+                    if cluster_id_series is None:
+                        cluster_id_series = right_cluster
+                    else:
+                        cluster_id_series = cluster_id_series.combine_first(right_cluster)
+                if cluster_id_series is not None:
+                    inspect_df = inspect_df.assign(cluster_id=cluster_id_series)
+            except Exception as exc: #pylint: disable=W0718
+                print(f"Unable to attach cluster_id to members table: {exc}")
+
         display_cols = [
             col for col in [
+                "cluster_id",
                 "match_probability",
                 left_id_col,
                 right_id_col,
@@ -507,22 +787,21 @@ def _run_splink_visualize(linker: Linker, job: SplinkVisualizeJob) -> None:
         print("Cluster studio charts are only available for dedupe models.")
         return
 
-    print("\nGenerating unconstrained clusters for charting…")
-    df_clustered = linker.clustering.cluster_pairwise_predictions_at_threshold(
-        df_pairs, 0.01
-    )
-    inspect_ids: set[Any] = set()
-    if left_id_col and left_id_col in inspect_df.columns:
-        inspect_ids.update(inspect_df[left_id_col].dropna().tolist())
-    if right_id_col and right_id_col in inspect_df.columns:
-        inspect_ids.update(inspect_df[right_id_col].dropna().tolist())
+    if df_clustered is None:
+        print("\nGenerating unconstrained clusters for charting…")
+        df_clustered = linker.clustering.cluster_pairwise_predictions_at_threshold(
+            df_pairs, 0.01
+        )
+    else:
+        print("\nUsing cached unconstrained clusters for charting…")
     print("\nGenerating Cluster Studio dashboard…")
     try:
-        clusters_df = df_clustered.as_pandas_dataframe()
+        if clustered_df is None:
+            clustered_df = df_clustered.as_pandas_dataframe()
         if inspect_ids:
-            filtered = clusters_df[clusters_df[unique_id_col].isin(inspect_ids)]
+            filtered = clustered_df[clustered_df[unique_id_col].isin(inspect_ids)]
         else:
-            filtered = clusters_df.iloc[0:0]
+            filtered = clustered_df.iloc[0:0]
         cluster_ids = sorted(filtered["cluster_id"].dropna().unique().tolist())
     except Exception as exc: #pylint: disable=W0718
         print(f"Unable to compute cluster_ids for dashboard: {exc}")
@@ -538,7 +817,7 @@ def _run_splink_visualize(linker: Linker, job: SplinkVisualizeJob) -> None:
         if right_id_col and right_id_col in pairs_df.columns:
             mask |= pairs_df[right_id_col].isin(inspect_ids)
         filtered_pairs = pairs_df.loc[mask]
-        filtered_clusters = clusters_df[clusters_df[unique_id_col].isin(inspect_ids)]
+        filtered_clusters = clustered_df[clustered_df[unique_id_col].isin(inspect_ids)]
         df_pairs_filtered = linker._db_api.register_table(
             filtered_pairs,
             f"__splink__df_pairs_inspect_{id(filtered_pairs)}",
@@ -587,40 +866,73 @@ def _run_splink_dedupe_with_conn(
         with_duckdb(sql_register(name, df))._step(current)
 
     db_api = DuckDBAPI(connection=con)
-    linker = Linker(
-        job.input_table,
-        job.settings | {"retain_intermediate_calculation_columns": True, "max_iterations": 100},
-        db_api=db_api,
+    unique_id_col = cast(str, job.settings.get("unique_id_column_name", "unique_id"))
+    base_prediction_rules = list(job.settings.get("blocking_rules_to_generate_predictions", []))
+    base_training_rules = (
+        list(job.training_blocking_rules)
+        if job.training_blocking_rules
+        else base_prediction_rules
     )
-    prediction_rules = job.settings.get("blocking_rules_to_generate_predictions", [])
-    if prediction_rules:
-        tables = job.input_table if isinstance(job.input_table, list) else [job.input_table]
-        counts_df = blocking_analysis.cumulative_comparisons_to_be_scored_from_blocking_rules_data(
-            table_or_tables=tables,
-            blocking_rules=prediction_rules,
-            link_type=job.settings.get("link_type", "dedupe_only"),
+
+    def _build_linker(
+        prediction_rules: Sequence[str | BlockingRuleCreator],
+        input_table: str | list[str],
+        extra_columns_to_retain: Sequence[str] | None = None,
+    ) -> Linker:
+        settings = dict(job.settings)
+        if extra_columns_to_retain:
+            existing = list(settings.get("additional_columns_to_retain", []))
+            merged = list(dict.fromkeys(existing + list(extra_columns_to_retain)))
+            settings["additional_columns_to_retain"] = merged
+        return Linker(
+            input_table,
+            settings
+            | {
+                "retain_intermediate_calculation_columns": True,
+                "max_iterations": 100,
+                "blocking_rules_to_generate_predictions": list(prediction_rules),
+            },
             db_api=db_api,
-            unique_id_column_name=job.settings.get("unique_id_column_name", "unique_id"),
-            source_dataset_column_name=job.settings.get("source_dataset_column_name"),
         )
-        total_comparisons = int(counts_df["row_count"].sum())
-        print(f"Total comparisons to be scored (pre-threshold): {total_comparisons}")
 
-    linker.training.estimate_probability_two_random_records_match(
-        list(job.deterministic_rules), recall=job.deterministic_recall
-    )
-    linker.training.estimate_u_using_random_sampling(1e8)
+    def _print_prediction_counts(
+        prediction_rules: Sequence[str | BlockingRuleCreator],
+        input_table: str | list[str],
+    ) -> None:
+        if not prediction_rules:
+            return
+        try:
+            tables = input_table if isinstance(input_table, list) else [input_table]
+            counts_df = blocking_analysis.cumulative_comparisons_to_be_scored_from_blocking_rules_data(
+                table_or_tables=tables,
+                blocking_rules=prediction_rules,
+                link_type=job.settings.get("link_type", "dedupe_only"),
+                db_api=db_api,
+                unique_id_column_name=job.settings.get("unique_id_column_name", "unique_id"),
+                source_dataset_column_name=job.settings.get("source_dataset_column_name"),
+            )
+            total_comparisons = int(counts_df["row_count"].sum())
+            print(f"Total comparisons to be scored (pre-threshold): {total_comparisons}")
+        except Exception as exc: #pylint: disable=W0718
+            print(f"Skipping blocking count analysis: {exc}")
 
-    if job.train_first:
-        # Prefer explicit training rule from intent, otherwise fall back
-        # to the blocking rules used for prediction.
+    def _train_linker(
+        linker: Linker,
+        training_rules: Sequence[str | BlockingRuleCreator],
+        input_table: str | list[str],
+    ) -> None:
+        linker.training.estimate_probability_two_random_records_match(
+            list(job.deterministic_rules), recall=job.deterministic_recall
+        )
+        linker.training.estimate_u_using_random_sampling(1e8)
+
+        if not job.train_first:
+            return
         prev_params: dict[tuple[str, str], tuple[float | None, float | None]] | None = None
         for run_idx in range(job.em_max_runs):
             prev_block_params: dict[tuple[str, str], tuple[float | None, float | None]] | None = None
             current_params: dict[tuple[str, str], tuple[float | None, float | None]] | None = None
-            for training_rule in job.training_blocking_rules or job.settings.get(
-                "blocking_rules_to_generate_predictions", []
-            ):
+            for training_rule in training_rules:
                 em_session = linker.training.estimate_parameters_using_expectation_maximisation(
                     blocking_rule=training_rule,
                     fix_probability_two_random_records_match=True
@@ -662,6 +974,7 @@ def _run_splink_dedupe_with_conn(
             if current_params is None:
                 break
             if prev_params is not None:
+                deltas = []
                 for key, (m_now, u_now) in current_params.items():
                     if key not in prev_params:
                         continue
@@ -684,6 +997,149 @@ def _run_splink_dedupe_with_conn(
                 if run_idx + 1 >= job.em_min_runs and max_delta < job.em_stop_delta:
                     break
             prev_params = current_params
+
+    def _predict_to_table(linker: Linker, table_name: str) -> None:
+        df_pairs = linker.inference.predict(
+            threshold_match_probability=job.predict_threshold
+        )
+        _duckdb_exec(
+            f"CREATE OR REPLACE TABLE {table_name} AS "
+            f"SELECT * FROM {df_pairs.physical_name}"
+        )
+
+    def _collect_blocked_edges(
+        pairs_table: str,
+        blocked_table: str,
+        id_left_col: str,
+        id_right_col: str,
+    ) -> None:
+        if not isinstance(job.input_table, str):
+            raise RuntimeError(
+                "Constrained clustering currently requires a single input table name "
+                f"(got {type(job.input_table).__name__})."
+            )
+        nodes_rows = _duckdb_query(
+            f"""
+            SELECT
+              CAST({unique_id_col} AS VARCHAR) AS unique_id,
+              CAST(exclusion_id AS VARCHAR) AS exclusion_id
+            FROM {job.input_table}
+            """
+        )
+        nodes = [
+            (row["unique_id"], row["exclusion_id"])
+            for row in nodes_rows
+        ]
+        pair_cols = {
+            row["name"]
+            for row in _duckdb_query(
+                f"SELECT name FROM pragma_table_info('{pairs_table}')"
+            )
+        }
+        left_id_col, right_id_col = _resolve_pair_id_cols(
+            pair_cols,
+            unique_id_col,
+            pairs_table,
+        )
+        edges_rows = _duckdb_query(
+            f"""
+            SELECT
+              CAST({left_id_col} AS VARCHAR) AS uid_l,
+              CAST({right_id_col} AS VARCHAR) AS uid_r,
+              match_probability
+            FROM {pairs_table}
+            WHERE match_probability >= {job.cluster_threshold}
+            ORDER BY
+              match_probability DESC,
+              CAST({left_id_col} AS VARCHAR),
+              CAST({right_id_col} AS VARCHAR)
+            """
+        )
+        edges = [
+            (row["uid_l"], row["uid_r"], row["match_probability"])
+            for row in edges_rows
+        ]
+        _clusters_df, blocked_df = _constrained_greedy_clusters(
+            nodes=nodes,
+            edges=edges,
+            unique_id_column_name=unique_id_col,
+            capture_blocked=True,
+            blocked_id_cols=(id_left_col, id_right_col),
+        )
+        if blocked_df is None:
+            return
+        _duckdb_register("_blocked_edges_df", blocked_df)
+        _duckdb_exec(
+            f"CREATE OR REPLACE TABLE {blocked_table} AS "
+            "SELECT * FROM _blocked_edges_df"
+        )
+
+    do_not_link_table = job.do_not_link_table
+    if job.capture_blocked_edges and not do_not_link_table:
+        do_not_link_table = job.blocked_pairs_out or "do_not_link"
+
+    input_table_for_prediction = job.input_table
+    if job.capture_blocked_edges:
+        linker = _build_linker(base_prediction_rules, job.input_table)
+        _print_prediction_counts(base_prediction_rules, job.input_table)
+        _train_linker(linker, base_training_rules, job.input_table)
+        capture_rules: list[str | BlockingRuleCreator] = []
+        seen_rules: set[str] = set()
+        for rule in base_training_rules + base_prediction_rules:
+            if isinstance(rule, BlockingRuleCreator):
+                capture_rules.append(rule)
+                continue
+            if rule in seen_rules:
+                continue
+            capture_rules.append(rule)
+            seen_rules.add(rule)
+        capture_pairs_table = f"{job.pairs_out}_capture"
+        _with_temp_blocking_rules_on_linker(
+            linker,
+            capture_rules,
+            lambda: _predict_to_table(linker, capture_pairs_table),
+        )
+        _collect_blocked_edges(
+            capture_pairs_table,
+            do_not_link_table or "do_not_link",
+            job.do_not_link_left_col,
+            job.do_not_link_right_col,
+        )
+        try:
+            linker.table_management.invalidate_cache()
+            _drop_all_splink_tables(_duckdb_exec, _duckdb_query)
+        except Exception: #pylint: disable=W0718
+            pass
+
+        prediction_rules = base_prediction_rules
+        training_rules = base_training_rules
+        if do_not_link_table and isinstance(job.input_table, str):
+            input_table_for_prediction = f"{job.input_table}_exc"
+            _create_exclusion_list_table(
+                input_table=job.input_table,
+                output_table=input_table_for_prediction,
+                do_not_link_table=do_not_link_table,
+                unique_id_column_name=unique_id_col,
+                id_left_col=job.do_not_link_left_col,
+                id_right_col=job.do_not_link_right_col,
+                exec_fn=_duckdb_exec,
+            )
+            exclusion_clause = (
+                f"NOT (list_contains(l.exclusion_ids, r.{unique_id_col}) "
+                f"OR list_contains(r.exclusion_ids, l.{unique_id_col}))"
+            )
+            prediction_rules = _append_clause_to_rules(prediction_rules, exclusion_clause)
+            training_rules = _append_clause_to_rules(training_rules, exclusion_clause)
+        extra_cols = ["exclusion_ids"] if do_not_link_table else None
+        linker = _build_linker(prediction_rules, input_table_for_prediction, extra_cols)
+        _print_prediction_counts(prediction_rules, input_table_for_prediction)
+        _train_linker(linker, training_rules, input_table_for_prediction)
+    else:
+        prediction_rules = base_prediction_rules
+        training_rules = base_training_rules
+        linker = _build_linker(prediction_rules, job.input_table)
+        _print_prediction_counts(prediction_rules, job.input_table)
+        _train_linker(linker, training_rules, job.input_table)
     df_pairs = linker.inference.predict(
         threshold_match_probability=job.predict_threshold
     )
@@ -693,6 +1149,16 @@ def _run_splink_dedupe_with_conn(
         f"CREATE OR REPLACE TABLE {job.pairs_out} AS "
         f"SELECT * FROM {df_pairs.physical_name}"
     )
+    if do_not_link_table:
+        _filter_pairs_table_do_not_link(
+            pairs_table=job.pairs_out,
+            do_not_link_table=do_not_link_table,
+            id_left_col=job.do_not_link_left_col,
+            id_right_col=job.do_not_link_right_col,
+            unique_id_column_name=unique_id_col,
+            query_fn=_duckdb_query,
+            exec_fn=_duckdb_exec,
+        )
     if job.settings.get("link_type", "dedupe") == "link_only":
         _duckdb_exec(f"""
             CREATE OR REPLACE TABLE {job.pairs_out}_top1 AS
@@ -762,10 +1228,10 @@ def _run_splink_dedupe_with_conn(
                 )
                 """)
     if job.do_cluster:
-        if not isinstance(job.input_table, str):
+        if not isinstance(input_table_for_prediction, str):
             raise RuntimeError(
                 "Constrained clustering currently requires a single input table name "
-                f"(got {type(job.input_table).__name__})."
+                f"(got {type(input_table_for_prediction).__name__})."
             )
 
         unique_id_col = cast(str, job.settings.get("unique_id_column_name", "unique_id"))
@@ -774,7 +1240,7 @@ def _run_splink_dedupe_with_conn(
             SELECT
               CAST({unique_id_col} AS VARCHAR) AS unique_id,
               CAST(exclusion_id AS VARCHAR) AS exclusion_id
-            FROM {job.input_table}
+            FROM {input_table_for_prediction}
             """
         )
         nodes = [
@@ -810,16 +1276,29 @@ def _run_splink_dedupe_with_conn(
             (row["uid_l"], row["uid_r"], row["match_probability"])
             for row in edges_rows
         ]
-        clusters_df = _constrained_greedy_clusters(
+        capture_blocked = (
+            job.capture_blocked_edges
+            and bool(job.blocked_pairs_out)
+            and job.blocked_pairs_out != do_not_link_table
+        )
+        clusters_df, blocked_df = _constrained_greedy_clusters(
             nodes=nodes,
             edges=edges,
             unique_id_column_name=unique_id_col,
+            capture_blocked=capture_blocked,
+            blocked_id_cols=(job.do_not_link_left_col, job.do_not_link_right_col),
         )
         _duckdb_register("_constrained_clusters_df", clusters_df)
         _duckdb_exec(
             f"CREATE OR REPLACE TABLE {job.clusters_out} AS "
             "SELECT * FROM _constrained_clusters_df"
         )
+        if blocked_df is not None and capture_blocked and job.blocked_pairs_out:
+            _duckdb_register("_blocked_edges_df", blocked_df)
+            _duckdb_exec(
+                f"CREATE OR REPLACE TABLE {job.blocked_pairs_out} AS "
+                "SELECT * FROM _blocked_edges_df"
+            )
 
         counts_table = _cluster_counts_table_name(job.clusters_out)
         # Always materialize cluster counts as a table, but handle legacy views.
@@ -869,8 +1348,17 @@ def _save_splink_model(
     model_path, meta_path = _splink_model_paths(splink_key)
     model_path.parent.mkdir(parents=True, exist_ok=True)
     linker.misc.save_model_to_json(str(model_path), overwrite=True)
+    actual_input_table: str | list[str] = input_table
+    try:
+        input_tables = list(linker._input_tables_dict.values())
+        if len(input_tables) == 1:
+            actual_input_table = input_tables[0].physical_name
+        elif len(input_tables) > 1:
+            actual_input_table = [df.physical_name for df in input_tables]
+    except Exception: #pylint: disable=W0718
+        actual_input_table = input_table
     with open(meta_path, "w", encoding="utf-8") as f:
-        json.dump({"input_table": input_table}, f, indent=2)
+        json.dump({"input_table": actual_input_table}, f, indent=2)
 
 
 def _load_splink_model(

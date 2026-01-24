@@ -142,18 +142,31 @@ def _visualize_for_type(splink_key: SplinkType, chart_type: SplinkChartType) -> 
         prompt = "For cluster charts, provide the desired midpoint days for the records:"
     else:
         return _run_visualization(splink_key, chart_type, "", "")
+    if chart_type == SplinkChartType.WATERFALL:
+        return (
+            put_line(prompt)
+            ^ get_line(InputPrompt("Left midpoint days> "))
+            >> (
+                lambda left_raw: get_line(InputPrompt("Right midpoint days> "))
+                >> (
+                    lambda right_raw: _run_visualization(
+                        splink_key,
+                        chart_type,
+                        str(left_raw),
+                        str(right_raw),
+                    )
+                )
+            )
+        )
     return (
         put_line(prompt)
-        ^ get_line(InputPrompt("Left midpoint days> "))
+        ^ get_line(InputPrompt("Midpoint days> "))
         >> (
-            lambda left_raw: get_line(InputPrompt("Right midpoint days> "))
-            >> (
-                lambda right_raw: _run_visualization(
-                    splink_key,
-                    chart_type,
-                    str(left_raw),
-                    str(right_raw),
-                )
+            lambda raw: _run_visualization(
+                splink_key,
+                chart_type,
+                str(raw),
+                str(raw),
             )
         )
     )

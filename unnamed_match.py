@@ -116,6 +116,7 @@ def _create_linkage_input_tables() -> Run[Unit]:
                     canonical_offender_sex AS offender_sex,
                     canonical_offender_race AS offender_race,
                     canonical_offender_ethnicity AS offender_ethnicity,
+                    canonical_offender_count AS offender_count,
                     mode_weapon AS weapon,
                     mode_circumstance AS circumstance,
                     offender_forename AS offender_forename_norm,
@@ -163,6 +164,7 @@ def _create_linkage_input_tables() -> Run[Unit]:
                     offender_sex AS offender_sex,
                     offender_race AS offender_race,
                     offender_ethnicity AS offender_ethnicity,
+                    offender_count AS offender_count,
                     summary_vec,
                     CAST(article_id AS varchar) AS article_ids_csv,
                     '' AS exclusion_id  
@@ -482,7 +484,7 @@ def _integrate_orphan_matches() -> Run[Unit]:
                 WITH matched_orphans AS (
                   SELECT
                     fom.entity_uid,
-                    vce.lat, vce.lon, vce.midpoint_day, vce.article_id, vce.victim_count
+                    vce.lat, vce.lon, vce.midpoint_day, vce.article_id, vce.victim_count, vce.offender_count
                   FROM final_orphan_matches fom
                   JOIN victims_cached_enh vce ON vce.victim_row_id = CAST(fom.orphan_uid AS VARCHAR)
                 ),
@@ -495,7 +497,8 @@ def _integrate_orphan_matches() -> Run[Unit]:
                     MIN(midpoint_day) AS min_orphan_mid,
                     MAX(midpoint_day) AS max_orphan_mid,
                     STRING_AGG(DISTINCT CAST(article_id AS VARCHAR), ',') AS orphan_article_ids,
-                    MAX(victim_count) FILTER (WHERE victim_count IS NOT NULL) AS max_orphan_victim_count
+                    MAX(victim_count) FILTER (WHERE victim_count IS NOT NULL) AS max_orphan_victim_count,
+                    MAX(offender_count) FILTER (WHERE offender_count IS NOT NULL) AS max_orphan_offender_count
                   FROM matched_orphans
                   GROUP BY entity_uid
                 )
@@ -517,6 +520,13 @@ def _integrate_orphan_matches() -> Run[Unit]:
                     WHEN mu.max_orphan_victim_count IS NOT NULL
                       THEN mu.max_orphan_victim_count
                     ELSE canonical_victim_count
+                  END,
+                  canonical_offender_count = CASE
+                    WHEN mu.max_orphan_offender_count IS NOT NULL AND canonical_offender_count IS NOT NULL
+                      THEN GREATEST(canonical_offender_count, mu.max_orphan_offender_count)
+                    WHEN mu.max_orphan_offender_count IS NOT NULL
+                      THEN mu.max_orphan_offender_count
+                    ELSE canonical_offender_count
                   END
                 FROM matched_updates mu
                 WHERE victim_entity_reps_new.victim_entity_id = mu.entity_uid;
@@ -544,6 +554,7 @@ def _integrate_orphan_matches() -> Run[Unit]:
                   city_id,
                   canonical_age,
                   canonical_victim_count,
+                  canonical_offender_count,
                   mode_weapon,
                   mode_circumstance,
                   offender_fullname,
@@ -566,6 +577,7 @@ def _integrate_orphan_matches() -> Run[Unit]:
                   city_id AS city_id,
                   victim_age AS canonical_age,
                   victim_count AS canonical_victim_count,
+                  offender_count AS canonical_offender_count,
                   weapon AS mode_weapon,
                   circumstance AS mode_circumstance,
                   offender_name AS offender_fullname,
@@ -597,7 +609,8 @@ def _integrate_orphan_matches() -> Run[Unit]:
                                 m.victim_entity_id,
                                 m.date_precision,
                                 m.incident_date,
-                                m.midpoint_day
+                                m.midpoint_day,
+                                m.offender_count
                             FROM victim_entity_members m
                             JOIN affected_entities ae ON m.victim_entity_id = ae.entity_uid
                             UNION ALL
@@ -605,7 +618,8 @@ def _integrate_orphan_matches() -> Run[Unit]:
                                 fom.entity_uid AS victim_entity_id,
                                 vce.date_precision,
                                 vce.incident_date,
-                                vce.midpoint_day
+                                vce.midpoint_day,
+                                vce.offender_count
                             FROM final_orphan_matches fom
                             JOIN victims_cached_enh vce ON vce.victim_row_id = CAST(fom.orphan_uid AS VARCHAR);
                             """
@@ -623,7 +637,8 @@ def _integrate_orphan_matches() -> Run[Unit]:
                                 count_if(date_precision = 'year') AS n_year,
                                 mode(incident_date) FILTER (WHERE date_precision = 'day' AND incident_date IS NOT NULL) AS mode_day_date,
                                 mode(midpoint_day) FILTER (WHERE date_precision = 'month') AS mode_month_mid,
-                                mode(midpoint_day) FILTER (WHERE date_precision = 'year') AS mode_year_mid
+                                mode(midpoint_day) FILTER (WHERE date_precision = 'year') AS mode_year_mid,
+                                MAX(offender_count) FILTER (WHERE offender_count IS NOT NULL) AS max_offender_count
                               FROM all_members_temp
                               GROUP BY victim_entity_id
                             )
@@ -644,7 +659,8 @@ def _integrate_orphan_matches() -> Run[Unit]:
                                   WHEN n_month > 0 THEN mode_month_mid
                                   ELSE mode_year_mid
                                 END AS INTEGER
-                              ) AS entity_midpoint_day
+                              ) AS entity_midpoint_day,
+                              max_offender_count
                             FROM agg;
                             """
                         )
@@ -656,7 +672,14 @@ def _integrate_orphan_matches() -> Run[Unit]:
                             SET
                               entity_date_precision = ra.entity_date_precision,
                               incident_date = ra.incident_date,
-                              entity_midpoint_day = ra.entity_midpoint_day
+                              entity_midpoint_day = ra.entity_midpoint_day,
+                              canonical_offender_count = CASE
+                                WHEN ra.max_offender_count IS NOT NULL AND canonical_offender_count IS NOT NULL
+                                  THEN GREATEST(canonical_offender_count, ra.max_offender_count)
+                                WHEN ra.max_offender_count IS NOT NULL
+                                  THEN ra.max_offender_count
+                                ELSE canonical_offender_count
+                              END
                             FROM recomputed_agg ra
                             WHERE victim_entity_reps_new.victim_entity_id = ra.victim_entity_id;
                             """
@@ -728,6 +751,7 @@ def _export_orphan_matches_debug_excel() -> Run[Unit]:
                 e.weapon, e.circumstance,
                 e.offender_forename_norm, e.offender_surname_norm,
                 e.victim_count,
+                e.offender_count,
                 CAST(NULL AS DOUBLE) AS match_probability
               FROM entity_with_match e
 
@@ -755,6 +779,7 @@ def _export_orphan_matches_debug_excel() -> Run[Unit]:
                 o.weapon, o.circumstance,
                 o.offender_forename_norm, o.offender_surname_norm,
                 o.victim_count,
+                o.offender_count,
                 o.match_probability
               FROM orphan_choice o
               LEFT JOIN entity_link_input e
@@ -778,6 +803,7 @@ def _export_orphan_matches_debug_excel() -> Run[Unit]:
               weapon, circumstance,
               offender_forename_norm, offender_surname_norm,
               victim_count,
+              offender_count,
               match_probability,
               article_ids_csv
             FROM combined
@@ -851,7 +877,6 @@ def match_orphans_with_splink(env: Environment) -> Run[NextStep]:
     return (
         _create_orphans_view()
         ^ _create_linkage_input_tables()
-        ^ _debug_preview_orphans()
         ^ _link_orphans_to_entities(env)
         ^ _integrate_orphan_matches()
         ^ _export_orphan_matches_debug_excel()
