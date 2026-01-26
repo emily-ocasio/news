@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from enum import Enum
 import logging
 import json
+import math
 from pathlib import Path
 from typing import Any, Sequence, TypeVar, cast
 import uuid
@@ -28,6 +29,8 @@ from .run import Run, ask, throw, ErrorPayload, put_splink_linker, get_splink_li
     HasSplinkLinker
 from .runsql import SQL, sql_exec, sql_query, sql_register, with_duckdb
 from .array import Array
+from .hashmap import HashMap, flatten_map
+from .maybe import Just, Nothing, Maybe
 
 A = TypeVar("A")
 
@@ -82,30 +85,70 @@ class SplinkChartType(str, Enum):
     CLUSTER = "cluster"
     UNLINKABLES = "unlinkables"
 
+@dataclass(frozen=True)
+class ComparisonLevelKey:
+    """Key for a specific comparison level within a Splink model."""
+    comparison_name: str
+    level_name: str
+
+@dataclass(frozen=True)
+class EmParam:
+    """EM m/u probabilities for a comparison level (optional via Maybe)."""
+    m: Maybe[float]
+    u: Maybe[float]
+
+EmParams = HashMap[ComparisonLevelKey, EmParam]
+
+class SplinkPairsSchemaError(Exception):
+    """Raised when Splink pairwise output does not include expected id columns."""
 
 def _extract_em_params(
         settings_dict: dict[str, Any]
-        ) -> dict[tuple[str, str], tuple[float | None, float | None]]:
+        ) -> EmParams:
     """
-    Flatten comparison level m/u probabilities to a stable dict
+    Flatten comparison level m/u probabilities to a stable HashMap
     keyed by (comparison_name, level_name).
     """
-    params: dict[tuple[str, str], tuple[float | None, float | None]] = {}
-    for comparison in settings_dict.get("comparisons", []):
-        comp_name = comparison.get("comparison_description", "")
-        for level in comparison.get("comparison_levels", []):
-            level_name = level.get("comparison_vector_value", level.get("label", ""))
-            m_prob = level.get("m_probability")
-            u_prob = level.get("u_probability")
-            params[(str(comp_name), str(level_name))] = (m_prob, u_prob)
-    return params
+    def _level_entry(level: dict[str, Any]):
+        raw_name = level.get("label_for_charts", "")
+        level_name = str(raw_name).strip()
+        maybe_key = Just(level_name) if level_name else Nothing
+        return (
+            maybe_key,
+            EmParam(
+                m=_maybe_float(level.get("m_probability")),
+                u=_maybe_float(level.get("u_probability")),
+            ),
+        )
 
+    def _comparison_map(
+            comparison: dict[str, Any]
+        ) -> tuple[Maybe[str], HashMap[str, EmParam]]:
+        output_name = str(comparison.get("output_column_name", ""))
+        description = str(comparison.get("comparison_description", ""))
+        comp_name = f"{output_name}_{description}"
+        level_map = HashMap.from_iterable(
+            comparison.get("comparison_levels", []),
+            _level_entry,
+        )
+        return Just(comp_name), level_map
 
-def _cluster_counts_table_name(clusters_table: str) -> str:
-    # Most of the pipeline expects e.g. victim_clusters -> victim_cluster_counts
-    if "clusters" in clusters_table:
-        return clusters_table.replace("clusters", "cluster_counts")
-    return f"{clusters_table}_counts"
+    nested = HashMap.from_iterable(
+        settings_dict.get("comparisons", []),
+        _comparison_map,
+    )
+    return flatten_map(
+        nested,
+        lambda comp_name, level_name: ComparisonLevelKey(
+            comparison_name=comp_name,
+            level_name=level_name,
+        ),
+    )
+
+def _maybe_float(value: Any) -> Maybe[float]:
+    if value is None:
+        return Nothing
+    return Just(value)
 
 
 def _resolve_pair_id_cols(
@@ -113,26 +156,23 @@ def _resolve_pair_id_cols(
     unique_id_column_name: str,
     pairs_table: str,
 ) -> tuple[str, str]:
+    """
+    Determine the left/right id columns in a pairs table by inspecting its schema.
+
+    Splink may emit either `{unique_id_column_name}_l/_r` or the legacy
+    `unique_id_l/unique_id_r`. We resolve against the actual table columns to
+    keep downstream queries robust across settings and Splink versions.
+    """
     left_id_col = f"{unique_id_column_name}_l"
     right_id_col = f"{unique_id_column_name}_r"
     if left_id_col in pair_cols and right_id_col in pair_cols:
         return left_id_col, right_id_col
     if "unique_id_l" in pair_cols and "unique_id_r" in pair_cols:
         return "unique_id_l", "unique_id_r"
-    raise RuntimeError(
+    raise SplinkPairsSchemaError(
         f"Constrained clustering cannot find id columns in {pairs_table}. "
         f"Expected ({left_id_col}, {right_id_col}) or (unique_id_l, unique_id_r)."
     )
-
-def _apply_do_not_link_rules(
-    rules: Sequence[str | BlockingRuleCreator],
-    unique_id_column_name: str,
-    do_not_link_table: str | None,
-    id_left_col: str,
-    id_right_col: str,
-) -> list[str | BlockingRuleCreator]:
-    return list(rules)
-
 
 def _with_temp_blocking_rules_on_linker(
     linker: Linker,
@@ -143,13 +183,17 @@ def _with_temp_blocking_rules_on_linker(
     old_rules = settings_obj._blocking_rules_to_generate_predictions
     try:
         sql_dialect = cast(str, linker._db_api.sql_dialect.sql_dialect_str)
-        blocking_rules_dialected = [
-            to_blocking_rule_creator(rule).get_blocking_rule(sql_dialect)
-            for rule in rules
-        ]
-        for idx, br in enumerate(blocking_rules_dialected):
-            br.add_preceding_rules(blocking_rules_dialected[:idx])
-        settings_obj._blocking_rules_to_generate_predictions = blocking_rules_dialected
+        rules_array = Array.make(tuple(rules))
+        dialected = rules_array.map(
+            lambda rule: to_blocking_rule_creator(rule).get_blocking_rule(sql_dialect)
+        )
+        blocking_rules_dialected = dialected.map_with_index(
+            lambda idx, br: (
+                br.add_preceding_rules(list(dialected.a[:idx])),
+                br,
+            )[1]
+        )
+        settings_obj._blocking_rules_to_generate_predictions = list(blocking_rules_dialected)
         return action()
     finally:
         settings_obj._blocking_rules_to_generate_predictions = old_rules
@@ -489,22 +533,6 @@ def _run_splink_visualize(linker: Linker, job: SplinkVisualizeJob) -> None:
             return None
         return " and ".join(clauses)
 
-    def _with_temp_blocking_rules(rules: list[str | BlockingRuleCreator], action):
-        settings_obj = linker._settings_obj
-        old_rules = settings_obj._blocking_rules_to_generate_predictions
-        try:
-            sql_dialect = cast(str, linker._db_api.sql_dialect.sql_dialect_str)
-            blocking_rules_dialected = [
-                to_blocking_rule_creator(rule).get_blocking_rule(sql_dialect)
-                for rule in rules
-            ]
-            for idx, br in enumerate(blocking_rules_dialected):
-                br.add_preceding_rules(blocking_rules_dialected[:idx])
-            settings_obj._blocking_rules_to_generate_predictions = blocking_rules_dialected
-            return action()
-        finally:
-            settings_obj._blocking_rules_to_generate_predictions = old_rules
-
     def _sql_literal(value: Any) -> str:
         return "'" + str(value).replace("'", "''") + "'"
 
@@ -677,7 +705,8 @@ def _run_splink_visualize(linker: Linker, job: SplinkVisualizeJob) -> None:
         rule = _midpoint_blocking_rule(job.left_midpoints, job.right_midpoints)
         if rule:
             print("Using midpoint-only blocking for prediction.")
-            df_pairs = _with_temp_blocking_rules(
+            df_pairs = _with_temp_blocking_rules_on_linker(
+                linker,
                 [rule],
                 lambda: linker.inference.predict(threshold_match_probability=0),
             )
@@ -928,10 +957,10 @@ def _run_splink_dedupe_with_conn(
 
         if not job.train_first:
             return
-        prev_params: dict[tuple[str, str], tuple[float | None, float | None]] | None = None
+        prev_params: EmParams | None = None
         for run_idx in range(job.em_max_runs):
-            prev_block_params: dict[tuple[str, str], tuple[float | None, float | None]] | None = None
-            current_params: dict[tuple[str, str], tuple[float | None, float | None]] | None = None
+            prev_block_params: EmParams | None = None
+            current_params: EmParams | None = None
             for training_rule in training_rules:
                 em_session = linker.training.estimate_parameters_using_expectation_maximisation(
                     blocking_rule=training_rule,
@@ -952,48 +981,66 @@ def _run_splink_dedupe_with_conn(
                 current_params = _extract_em_params(current_settings)
                 deltas: list[float] = []
                 if prev_block_params is not None:
-                    for key, (m_now, u_now) in current_params.items():
+                    max_key: ComparisonLevelKey | None = None
+                    max_delta_local = -1.0
+                    for key, now in current_params.items():
                         if key not in prev_block_params:
                             continue
-                        m_prev, u_prev = prev_block_params[key]
-                        if (
-                            m_now is not None
-                            and u_now is not None
-                            and m_prev is not None
-                            and u_prev is not None
-                            and u_now != 0
-                            and u_prev != 0
-                        ):
-                            deltas.append(abs((m_now / u_now) - (m_prev / u_prev)))
+                        prev = prev_block_params[key]
+                        match now.m, now.u, prev.m, prev.u:
+                            case Just(m_now), Just(u_now), Just(m_prev), Just(u_prev):
+                                if u_now != 0 and u_prev != 0:
+                                    delta = abs(
+                                        math.log2(m_now / u_now)
+                                        - math.log2(m_prev / u_prev)
+                                    )
+                                    deltas.append(delta)
+                                    if delta > max_delta_local:
+                                        max_key = key
+                                        max_delta_local = delta
                     max_delta = max(deltas) if deltas else 1.0
                     print(
                         f"EM run {run_idx + 1}/{job.em_max_runs} block drift: "
                         f"max_delta={max_delta:.6f} (block to block)"
                     )
+                    if max_key is not None:
+                        print(
+                            f"  max_delta_key={max_key.comparison_name}::"
+                            f"{max_key.level_name}"
+                        )
                 prev_block_params = current_params
             if current_params is None:
                 break
             if prev_params is not None:
                 deltas = []
-                for key, (m_now, u_now) in current_params.items():
+                max_key = None
+                max_delta_local = -1.0
+                for key, now in current_params.items():
                     if key not in prev_params:
                         continue
-                    m_prev, u_prev = prev_params[key]
-                    if (
-                        m_now is not None
-                        and u_now is not None
-                        and m_prev is not None
-                        and u_prev is not None
-                        and u_now != 0
-                        and u_prev != 0
-                    ):
-                        deltas.append(abs((m_now / u_now) - (m_prev / u_prev)))
+                    prev = prev_params[key]
+                    match now.m, now.u, prev.m, prev.u:
+                        case Just(m_now), Just(u_now), Just(m_prev), Just(u_prev):
+                            if u_now != 0 and u_prev != 0:
+                                delta = abs(
+                                    math.log2(m_now / u_now)
+                                    - math.log2(m_prev / u_prev)
+                                )
+                                deltas.append(delta)
+                                if delta > max_delta_local:
+                                    max_key = key
+                                    max_delta_local = delta
                 max_delta = max(deltas) if deltas else 1.0
                 print(
                     f"EM run {run_idx + 1}/{job.em_max_runs}: "
                     f"max_delta={max_delta:.6f} "
                     f"(stop if < {job.em_stop_delta:.6f} after {job.em_min_runs} runs)"
                 )
+                if max_key is not None:
+                    print(
+                        f"  max_delta_key={max_key.comparison_name}::"
+                        f"{max_key.level_name}"
+                    )
                 if run_idx + 1 >= job.em_min_runs and max_delta < job.em_stop_delta:
                     break
             prev_params = current_params
@@ -1300,7 +1347,7 @@ def _run_splink_dedupe_with_conn(
                 "SELECT * FROM _blocked_edges_df"
             )
 
-        counts_table = _cluster_counts_table_name(job.clusters_out)
+        counts_table = f"{job.clusters_out}_counts"
         # Always materialize cluster counts as a table, but handle legacy views.
         existing = _duckdb_query(
             f"""

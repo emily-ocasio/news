@@ -151,7 +151,7 @@ def _show_initial_clusters() -> Run[Unit]:
             SQL(
                 """
         SELECT cluster_id, member_count
-        FROM victim_cluster_counts
+        FROM victim_clusters_counts
         ORDER BY member_count DESC, cluster_id
         LIMIT 100;
     """
@@ -174,7 +174,7 @@ def _show_initial_clusters() -> Run[Unit]:
                             "coalesce(v.geo_address_norm, '') AS address, "
                             "coalesce(v.offender_name_norm, '') AS offender, "
                             "coalesce(v.weapon, '') AS weapon "
-                            "FROM victim_cluster_counts c "
+                            "FROM victim_clusters_counts c "
                             "JOIN victim_clusters vc ON c.cluster_id = vc.cluster_id "
                             "JOIN victims_cached_enh v "
                             "ON vc.victim_row_id = v.victim_row_id "
@@ -564,6 +564,7 @@ def _export_final_clusters_excel() -> Run[Unit]:
               v.midpoint_day,
               v.date_precision,
               v.victim_name_raw,
+              v.victim_fullname_concat,
               v.victim_forename_norm,
               v.victim_surname_norm,
               v.victim_age,
@@ -575,7 +576,7 @@ def _export_final_clusters_excel() -> Run[Unit]:
               COALESCE(v.geo_address_norm, '') AS address,
               COALESCE(v.offender_name_norm, '') AS offender,
               COALESCE(v.weapon, '') AS weapon
-            FROM victim_cluster_counts c
+            FROM victim_clusters_counts c
             JOIN victim_clusters vc
               ON c.cluster_id = vc.cluster_id
             JOIN victims_cached_enh v

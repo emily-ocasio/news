@@ -70,22 +70,22 @@ class BlockComp(StrEnum):
 def _clause_from_comps(*components: StrEnum) -> str:
     return " AND ".join([component.value for component in components])
 
-def add_do_not_link_exclusion(
-    rule: str,
-    unique_id_column: str,
-    do_not_link_table: str = "do_not_link",
-    id_left_col: str = "id_l",
-    id_right_col: str = "id_r",
-) -> str:
-    return (
-        f"({rule}) AND NOT EXISTS ("
-        f"SELECT 1 FROM {do_not_link_table} d WHERE "
-        f"(d.{id_left_col} = l.{unique_id_column} AND "
-        f"d.{id_right_col} = r.{unique_id_column}) "
-        f"OR (d.{id_left_col} = r.{unique_id_column} AND "
-        f"d.{id_right_col} = l.{unique_id_column})"
-        f")"
-    )
+# def add_do_not_link_exclusion(
+#     rule: str,
+#     unique_id_column: str,
+#     do_not_link_table: str = "do_not_link",
+#     id_left_col: str = "id_l",
+#     id_right_col: str = "id_r",
+# ) -> str:
+#     return (
+#         f"({rule}) AND NOT EXISTS ("
+#         f"SELECT 1 FROM {do_not_link_table} d WHERE "
+#         f"(d.{id_left_col} = l.{unique_id_column} AND "
+#         f"d.{id_right_col} = r.{unique_id_column}) "
+#         f"OR (d.{id_left_col} = r.{unique_id_column} AND "
+#         f"d.{id_right_col} = l.{unique_id_column})"
+#         f")"
+#     )
 
 def _block_from_comps(
     *components: BlockComp, add_article_exclusion: bool = True
@@ -172,6 +172,7 @@ class DedupBlockRule(StrEnum):
                                         BlockComp.LONG_LAT_EXISTS,
                                         BlockComp.CLOSE_LONG_LAT)
     SAME_NAMES = _block_from_comps(BlockComp.SAME_NAMES)
+    SAME_FULLNAME = _block_from_comps(BlockComp.SAME_FULLNAME)
     YEAR_SAME_NAMES = _block_from_comps(
         BlockComp.EXACT_YEAR,
         BlockComp.SAME_NAMES
@@ -208,7 +209,7 @@ class DedupBlockRule(StrEnum):
 
 
 NAMED_VICTIM_BLOCKS = [
-    DedupBlockRule.YEAR_SAME_NAMES,
+    DedupBlockRule.SAME_NAMES,
     DedupBlockRule.YEAR_MONTH,
     DedupBlockRule.DATE_LOCATION,
     DedupBlockRule.YEAR_SURNAME_SOUNDEX,
@@ -218,7 +219,7 @@ NAMED_VICTIM_BLOCKS = [
 
 NAMED_VICTIM_BLOCKS_FOR_TRAINING = [
     DedupBlockRule.YEAR_MONTH,
-    DedupBlockRule.SAME_NAMES,
+    DedupBlockRule.SAME_FULLNAME,
     DedupBlockRule.AGE_SEX,
     DedupBlockRule.OFFENDER_AGE_SEX
 ]

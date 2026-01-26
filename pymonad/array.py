@@ -9,6 +9,7 @@ from .applicative import Applicative
 from .curry import curry2
 from .functor import Functor
 from .monoid import Monoid
+from .monad import unit, Unit
 
 B = TypeVar('B')
 C = TypeVar('C')
@@ -85,6 +86,12 @@ class Array[A](Functor[A], Monoid):
 
     def map(self, f: Callable[[A], B]) -> 'Array[B]':
         return Array(tuple(map(f, self.a)))
+
+    def map_with_index(self, f: Callable[[int, A], B]) -> 'Array[B]':
+        """
+        Maps a function over the Array with access to each element's index.
+        """
+        return Array(tuple(f(i, x) for i, x in enumerate(self.a)))
 
     def __mul__(self: "Array[Callable[[B], C]]", other: "Array[B]") \
         -> 'Array[C]':
@@ -186,6 +193,14 @@ class Array[A](Functor[A], Monoid):
             cons = curry2(self.__class__.cons)
             return (cons & f(x)) * acc
         return rest.foldr(fn, acc0)
+
+    def traverse_(self, f: Callable[[A], Applicative[B]]) \
+        -> Applicative[Unit]:
+        """
+        Traverses the Array, applying an applicative context function
+        to each element and discarding results.
+        """
+        return self.traverse(f).map(lambda _: unit)
 
     def sequence(self: Array[Applicative[B]]) -> Applicative[Array[B]]:
         """

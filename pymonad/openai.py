@@ -56,9 +56,9 @@ class GPTModel(str, Enum):
             case GPTModel.GPT_5_NANO, GPTTokenType.OUTPUT:
                 return 0.4
             case GPTModel.GPT_5_MINI, GPTTokenType.UNCACHED:
-                return 0.025
-            case GPTModel.GPT_5_MINI, GPTTokenType.CACHED:
                 return 0.25
+            case GPTModel.GPT_5_MINI, GPTTokenType.CACHED:
+                return 0.025
             case GPTModel.GPT_5_MINI, GPTTokenType.OUTPUT:
                 return 2.0
             case _:

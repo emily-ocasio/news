@@ -22,7 +22,7 @@ def _exact_comp_builder(field: str) -> str:
 def _distance_comp_builder(field: str, distance: int) -> str:
     return f'abs("{field}_l" - "{field}_r") <= {distance}'
 
-def _similarity_comp_builder2(field1: str, field2: str, threshold: float) -> str:
+def _jw_similarity_comp_builder(field1: str, field2: str, threshold: float) -> str:
     return f'(jaro_winkler_similarity("{field1}_l", "{field1}_r") >= {threshold}) ' \
            f'AND (jaro_winkler_similarity("{field2}_l", "{field2}_r") >= {threshold})'
 
@@ -65,10 +65,25 @@ class ComparisonComp(StrEnum):
     VICTIM_SURNAME_NULL = _null_comp_builder("victim_surname_norm")
     EXACT_VICTIM_FULLNAME = _exact_comp_builder("victim_fullname_concat")
     EXACT_VICTIM_SURNAME = _exact_comp_builder("victim_surname_norm")
+    EXACT_VICTIM_FORENAME = _exact_comp_builder("victim_forename_norm")
     VICTIM_EXACT_REVERSED = "victim_forename_norm_l = victim_surname_norm_r " \
                              "AND victim_surname_norm_l = victim_forename_norm_r"
+    VICTIM_FORENAME_ONLY = ' OR '.join((
+        ' AND '.join((
+            "(victim_forename_norm_l IS NULL",
+            "victim_surname_norm_l = victim_forename_norm_r)",
+        )),
+        ' AND '.join((
+            "(victim_forename_norm_r IS NULL",
+            "victim_forename_norm_l = victim_surname_norm_r)",
+        )),
+    ))
+    VICTIM_SURNAME_ONLY = ' AND '.join((
+        _null_comp_builder("victim_forename_norm"),
+        _exact_comp_builder("victim_surname_norm"),
+    ))
     OFFENDER_NULL = _null_comp_builder("offender_fullname_concat")
-    OFFENDER_CLOSE = _similarity_comp_builder2(
+    OFFENDER_CLOSE = _jw_similarity_comp_builder(
         "offender_forename_norm", "offender_surname_norm", 0.85)
     WEAPON_NULL = _null_comp_builder("weapon") + ' OR ' + \
         _null_comp_builder("weapon", "= 'unknown'") + ' OR ' + \
@@ -135,34 +150,26 @@ NAME_COMP = cl.CustomComparison(
             "exact match victim name",
             ComparisonComp.EXACT_VICTIM_FULLNAME.value
         ).to_dict(),
-        # ComparisonLevel(
-        #     "JW >= 0.96 victim names",
-        #     _similarity_comp_builder2(
-        #         "victim_forename_norm", "victim_surname_norm", 0.96)
-        # ).to_dict(),
         ComparisonLevel(
             "Reversed exact or JW >= 0.80 victim names or exact single surname",
-            ComparisonComp.VICTIM_EXACT_REVERSED.value + " OR " +
-            _similarity_comp_builder2(
-                "victim_forename_norm", "victim_surname_norm", 0.80) + " OR " +
-            "( " + ComparisonComp.EXACT_VICTIM_SURNAME.value + " AND " +
-                ComparisonComp.VICTIM_FORENAME_NULL.value + " )"
+            ' OR '.join((
+                ComparisonComp.VICTIM_EXACT_REVERSED.value,
+                _jw_similarity_comp_builder(
+                    "victim_forename_norm",
+                    "victim_surname_norm",
+                    0.80
+                ),
+                ComparisonComp.VICTIM_SURNAME_ONLY.value,
+                ComparisonComp.VICTIM_FORENAME_ONLY.value,
+            ))
         ).to_dict(),
-        # ComparisonLevel(
-        #     "JW > 0.80 victim names",
-        #     _similarity_comp_builder2(
-        #         "victim_forename_norm", "victim_surname_norm", 0.80)
-        # ).to_dict(),
-        # ComparisonLevel(
-        #     "JW > 0.60 victim names",
-        #     _similarity_comp_builder2(
-        #         "victim_forename_norm", "victim_surname_norm", 0.40)
-        # ).to_dict(),
-        # ComparisonLevel(
-        #     "JW > 0.20 victim names",
-        #     _similarity_comp_builder2(
-        #         "victim_forename_norm", "victim_surname_norm", 0.20)
-        # ).to_dict(),
+        ComparisonLevel(
+            "Forename or surname exact match",
+            ' OR '.join((
+                ComparisonComp.EXACT_VICTIM_FORENAME.value,
+                ComparisonComp.EXACT_VICTIM_SURNAME.value,
+            ))
+        ).to_dict(),
         ComparisonLevel(
             "All other comparisons",
             "ELSE"
