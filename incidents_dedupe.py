@@ -31,6 +31,11 @@ from pymonad import (
     Unit,
     put_line,
     pure,
+    PredictionInputTableName,
+    PairsTableName,
+    ClustersTableName,
+    BlockedPairsTableName,
+    DoNotLinkTableName,
     splink_dedupe_job,
     sql_exec,
     sql_export,
@@ -72,12 +77,12 @@ def _dedupe_named_victims(_: Unit) -> Run[Unit]:
     Run initial pass of Splink deduplication on the victims_named table.
     """
     return splink_dedupe_job(
-        input_table="victims_named",
+        input_table=PredictionInputTableName("victims_named"),
         settings=_settings_for_victim_dedupe(),
         predict_threshold=0.1,
         cluster_threshold=0.5,
-        pairs_out="victim_pairs",
-        clusters_out="victim_clusters",
+        pairs_out=PairsTableName("victim_pairs"),
+        clusters_out=ClustersTableName("victim_clusters"),
         train_first=True,
         training_blocking_rules=NAMED_VICTIM_BLOCKS_FOR_TRAINING,
         deterministic_rules=NAMED_VICTIM_DETERMINISTIC_BLOCKS,
@@ -86,7 +91,8 @@ def _dedupe_named_victims(_: Unit) -> Run[Unit]:
         visualize=False,
         splink_key=SplinkType.DEDUP,
         capture_blocked_edges=True,
-        blocked_pairs_out="victim_cluster_exclusion",
+        do_not_link_table=DoNotLinkTableName("victim_cluster_exclusion"),
+        blocked_pairs_out=BlockedPairsTableName("victim_cluster_blocked_edges"),
     ) >> (
         lambda outnames: put_line(
             f"[D] Wrote {outnames[1]} and {outnames[2]} in DuckDB."

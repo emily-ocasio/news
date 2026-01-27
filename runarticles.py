@@ -7,7 +7,7 @@ import sqlite3
 import duckdb
 from openai import OpenAI
 from pymonad import Run, run_reader, run_state, run_base_effect, run_except, \
-    run_sql, run_openai, run_splink, Environment, Namespace, ErrorPayload, \
+    run_sql, run_openai, run_splink, Environment, Namespace, EnvKey, ErrorPayload, \
     REAL_DISPATCH, Left, Right, Either, Tuple, put_line, pure, GPTModel, DbBackend, \
     StateRegistry
 from article import ArticleAppError
@@ -58,7 +58,9 @@ def main() -> None:
                                         timeout=20.0, max_retries=2),
         "fasttext_model": SentenceTransformerModel(),
         "mar_key": MAR_API_KEY,
-        "extras": {}
+        "extras": {
+            EnvKey("splink_use_monadic"): True,
+        }
     }
     try:
         prog = run_reader(env, run_splink(run_state(StateRegistry.from_state(

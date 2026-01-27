@@ -118,7 +118,7 @@ def special_case_validators() -> Array[ArticleValidator]:
     def validator_from_term(term: SpecialCaseTerm) -> ArticleValidator:
         def validator(article: Article) \
             -> Run[V[Array[FailureDetail], Unit]]:
-            text = (article.title or '') + ' ' + (article.full_text or '')
+            text: str = (article.title or '') + ' ' + (article.full_text or '')
             pattern = fr"\b{re.escape(term)}"
             if re.search(pattern, text, re.IGNORECASE):
                 detail = ArticleFailureDetail(

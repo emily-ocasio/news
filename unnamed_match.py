@@ -30,6 +30,9 @@ from pymonad import (
     Run,
     ask,
     pure,
+    PredictionInputTableNames,
+    PairsTableName,
+    ClustersTableName,
     with_duckdb,
     splink_dedupe_job,
     sql_exec,
@@ -342,7 +345,7 @@ def _link_orphans_to_entities(env: Environment) -> Run[Unit]:
     Link orphan victims to existing victim entities using Splink.
     """
     return splink_dedupe_job(
-        input_table=["entity_link_input", "orphan_link_input"],
+        input_table=PredictionInputTableNames(("entity_link_input", "orphan_link_input")),
         settings={
             "link_type": "link_only",
             "unique_id_column_name": "unique_id",
@@ -361,13 +364,11 @@ def _link_orphans_to_entities(env: Environment) -> Run[Unit]:
         },
         predict_threshold=0.1,
         cluster_threshold=0.0,
-        pairs_out="orphan_entity_pairs",
-        clusters_out="",
+        pairs_out=PairsTableName("orphan_entity_pairs"),
         deterministic_rules=ORPHAN_DETERMINISTIC_BLOCKS,
         deterministic_recall=0.1,
         train_first=True,
         training_blocking_rules=ORPHAN_TRAINING_BLOCKS,
-        do_cluster=False,
         visualize=False,
         em_max_runs=5,
         splink_key=SplinkType.ORPHAN,

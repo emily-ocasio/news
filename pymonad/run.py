@@ -90,6 +90,16 @@ class HasSplinkLinker:
 
 
 @dataclass(frozen=True)
+class GetSplinkContext:
+    """Splink context get intent."""
+
+
+@dataclass(frozen=True)
+class PutSplinkContext:
+    """Splink context put intent."""
+    ctx: Any
+
+@dataclass(frozen=True)
 class Throw:
     """Except.throw intent (payload is user data)."""
     e: ErrorPayload[Any]
@@ -116,6 +126,8 @@ class UserAbort(Exception):
     """
 
 # ===== Run carrier =====
+
+_SPLINK_CONTEXT_KEY = object()
 
 SplinkState = dict[Any, Any]
 
@@ -258,6 +270,16 @@ def has_splink_linker(key: Any) -> Run[bool]:
     return Run(lambda self: self._perform(HasSplinkLinker(key), self), _unhandled)
 
 
+def get_splink_context() -> Run[Any]:
+    """Create a Run action to get the current Splink context."""
+    return Run(lambda self: self._perform(GetSplinkContext(), self), _unhandled)
+
+
+def put_splink_context(ctx: Any) -> Run[None]:
+    """Create a Run action to set the current Splink context."""
+    return Run(lambda self: self._perform(PutSplinkContext(ctx), self), _unhandled)
+
+
 def throw(e: Any) -> Run[Any]:
     """Create a Run action to throw an error (Except effect)."""
     return Run(lambda self: self._perform(Throw(e), self), _unhandled)
@@ -339,6 +361,13 @@ def run_state(initial: StateRegistry[M] | M, prog: Run[A]) \
                     updated_splink[key] = linker
                     registry = replace(registry, splink_state=updated_splink)
                     return None
+                case GetSplinkContext():
+                    return registry.splink_state.get(_SPLINK_CONTEXT_KEY)
+                case PutSplinkContext(ctx):
+                    updated_splink = dict(registry.splink_state)
+                    updated_splink[_SPLINK_CONTEXT_KEY] = ctx
+                    registry = replace(registry, splink_state=updated_splink)
+                    return None
                 case _:
                     return parent(intent, current)
         inner = Run(prog._step, perform)
@@ -410,8 +439,14 @@ def run_base_effect(dispatch: dict[type, Callable[[Any], Any]],
     """
     Executes the base effects by dispatching intents
     to their corresponding performer functions.
+
+    Meant to be executed at the outermost layer of all eliminators.
     """
     def perform_base(intent, _):
+        """
+        Final performer that interprets base intents
+        not handled by other eliminators.
+        """
         fn = dispatch.get(type(intent))
         if fn is None:
             raise RuntimeError(f"No performer for {type(intent).__name__}")
@@ -457,6 +492,27 @@ def foldm_either_loop_bind(
         return acc_r._step(self_run)
 
     # Pass-through performer
+    return Run(run, lambda intent, current: current._perform(intent, current))
+
+def fold_run(
+    items: Array[A],
+    init: B,
+    step: Callable[[B, A], Run[B]],
+) -> Run[B]:
+    """
+    Fold over items in a Run context (not stack-safe).
+    """
+    def _bind_step(acc_run: Run[B], item: A) -> Run[B]:
+        def _bind(acc: B) -> Run[B]:
+            return step(acc, item)
+        return acc_run >> _bind
+
+    def run(self_run: Run[Any]) -> B:
+        acc_run: Run[B] = pure(init)
+        for item in items:
+            acc_run = _bind_step(acc_run, item)
+        return acc_run._step(self_run)
+
     return Run(run, lambda intent, current: current._perform(intent, current))
 
 def with_namespace(
