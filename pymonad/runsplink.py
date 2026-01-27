@@ -1,6 +1,7 @@
 """
 Intent, eliminator, and smart constructors for Splink.
 """
+from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
@@ -80,6 +81,7 @@ class SplinkChartType(str, Enum):
     Visualization types for Splink.
     """
     MODEL = "model"
+    PARAMETER_ESTIMATE_COMPARISONS = "parameter_estimate_comparisons"
     WATERFALL = "waterfall"
     COMPARISON = "comparison"
     CLUSTER = "cluster"
@@ -624,6 +626,10 @@ def _run_splink_visualize(linker: Linker, job: SplinkVisualizeJob) -> None:
         chart = linker.visualisations.m_u_parameters_chart()
         chart.show()  # type: ignore
         return
+    if job.chart_type == SplinkChartType.PARAMETER_ESTIMATE_COMPARISONS:
+        chart = linker.visualisations.parameter_estimate_comparisons_chart()
+        chart.show()  # type: ignore
+        return
     if job.chart_type == SplinkChartType.UNLINKABLES:
         print("Generating unlinkables chart…")
         if link_type == "link_only" and len(linker._input_tables_dict) == 2:
@@ -964,7 +970,7 @@ def _run_splink_dedupe_with_conn(
             for training_rule in training_rules:
                 em_session = linker.training.estimate_parameters_using_expectation_maximisation(
                     blocking_rule=training_rule,
-                    fix_probability_two_random_records_match=True
+                    fix_probability_two_random_records_match=False
                 )
                 try:
                     lambda_history = em_session._lambda_history_records

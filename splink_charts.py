@@ -69,6 +69,7 @@ SPLINK_PROMPTS = (
 )
 SPLINK_CHART_PROMPTS = (
     "[M]odel charts",
+    "[P]arameter estimate comparisons",
     "[W]aterfall",
     "[C]omparison viewer",
     "[N]unlinkables",
@@ -94,6 +95,7 @@ class SplinkChartChoice(Enum):
     Menu options for Splink chart selection.
     """
     MODEL = MenuChoice("M")
+    PARAMETER = MenuChoice("P")
     WATERFALL = MenuChoice("W")
     COMPARISON = MenuChoice("C")
     UNLINKABLES = MenuChoice("N")
@@ -117,6 +119,8 @@ def _chart_choice_to_type(choice: SplinkChartChoice) -> SplinkChartType:
     match choice:
         case SplinkChartChoice.MODEL:
             return SplinkChartType.MODEL
+        case SplinkChartChoice.PARAMETER:
+            return SplinkChartType.PARAMETER_ESTIMATE_COMPARISONS
         case SplinkChartChoice.WATERFALL:
             return SplinkChartType.WATERFALL
         case SplinkChartChoice.COMPARISON:

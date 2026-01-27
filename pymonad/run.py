@@ -129,7 +129,7 @@ class StateRegistry(Generic[M]):
     splink_state: SplinkState
 
     @classmethod
-    def from_state(cls, app_state: M) -> "StateRegistry[M]":
+    def from_state(cls, app_state: M) -> StateRegistry[M]:
         return cls(app_state=app_state, splink_state={})
 
 
