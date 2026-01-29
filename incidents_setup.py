@@ -13,20 +13,20 @@ from pymonad import (
     sql_exec,
     SQL,
     Array,
-    array_traverse,
     Environment,
     SQLParams,
     String,
+    Unit
 )
 from pymonad.traverse import array_traverse_run
 from menuprompts import NextStep
 from calculations import sbert_average_vector
 
 
-def _row_update_run(env: Environment, row) -> Run[None]:
+def _row_update_run(env: Environment, row) -> Run[Unit]:
     """
     Given an environment and a row dict with article_id,
-    incident_idx, summary_norm, return a Run[None] effect
+    incident_idx, summary_norm, return a Run[Unit] effect
     that updates that row’s summary_vec.
 
     Uses `summary_norm` as the cache key. Key is parameterized to avoid

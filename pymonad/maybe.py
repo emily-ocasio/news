@@ -52,6 +52,7 @@ class NothingMaybeMeta(ABCMeta, EnumMeta):
 
 
 
+
 class _Nothing(Functor, Enum, metaclass=NothingMaybeMeta):
     NOTHING = "Nothing"
 
@@ -89,6 +90,11 @@ class _Nothing(Functor, Enum, metaclass=NothingMaybeMeta):
 
 # singleton instance
 Nothing: _Nothing = _Nothing.NOTHING
+
+
+def nothing() -> _Nothing:
+    """Default factory for Nothing."""
+    return Nothing
 
 @dataclass(frozen=True)
 class Just[A](Functor[A]):

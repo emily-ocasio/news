@@ -4,6 +4,9 @@ Classes and helper functions for defining blocking rules in Splink
 
 from enum import StrEnum
 
+from pymonad import Array, String
+from splink.internals.blocking_rule_creator import BlockingRuleCreator
+
 class BlockComp(StrEnum):
     """
     Components that can be used in building blocking rules for deduplication.
@@ -205,6 +208,10 @@ class DedupBlockRule(StrEnum):
     OFFENDER_AGE_SEX = _block_from_comps(
         BlockComp.SAME_OFFENDER_AGE_SEX
     )
+
+
+
+# Backwards-compatible aliases for refactors still in flight.
 
 
 

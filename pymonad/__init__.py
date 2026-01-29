@@ -18,6 +18,7 @@ from .environment import (
 )
 from .functor import Functor, map  # pylint: disable=redefined-builtin
 from .hashmap import HashMap
+from .hashset import HashSet
 from .lens import Lens, view, set_, over, modify, lens
 from .maybe import Maybe, Just, Nothing, _Nothing, from_maybe
 from .monad import (

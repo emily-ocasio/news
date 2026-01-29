@@ -105,7 +105,7 @@ def validate_entity_exists(entity_id: String) -> Run[String]:
         )
     )
 
-def ensure_special_defaults_table() -> Run[None]:
+def ensure_special_defaults_table() -> Run[Unit]:
     """
     Ensure the DuckDB defaults table exists.
     """
@@ -136,7 +136,7 @@ def get_default_entity_id(code: String) -> Run[str | None]:
         )
     )
 
-def store_default_entity_id(code: String, entity_id: String) -> Run[None]:
+def store_default_entity_id(code: String, entity_id: String) -> Run[Unit]:
     """
     Store or update the default entity id for a special code.
     """

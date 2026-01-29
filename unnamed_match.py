@@ -419,7 +419,7 @@ def _integrate_orphan_matches() -> Run[Unit]:
                 matched.append((entity_uid, orphan_uid, article_id, prob))
         return matched
 
-    def _write_final_orphan_matches(rows) -> Run[None]:
+    def _write_final_orphan_matches(rows) -> Run[Unit]:
         matches = _max_weight_pairs_by_article(rows)
         if not matches:
             return sql_exec(

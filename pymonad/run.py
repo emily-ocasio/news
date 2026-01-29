@@ -19,7 +19,7 @@ from .either import Either, Left, Right
 from .environment import Environment, Namespace, PromptKey, AllPrompts, \
     all_prompts
 from .functor import Functor
-from .monad import ap
+from .monad import ap, Unit, unit
 from .monoid import Monoid
 from .string import String
 from .tuple import Tuple
@@ -275,7 +275,7 @@ def get_splink_context() -> Run[Any]:
     return Run(lambda self: self._perform(GetSplinkContext(), self), _unhandled)
 
 
-def put_splink_context(ctx: Any) -> Run[None]:
+def put_splink_context(ctx: Any) -> Run[Unit]:
     """Create a Run action to set the current Splink context."""
     return Run(lambda self: self._perform(PutSplinkContext(ctx), self), _unhandled)
 
@@ -367,7 +367,7 @@ def run_state(initial: StateRegistry[M] | M, prog: Run[A]) \
                     updated_splink = dict(registry.splink_state)
                     updated_splink[_SPLINK_CONTEXT_KEY] = ctx
                     registry = replace(registry, splink_state=updated_splink)
-                    return None
+                    return unit
                 case _:
                     return parent(intent, current)
         inner = Run(prog._step, perform)

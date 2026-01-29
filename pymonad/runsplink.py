@@ -4,12 +4,13 @@ Intent, eliminator, and smart constructors for Splink.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from enum import Enum
+from enum import Enum, StrEnum
 import logging
 import json
 import math
 from pathlib import Path
 from typing import Any, Sequence, TypeVar, cast
+from collections.abc import Callable
 import uuid
 
 import altair as alt
@@ -20,23 +21,39 @@ from pandas import DataFrame
 from splink import Linker, DuckDBAPI, blocking_analysis
 from splink.internals.blocking_rule_creator import BlockingRuleCreator
 from splink.internals.blocking_rule_creator_utils import to_blocking_rule_creator
+from splink.internals.blocking import BlockingRule
 from splink.internals.cache_dict_with_logging import CacheDictWithLogging
 from splink.internals.charts import unlinkables_chart
 from splink.internals.pipeline import CTEPipeline
 
 # pylint:disable=W0212
+
 from .environment import DbBackend, EnvKey, Environment
-from .run import Run, ask, throw, ErrorPayload, pure, put_splink_linker, \
-    get_splink_linker, get_splink_context, put_splink_context, HasSplinkLinker
+from .run import Run, ask, throw, ErrorPayload, pure, put_line, fold_run, \
+    put_splink_linker, get_splink_linker, get_splink_context, put_splink_context, \
+    HasSplinkLinker
 from .runsql import SQL, sql_exec, sql_query, sql_register, with_duckdb
 from .array import Array
 from .monad import Unit, unit
 from .hashmap import HashMap, flatten_map
+from .hashset import HashSet
 from .string import String
-from .maybe import Just, Nothing, Maybe, from_maybe
+from .maybe import Just, Nothing, Maybe, from_maybe, nothing
+from .tuple import Tuple
+from .traverse import array_traverse_run
 
 A = TypeVar("A")
+type StringBlockingRule = StrEnum
+type StringBlockingRules = Array[StringBlockingRule]
+type BlockingRuleCreators = Array[BlockingRuleCreator]
 
+
+class CustomStringBlockingRule(String):
+    """
+    Dynamically constructed blocking rule (string wrapper).
+    """
+
+type CustomStringBlockingRules = Array[CustomStringBlockingRule]
 @dataclass(frozen=True)
 class SplinkVisualizeJob:
     """
@@ -77,6 +94,275 @@ class SplinkPairsSchemaError(Exception):
     """Raised when Splink pairwise output does not include expected id columns."""
 
 
+def _build_linker_for_prediction(
+    *,
+    settings: dict[str, Any],
+    db_api: DuckDBAPI,
+    prediction_rules: BlockingRuleLikes,
+    input_table: str | list[str],
+    extra_columns_to_retain: RetainColumnNames,
+) -> Linker:
+    settings = dict(settings)
+    if extra_columns_to_retain:
+        existing = list(settings.get("additional_columns_to_retain", []))
+        merged = list(dict.fromkeys(existing + list(map(str, extra_columns_to_retain))))
+        settings["additional_columns_to_retain"] = merged
+    return Linker(
+        input_table,
+        settings
+        | {
+            "retain_intermediate_calculation_columns": True,
+            "max_iterations": 100,
+            "blocking_rules_to_generate_predictions": list(prediction_rules),
+        },
+        db_api=db_api,
+    )
+
+
+def _put_line_unit(line: str) -> Run[Unit]:
+    return put_line(line) ^ pure(unit)
+
+
+def _put_lines(lines: list[str]) -> Run[Unit]:
+    run = pure(unit)
+    for line in lines:
+        run = run ^ _put_line_unit(line)
+    return run
+
+
+def _print_prediction_counts_for_rules_with(
+    *,
+    settings: dict[str, Any],
+    db_api: DuckDBAPI,
+    prediction_rules: BlockingRuleLikes,
+    input_table: str | list[str],
+) -> Run[Unit]:
+    if not prediction_rules:
+        return pure(unit)
+
+    def _run() -> Run[Unit]:
+        try:
+            tables = input_table if isinstance(input_table, list) else [input_table]
+            counts_df = blocking_analysis.cumulative_comparisons_to_be_scored_from_blocking_rules_data(
+                table_or_tables=tables,
+                blocking_rules=prediction_rules,
+                link_type=settings.get("link_type", "dedupe_only"),
+                db_api=db_api,
+                unique_id_column_name=settings.get("unique_id_column_name", "unique_id"),
+                source_dataset_column_name=settings.get("source_dataset_column_name"),
+            )
+            total_comparisons = int(counts_df["row_count"].sum())
+            return _put_line_unit(
+                f"Total comparisons to be scored (pre-threshold): {total_comparisons}"
+            )
+        except Exception as exc: #pylint: disable=W0718
+            return _put_line_unit(f"Skipping blocking count analysis: {exc}")
+
+    return _run()
+
+
+def _print_prediction_counts_from_ctx(ctx: SplinkContext) -> Run[Unit]:
+    match ctx.predict_plan:
+        case Just(plan):
+            rules = plan.prediction_rules
+            table = _input_table_value(plan.input_table_for_prediction)
+        case _:
+            rules = ctx.prediction_rules
+            table = _input_table_value(ctx.tables.get_required(PredictionInputTableNames))
+    return _maybe_get_required(ctx.db_api, label="Splink DuckDB API") >> (lambda db_api:
+        _print_prediction_counts_for_rules_with(
+            settings=ctx.settings,
+            db_api=db_api,
+            prediction_rules=rules,
+            input_table=table,
+        )
+    )
+
+
+def _print_prediction_counts_for_rules(_: SplinkContext) -> Run[Unit]:
+    return (
+        _with_splink_context(_require_db_api)
+        ^ _with_splink_context(_print_prediction_counts_from_ctx)
+    )
+
+
+def _train_linker_for_prediction_with(
+    *,
+    deterministic_rules: StringBlockingRules,
+    deterministic_recall: float,
+    train_first: bool,
+    em_max_runs: int,
+    em_min_runs: int,
+    em_stop_delta: float,
+    linker: Linker,
+    training_rules: BlockingRuleLikes,
+    input_table: str | list[str], #pylint: disable=W0613
+) -> Run[Unit]:
+    return (
+        _train_linker_setup_with( #type: ignore #pylint: disable=E0602
+            linker=linker,
+            deterministic_rules=deterministic_rules,
+            deterministic_recall=deterministic_recall,
+        )
+        ^ (
+            pure(unit)
+            if not train_first
+            else _train_em_runs_with( #type: ignore #pylint: disable=E0602 
+                linker=linker,
+                training_rules=training_rules,
+                em_max_runs=em_max_runs,
+                em_min_runs=em_min_runs,
+                em_stop_delta=em_stop_delta,
+            )
+        )
+    )
+
+
+def _train_linker_setup(
+    ctx: SplinkContext,
+    linker: Linker,
+    _: PredictPlan,
+) -> Run[Unit]:
+    def _run() -> Run[Unit]:
+        linker.training.estimate_probability_two_random_records_match(
+            list(ctx.deterministic_rules), recall=ctx.deterministic_recall
+        )
+        linker.training.estimate_u_using_random_sampling(1e8)
+        return pure(unit)
+    return _run()
+
+
+def _train_linker_em_runs(
+    ctx: SplinkContext,
+    linker: Linker,
+    plan: PredictPlan,
+) -> Run[Unit]:
+    if not ctx.train_first:
+        return pure(unit)
+    def _max_delta_from_params(
+        prev_params: EmParams,
+        current_params: EmParams,
+    ) -> tuple[float, ComparisonLevelKey | None]:
+        deltas: list[float] = []
+        max_key: ComparisonLevelKey | None = None
+        max_delta_local = -1.0
+        for key, now in current_params.items():
+            if key not in prev_params:
+                continue
+            prev = prev_params[key]
+            match now.m, now.u, prev.m, prev.u:
+                case Just(m_now), Just(u_now), Just(m_prev), Just(u_prev):
+                    if u_now != 0 and u_prev != 0:
+                        delta = abs(
+                            math.log2(m_now / u_now)
+                            - math.log2(m_prev / u_prev)
+                        )
+                        deltas.append(delta)
+                        if delta > max_delta_local:
+                            max_key = key
+                            max_delta_local = delta
+        max_delta = max(deltas) if deltas else 1.0
+        return max_delta, max_key
+
+    def _train_block(
+        prev_block_params: EmParams,
+        training_rule: BlockingRuleLike,
+        run_idx: int,
+    ) -> Run[EmParams]:
+        em_session = linker.training.estimate_parameters_using_expectation_maximisation(
+            blocking_rule=training_rule,
+            fix_probability_two_random_records_match=False
+        )
+        try:
+            lambda_history = em_session._lambda_history_records
+        except AttributeError:
+            lambda_history = []
+        block_lines: list[str] = []
+        if lambda_history:
+            block_lines.append(
+                "EM lambda history (probability_two_random_records_match):"
+            )
+            for record in lambda_history:
+                block_lines.append(
+                    f"  iter {record['iteration']}: "
+                    f"{record['probability_two_random_records_match']:.6f}"
+                )
+        current_settings = linker.misc.save_model_to_json(out_path=None)
+        current_params = _extract_em_params(current_settings)
+        if len(prev_block_params) != 0:
+            max_delta, max_key = _max_delta_from_params(
+                prev_block_params,
+                current_params,
+            )
+            block_lines.append(
+                f"EM run {run_idx + 1}/{ctx.em_max_runs} block drift: "
+                f"max_delta={max_delta:.6f} (block to block)"
+            )
+            if max_key is not None:
+                block_lines.append(
+                    f"  max_delta_key={max_key.comparison_name}::"
+                    f"{max_key.level_name}"
+                )
+        if block_lines:
+            return _put_lines(block_lines) >> (lambda _: pure(current_params))
+        return pure(current_params)
+
+    def _train_run(
+        state: tuple[EmParams, bool],
+        run_idx: int,
+    ) -> Run[tuple[EmParams, bool]]:
+        prev_params, stop = state
+        if stop:
+            return pure(state)
+
+        def _train_rule(
+            prev_block_params: EmParams,
+            training_rule: BlockingRuleLike,
+        ) -> Run[EmParams]:
+            return _train_block(prev_block_params, training_rule, run_idx)
+
+        def _with_current(
+            current_params: EmParams,
+        ) -> Run[tuple[EmParams, bool]]:
+            if len(prev_params) == 0:
+                return pure((current_params, False))
+            max_delta, max_key = _max_delta_from_params(
+                prev_params,
+                current_params,
+            )
+            run_lines = [
+                f"EM run {run_idx + 1}/{ctx.em_max_runs}: "
+                f"max_delta={max_delta:.6f} "
+                f"(stop if < {ctx.em_stop_delta:.6f} after {ctx.em_min_runs} runs)"
+            ]
+            if max_key is not None:
+                run_lines.append(
+                    f"  max_delta_key={max_key.comparison_name}::"
+                    f"{max_key.level_name}"
+                )
+            stop_now = run_idx + 1 >= ctx.em_min_runs and max_delta < ctx.em_stop_delta
+            return _put_lines(run_lines) >> (lambda _: pure((current_params, stop_now)))
+
+        init: EmParams = HashMap.empty()
+        rules: Array[BlockingRuleLike] = Array.make(plan.training_rules.a)
+        return fold_run(rules, init, _train_rule) >> _with_current
+
+    run_indices: Array[int] = Array.make(tuple(range(ctx.em_max_runs)))
+    init: EmParams = HashMap.empty()
+    return (
+        fold_run(run_indices, (init, False), _train_run)
+        ^ pure(unit)
+    )
+
+
+def _train_linker_for_prediction() -> Run[Unit]:
+    return (
+        _with_splink_context_linker_plan(_train_linker_setup)
+        ^ _with_splink_context_linker_plan(_train_linker_em_runs)
+    )
+
+
+
 class SplinkPhase(str, Enum):
     """Lifecycle phase for the Splink workflow."""
     INIT = "init"
@@ -97,7 +383,23 @@ class SplinkLinkType(str, Enum):
         return cls.LINK_ONLY if raw == cls.LINK_ONLY.value else cls.DEDUPE_ONLY
 
 
-BlockingRule = str | BlockingRuleCreator
+type BlockingRuleLike = (
+    StringBlockingRule | CustomStringBlockingRule | BlockingRuleCreator
+)
+BlockingRuleLikes = (
+    StringBlockingRules
+    | CustomStringBlockingRules
+    | BlockingRuleCreators
+    | Array[BlockingRuleLike]
+)
+
+def _concat_blocking_rule_likes(
+    left: BlockingRuleLikes,
+    right: BlockingRuleLikes,
+) -> Array[BlockingRuleLike]:
+    return Array.make(
+        left.a + right.a
+    )
 
 
 @dataclass(frozen=True)
@@ -105,34 +407,112 @@ class TableRef:
     """Base type for Splink table references."""
 
 
-@dataclass(frozen=True)
+def _normalize_table_name(name: str | None) -> Maybe[str]:
+    if name is None:
+        return Nothing
+    value = str(name)
+    if value == "":
+        return Nothing
+    return Just(value)
+
+
+@dataclass(frozen=True, init=False)
 class TableName(TableRef):
     """Single table name."""
-    name: str
+    name: Maybe[str]
+
+    def __init__(self, name: str | None = "") -> None:
+        object.__setattr__(self, "name", _normalize_table_name(name))
+
+    def is_present(self) -> bool:
+        return isinstance(self.name, Just)
+
+    def value_or(self, default: str = "") -> str:
+        return from_maybe(default, self.name)
 
     def __str__(self) -> str:
-        return self.name
-
-
-@dataclass(frozen=True)
-class TableNames(TableRef):
-    """Multiple table names."""
-    names: tuple[str, ...]
-
-    def __str__(self) -> str:
-        return ", ".join(self.names)
+        return self.value_or("")
 
 
 class PredictionInputTableName(TableName):
     """Input table name used for prediction."""
 
 
-class PredictionInputTableNames(TableNames):
+def _to_prediction_input_name(
+    value: PredictionInputTableName | str | None,
+) -> PredictionInputTableName:
+    if value is None:
+        return PredictionInputTableName("")
+    if isinstance(value, PredictionInputTableName):
+        return value
+    return PredictionInputTableName(value)
+
+
+@dataclass(frozen=True, init=False)
+class PredictionInputTableNames(TableRef):
     """Input table names used for prediction."""
+    tables: Tuple[PredictionInputTableName, PredictionInputTableName]
+
+    def __init__(
+        self,
+        left: PredictionInputTableName | Sequence[str | PredictionInputTableName] | str,
+        right: PredictionInputTableName | str | None = None,
+    ) -> None:
+        match (left, right):
+            case (PredictionInputTableName() | str(),
+                  None | PredictionInputTableName() | str()):
+                left_entry = _to_prediction_input_name(left)
+                right_entry = _to_prediction_input_name(right)
+            case (Sequence(), None):
+                entries = list(left)
+                left_entry = _to_prediction_input_name(entries[0]) if entries else PredictionInputTableName("")
+                right_entry = _to_prediction_input_name(entries[1]) if len(entries) > 1 else _to_prediction_input_name(None)
+            case (Sequence(), _):
+                raise TypeError(
+                    "PredictionInputTableNames expects either a sequence alone "
+                    "or explicit left/right values."
+                )
+
+        object.__setattr__(self, "tables", Tuple(left_entry, right_entry))
+
+    @classmethod
+    def from_input(
+        cls,
+        input_tables: PredictionInputTableName | PredictionInputTableNames | Sequence[str | PredictionInputTableName],
+    ) -> PredictionInputTableNames:
+        """
+        Normalize input into PredictionInputTableNames.
+        Accepts an existing instance, a single name, or a 1-2 element sequence.
+        """
+        if isinstance(input_tables, PredictionInputTableNames):
+            return input_tables
+        return cls(input_tables)
+
+    def left(self) -> PredictionInputTableName:
+        """Return the left (primary) input table name."""
+        return self.tables.fst
+
+    def right(self) -> PredictionInputTableName:
+        """Return the right (secondary) input table name, possibly empty."""
+        return self.tables.snd
+
+    def has_right(self) -> bool:
+        """True when a secondary input table name is present."""
+        return self.tables.snd.is_present()
+
+    def __str__(self) -> str:
+        right = self.tables.snd
+        if right.is_present():
+            return f"{self.tables.fst}, {right}"
+        return str(self.tables.fst)
 
 
 class PairsTableName(TableName):
     """Pairs output table name."""
+
+
+class PairsSourceTableName(TableName):
+    """Physical pairs source table name produced by Splink."""
 
 
 class PairsCaptureTableName(TableName):
@@ -199,6 +579,13 @@ class BlockedIdRightColumnName(ColumnName):
     """Right id column name for blocked edges."""
 
 
+class RetainColumnName(ColumnName):
+    """Column name retained for prediction output."""
+
+
+type RetainColumnNames = Array[RetainColumnName]
+
+
 class SplinkId(String):
     """Base type for Splink id values."""
 
@@ -239,7 +626,17 @@ class SplinkTableNames:
         value = self.tables.get(key)
         if value is None:
             return None
-        return cast(TTableName, value) if isinstance(value, key) else None
+        if not isinstance(value, key):
+            return None
+        if isinstance(value, TableName) and not value.is_present():
+            return None
+        return cast(TTableName, value)
+
+    def get_required(self, key: type[TTableName]) -> TTableName:
+        value = self.get(key)
+        if value is None:
+            raise KeyError(f"Missing table name for {key.__name__}.")
+        return value
 
 
 @dataclass(frozen=True)
@@ -250,13 +647,15 @@ class SplinkContext:
     phase: SplinkPhase = SplinkPhase.INIT
     tables: SplinkTableNames = field(default_factory=SplinkTableNames.empty)
     unique_id_col: UniqueIdColumnName = UniqueIdColumnName("unique_id")
-    prediction_rules: Array[BlockingRule] = field(default_factory=Array.empty)
-    training_rules: Array[BlockingRule] = field(default_factory=Array.empty)
-    linker: Linker | None = None
+    prediction_rules: BlockingRuleLikes = field(default_factory=Array.empty)
+    training_rules: BlockingRuleLikes = field(default_factory=Array.empty)
+    linker: Maybe[Linker] = field(default_factory=nothing)
+    db_api: Maybe[DuckDBAPI] = field(default_factory=nothing)
+    predict_plan: Maybe[PredictPlan] = field(default_factory=nothing)
     settings: dict[str, Any] = field(default_factory=dict)
     predict_threshold: float = 0.05
     cluster_threshold: float = 0.0
-    deterministic_rules: Array[BlockingRule] = field(default_factory=Array.empty)
+    deterministic_rules: StringBlockingRules = field(default_factory=Array.empty)
     deterministic_recall: float = 0.5
     train_first: bool = False
     visualize: bool = False
@@ -265,6 +664,8 @@ class SplinkContext:
     em_min_runs: int = 1
     em_stop_delta: float = 0.002
     capture_blocked_edges: bool = False
+    do_not_link_left_col: BlockedIdLeftColumnName = BlockedIdLeftColumnName("id_l")
+    do_not_link_right_col: BlockedIdRightColumnName = BlockedIdRightColumnName("id_r")
 
 
 @dataclass(frozen=True)
@@ -306,7 +707,7 @@ class SplinkPredictResult:
     Outputs from prediction/pairs step needed for downstream steps.
     """
     linker: Linker
-    input_table_for_prediction: TableName | TableNames
+    input_table_for_prediction: PredictionInputTableNames
     unique_id_col: UniqueIdColumnName
     pairs_out: PairsTableName
     clusters_out: ClustersTableName
@@ -318,20 +719,67 @@ class SplinkPredictResult:
 
 
 @dataclass(frozen=True)
+class PredictStepConfig:
+    """
+    Normalized inputs for the predict/pairs step, independent of job/context.
+    """
+    settings: dict[str, Any]
+    prediction_rules: BlockingRuleLikes
+    training_rules: BlockingRuleLikes
+    deterministic_rules: StringBlockingRules
+    deterministic_recall: float
+    train_first: bool
+    em_max_runs: int
+    em_min_runs: int
+    em_stop_delta: float
+    capture_blocked_edges: bool
+    predict_threshold: float
+    input_table: PredictionInputTableNames
+    pairs_out: PairsTableName
+    clusters_out: ClustersTableName
+    unique_pairs_table: UniquePairsTableName
+    blocked_pairs_out: BlockedPairsTableName
+    do_not_link_table: DoNotLinkTableName
+    do_not_link_left_col: BlockedIdLeftColumnName
+    do_not_link_right_col: BlockedIdRightColumnName
+
+
+@dataclass(frozen=True)
+class PredictPlan:
+    """
+    Derived inputs for the predict/pairs step.
+    """
+    prediction_rules: BlockingRuleLikes
+    training_rules: BlockingRuleLikes
+    input_table_for_prediction: PredictionInputTableNames
+    extra_columns_to_retain: RetainColumnNames
+
+
+@dataclass(frozen=True)
+class ClusterStepConfig:
+    """
+    Normalized inputs for the unique-matching / clustering step.
+    """
+    settings: dict[str, Any]
+    unique_matching: bool
+    cluster_threshold: float
+    capture_blocked_edges: bool
+
+@dataclass(frozen=True)
 class SplinkDedupeJob:
     """
     Splink deduplication intent
     """
-    input_table: PredictionInputTableName | PredictionInputTableNames
+    input_table: PredictionInputTableNames
     settings: dict
     predict_threshold: float
     cluster_threshold: float
     pairs_out: PairsTableName
-    deterministic_rules: Sequence[str | BlockingRuleCreator]
+    deterministic_rules: StringBlockingRules
     deterministic_recall: float
     clusters_out: ClustersTableName = ClustersTableName("")
     train_first: bool = False
-    training_blocking_rules: Sequence[str] | None = None
+    training_blocking_rules: StringBlockingRules | None = None
     visualize: bool = False
     unique_matching: bool = False
     unique_pairs_table: UniquePairsTableName = UniquePairsTableName("")
@@ -340,13 +788,8 @@ class SplinkDedupeJob:
     em_stop_delta: float = 0.002
     splink_key: Any = None
     do_not_link_table: DoNotLinkTableName = DoNotLinkTableName("")
-    do_not_link_left_col: BlockedIdLeftColumnName = field(
-        default_factory=lambda: BlockedIdLeftColumnName("id_l")
-    )
-    do_not_link_right_col: BlockedIdRightColumnName = field(
-        default_factory=lambda: BlockedIdRightColumnName("id_r")
-    )
-    capture_blocked_edges: bool = False
+    do_not_link_left_col: BlockedIdLeftColumnName = BlockedIdLeftColumnName("id_l")
+    do_not_link_right_col: BlockedIdRightColumnName = BlockedIdRightColumnName("id_r")
     blocked_pairs_out: BlockedPairsTableName = BlockedPairsTableName("")
 
 
@@ -358,10 +801,65 @@ def _require_splink_context() -> Run[SplinkContext]:
     )
 
 
+def _maybe_get_required(value: Maybe[A], *, label: str) -> Run[A]:
+    match value:
+        case Just(v):
+            return pure(v)
+        case _:
+            return throw(ErrorPayload(f"{label} is not initialized."))
+
+
+def _with_splink_context(f: Callable[[SplinkContext], Run[A]]) -> Run[A]:
+    return _require_splink_context() >> f
+
+
+def _with_splink_context_api_plan(
+    f: Callable[[SplinkContext, DuckDBAPI, PredictPlan], Run[A]]) -> Run[A]:
+    def _with_ctx(ctx: SplinkContext) -> Run[A]:
+        def _with_api(db_api: DuckDBAPI) -> Run[A]:
+            def _with_plan(plan: PredictPlan) -> Run[A]:
+                return f(ctx, db_api, plan)
+            return (
+                _maybe_get_required(ctx.predict_plan, label="Predict plan")
+                >> _with_plan
+            )
+        return _maybe_get_required(ctx.db_api, label="Splink DuckDB API") >> _with_api
+    return _with_splink_context(_with_ctx)
+
+
+def _with_splink_context_linker_plan(
+    f: Callable[[SplinkContext, Linker, PredictPlan], Run[A]]) -> Run[A]:
+    def _with_ctx(ctx: SplinkContext) -> Run[A]:
+        def _with_linker(linker: Linker) -> Run[A]:
+            def _with_plan(plan: PredictPlan) -> Run[A]:
+                return f(ctx, linker, plan)
+            return (
+                _maybe_get_required(ctx.predict_plan, label="Predict plan")
+                >> _with_plan
+            )
+        return _maybe_get_required(ctx.linker, label="Splink linker") >> _with_linker
+    return _with_splink_context(_with_ctx)
+
+
+
 def _update_splink_context(update_fn) -> Run[Unit]:
     return _require_splink_context() >> (
-        lambda ctx: put_splink_context(update_fn(ctx)) ^ pure(unit)
+        lambda ctx: put_splink_context(update_fn(ctx))
     )
+
+
+def _context_replace(**kwargs: Any) -> Run[Unit]:
+    def _with_ctx(ctx: SplinkContext) -> Run[Unit]:
+        return put_splink_context(replace(ctx, **kwargs))
+    return _require_splink_context() >> _with_ctx
+
+
+def _require_db_api(ctx: SplinkContext) -> Run[Unit]:
+    match ctx.db_api:
+        case Just(_):
+            return pure(unit)
+        case _:
+            return throw(ErrorPayload("Splink DuckDB API is not initialized."))
 
 
 def _tables_get_required(
@@ -381,36 +879,444 @@ def _tables_get_required(
 def _tables_get_optional(
     tables: SplinkTableNames,
     key: type[TTableName],
-) -> Run[Maybe[TTableName]]:
+) -> TTableName:
     value = tables.get(key)
     if value is None:
-        return pure(Nothing)
-    if not isinstance(value, key):
-        return throw(
-            ErrorPayload(f"Expected {key.__name__}, got {type(value).__name__}.")
+        return key()  # type: ignore[call-arg]
+    return value
+
+
+def _validate_predict_plan(ctx: SplinkContext) -> Run[Unit]:
+    match ctx.predict_plan:
+        case Just(_):
+            return pure(unit)
+        case _:
+            return throw(ErrorPayload("Predict plan is not initialized."))
+
+
+def _require_linker(ctx: SplinkContext) -> Run[Unit]:
+    match ctx.linker:
+        case Just(_):
+            return pure(unit)
+        case _:
+            return throw(ErrorPayload("Splink linker was not created."))
+
+
+def _predict_result_from_ctx(
+    ctx: SplinkContext,
+    linker: Linker,
+    plan: PredictPlan,
+) -> Run[SplinkPredictResult]:
+    def _with_pairs(pairs_out: PairsTableName) -> Run[SplinkPredictResult]:
+        clusters_out = _tables_get_optional(ctx.tables, ClustersTableName)
+        blocked_pairs_out = _tables_get_optional(ctx.tables, BlockedPairsTableName)
+        unique_pairs_table = _tables_get_optional(ctx.tables, UniquePairsTableName)
+        do_not_link_table = _tables_get_optional(ctx.tables, DoNotLinkTableName)
+        return pure(
+            SplinkPredictResult(
+                linker=linker,
+                input_table_for_prediction=plan.input_table_for_prediction,
+                unique_id_col=ctx.unique_id_col,
+                pairs_out=pairs_out,
+                clusters_out=clusters_out,
+                do_not_link_table=do_not_link_table if do_not_link_table.is_present() else None,
+                do_not_link_left_col=ctx.do_not_link_left_col,
+                do_not_link_right_col=ctx.do_not_link_right_col,
+                blocked_pairs_out=blocked_pairs_out,
+                unique_pairs_table=unique_pairs_table,
+            )
         )
-    return pure(Just(value))
+
+    return _tables_get_required(ctx.tables, PairsTableName) >> _with_pairs
 
 
-def _table_name_value(table: TableName) -> str:
-    return table.name
+def _validate_predict_tables(ctx: SplinkContext) -> Run[Unit]:
+    return (
+        _tables_get_required(ctx.tables, PairsTableName)
+        ^ _tables_get_required(ctx.tables, PredictionInputTableNames)
+        ^ pure(unit)
+    )
 
 
-def _table_names_value(tables: TableNames) -> list[str]:
-    return list(tables.names)
+def _set_diagnostic_plan(ctx: SplinkContext) -> Run[Unit]:
+    input_table = ctx.tables.get_required(PredictionInputTableNames)
+    plan = PredictPlan(
+        prediction_rules=ctx.prediction_rules,
+        training_rules=ctx.training_rules,
+        input_table_for_prediction=input_table,
+        extra_columns_to_retain=Array.empty(),
+    )
+    return (
+        put_line(
+            f"[debug] set_diagnostic_plan: phase={ctx.phase} "
+            f"capture={ctx.capture_blocked_edges}"
+        )
+        ^ _context_replace(predict_plan=Just(plan))
+        ^ put_line(
+            f"[debug] set_diagnostic_plan: stored plan for {plan.input_table_for_prediction}"
+        )
+        ^ pure(unit)
+    )
+
+
+def _set_final_plan(ctx: SplinkContext) -> Run[Unit]:
+    input_table = ctx.tables.get_required(PredictionInputTableNames)
+    if ctx.capture_blocked_edges:
+        exclusion_clause = (
+            f"NOT (list_contains(l.exclusion_ids, r.{ctx.unique_id_col}) "
+            f"OR list_contains(r.exclusion_ids, l.{ctx.unique_id_col}))"
+        )
+        plan = PredictPlan(
+            prediction_rules=_append_clause_to_rules(
+                ctx.prediction_rules,
+                exclusion_clause,
+            ),
+            training_rules=_append_clause_to_rules(
+                ctx.training_rules,
+                exclusion_clause,
+            ),
+            input_table_for_prediction=PredictionInputTableNames(
+                f"{input_table}_exc"
+            ),
+            extra_columns_to_retain=Array.pure(RetainColumnName("exclusion_ids")),
+        )
+    else:
+        plan = PredictPlan(
+            prediction_rules=ctx.prediction_rules,
+            training_rules=ctx.training_rules,
+            input_table_for_prediction=input_table,
+            extra_columns_to_retain=Array.empty(),
+        )
+    return (
+        put_line(
+            f"[debug] set_final_plan: phase={ctx.phase} "
+            f"capture={ctx.capture_blocked_edges}"
+        )
+        ^ _context_replace(predict_plan=Just(plan))
+        ^ put_line(
+            f"[debug] set_final_plan: stored plan for {plan.input_table_for_prediction}"
+        )
+        ^ pure(unit)
+    )
+
+
+def _build_capture_rules(
+    training_rules: BlockingRuleLikes,
+    prediction_rules: BlockingRuleLikes,
+) -> Array[BlockingRuleLike]:
+    capture_rules: list[BlockingRuleLike] = []
+    seen_rules: set[str] = set()
+    for rule in _concat_blocking_rule_likes(training_rules, prediction_rules):
+        if isinstance(rule, BlockingRuleCreator):
+            capture_rules.append(rule)
+            continue
+        if rule in seen_rules:
+            continue
+        capture_rules.append(rule)
+        seen_rules.add(rule)
+    return Array.make(tuple(capture_rules))
+
+
+def _capture_blocked_edges_validate_tables(ctx: SplinkContext) -> Run[Unit]:
+    return (
+        _tables_get_required(ctx.tables, PredictionInputTableNames)
+        ^ _tables_get_required(ctx.tables, PairsTableName)
+        ^ pure(unit)
+    )
+
+
+def _capture_blocked_edges_validate(_: SplinkContext) -> Run[Unit]:
+    return (
+        _with_splink_context(_require_db_api)
+        ^ _with_splink_context(_validate_predict_plan)
+        ^ _with_splink_context(_require_linker)
+        ^ _with_splink_context(_capture_blocked_edges_validate_tables)
+    )
+
+
+def _capture_blocked_edges_run(
+    ctx: SplinkContext,
+    linker: Linker,
+    plan: PredictPlan,
+) -> Run[Unit]:
+    pairs_out = ctx.tables.get_required(PairsTableName)
+    capture_pairs_table = PairsCaptureTableName(f"{pairs_out}_capture")
+
+    def _with_pairs_source(pairs_source: PairsSourceTableName) -> Run[Unit]:
+        return (
+            sql_exec(SQL(
+                f"CREATE OR REPLACE TABLE {capture_pairs_table} AS "
+                f"SELECT * FROM {pairs_source}"
+            ))
+        )
+
+    return (
+        _with_temp_blocking_rules_on_linker(
+            linker,
+            _build_capture_rules(plan.training_rules, plan.prediction_rules),
+            lambda: PairsSourceTableName(
+                linker.inference.predict(
+                    threshold_match_probability=ctx.predict_threshold
+                ).physical_name
+            ),
+        )
+        >> _with_pairs_source
+    )
+
+
+def _capture_blocked_edges(ctx: SplinkContext) -> Run[Unit]:
+    if not ctx.capture_blocked_edges:
+        return pure(unit)
+    return (
+        _with_splink_context(_capture_blocked_edges_validate)
+        ^ _with_splink_context_linker_plan(_capture_blocked_edges_run)
+    )
+
+
+def _diagnostic_cluster_blocked_edges_validate_tables(
+    ctx: SplinkContext,
+) -> Run[Unit]:
+    return (
+        _tables_get_required(ctx.tables, PredictionInputTableNames)
+        ^ _tables_get_required(ctx.tables, PairsCaptureTableName)
+        ^ _tables_get_required(ctx.tables, DoNotLinkTableName)
+        ^ pure(unit)
+    )
+
+
+def _diagnostic_cluster_blocked_edges_validate(_: SplinkContext) -> Run[Unit]:
+    return (
+        _with_splink_context(_require_db_api)
+        ^ _with_splink_context(_require_linker)
+        ^ _with_splink_context(_diagnostic_cluster_blocked_edges_validate_tables)
+    )
+
+
+def _diagnostic_cluster_blocked_edges_run(
+    ctx: SplinkContext,
+    linker: Linker,
+    _: PredictPlan,
+) -> Run[Unit]:
+    input_tables = ctx.tables.get_required(PredictionInputTableNames)
+    capture_pairs_table = ctx.tables.get_required(PairsCaptureTableName)
+    do_not_link_table = ctx.tables.get_required(DoNotLinkTableName)
+    input_table = input_tables.left().value_or("")
+    unique_id_col = ctx.unique_id_col
+
+    def _invalidate_and_drop(_: Unit) -> Run[Unit]:
+        try:
+            linker.table_management.invalidate_cache()
+            return _drop_all_splink_tables_step()
+        except Exception: #pylint: disable=W0718
+            return pure(unit)
+
+    def _with_nodes(nodes_rows: Array) -> Run[Unit]:
+        nodes = [
+            (row["unique_id"], row["exclusion_id"])
+            for row in nodes_rows
+        ]
+
+        def _with_cols(
+            resolved: Tuple[
+                HashSet[ColumnName],
+                Tuple[PairLeftIdColumnName, PairRightIdColumnName]
+            ]
+        ) -> Run[Unit]:
+            id_cols = resolved.snd
+            left_id_col = id_cols.fst
+            right_id_col = id_cols.snd
+
+            def _with_edges(edges_rows: Array) -> Run[Unit]:
+                edges = [
+                    (row["uid_l"], row["uid_r"], row["match_probability"])
+                    for row in edges_rows
+                ]
+                _, blocked_df = _constrained_greedy_clusters(
+                    nodes=nodes,
+                    edges=edges,
+                    unique_id_column_name=str(unique_id_col),
+                    capture_blocked=True,
+                    blocked_id_cols=(
+                        str(ctx.do_not_link_left_col),
+                        str(ctx.do_not_link_right_col),
+                    ),
+                )
+                if blocked_df is None:
+                    return _invalidate_and_drop(unit)
+                return (
+                    sql_register("_blocked_edges_df", blocked_df)
+                    ^ sql_exec(SQL(
+                        f"CREATE OR REPLACE TABLE {do_not_link_table} AS "
+                        "SELECT * FROM _blocked_edges_df"
+                    ))
+                    ^ _invalidate_and_drop(unit)
+                )
+
+            return (
+                sql_query(SQL(
+                    f"""
+                    SELECT
+                      CAST({left_id_col} AS VARCHAR) AS uid_l,
+                      CAST({right_id_col} AS VARCHAR) AS uid_r,
+                      match_probability
+                    FROM {capture_pairs_table}
+                    WHERE match_probability >= {ctx.cluster_threshold}
+                    ORDER BY
+                      match_probability DESC,
+                      CAST({left_id_col} AS VARCHAR),
+                      CAST({right_id_col} AS VARCHAR)
+                    """
+                ))
+                >> _with_edges
+            )
+
+        return _resolve_pair_id_cols_from_table_step(
+            pairs_table=PairsTableName(str(capture_pairs_table)),
+            unique_id_column_name=unique_id_col,
+        ) >> _with_cols
+
+    return (
+        sql_query(SQL(
+            f"""
+            SELECT
+              CAST({unique_id_col} AS VARCHAR) AS unique_id,
+              CAST(exclusion_id AS VARCHAR) AS exclusion_id
+            FROM {input_table}
+            """
+        ))
+        >> _with_nodes
+    )
+
+
+def _diagnostic_cluster_blocked_edges(ctx: SplinkContext) -> Run[Unit]:
+    if not ctx.capture_blocked_edges:
+        return pure(unit)
+    return (
+        _with_splink_context(_diagnostic_cluster_blocked_edges_validate)
+        ^ _with_splink_context_linker_plan(_diagnostic_cluster_blocked_edges_run)
+    )
+
+
+def _prepare_exclusion_list_from_ctx(ctx: SplinkContext) -> Run[Unit]:
+    def _with_plan(plan: PredictPlan) -> Run[Unit]:
+        def _with_inputs(input_tables: PredictionInputTableNames) -> Run[Unit]:
+            input_table = input_tables.left().value_or("")
+            do_not_link_table = cast(DoNotLinkTableName, ctx.tables.get(DoNotLinkTableName))
+            if ctx.capture_blocked_edges:
+                return _create_exclusion_list_table_step(
+                    input_table=PredictionInputTableName(input_table),
+                    output_table=ExclusionInputTableName(f"{input_table}_exc"),
+                    do_not_link_table=do_not_link_table,
+                    unique_id_column_name=ctx.unique_id_col,
+                    bl_id_left_col=ctx.do_not_link_left_col,
+                    bl_id_right_col=ctx.do_not_link_right_col,
+                )
+            return pure(unit)
+
+        _ = plan
+        return _tables_get_required(ctx.tables, PredictionInputTableNames) >> _with_inputs
+
+    return _maybe_get_required(ctx.predict_plan, label="Predict plan") >> _with_plan
+
+
+def _prepare_exclusion_list(_: SplinkContext) -> Run[Unit]:
+    return (
+        _with_splink_context(_validate_predict_plan)
+        ^ _with_splink_context(_prepare_exclusion_list_from_ctx)
+    )
+
+
+def _build_linker_from_ctx(
+    ctx: SplinkContext,
+    db_api: DuckDBAPI,
+    plan: PredictPlan
+)-> Run[Unit]:
+    return _context_replace(
+        linker=Just(_build_linker_for_prediction(
+            settings=ctx.settings,
+            db_api=db_api,
+            prediction_rules=plan.prediction_rules,
+            input_table=_input_table_value(plan.input_table_for_prediction),
+            extra_columns_to_retain=plan.extra_columns_to_retain,
+        ))
+    )
+
+
+
+def _predict_pairs_from_ctx(
+    ctx: SplinkContext,
+    linker: Linker,
+    _: PredictPlan,
+) -> Run[Unit]:
+    def _with_pairs(pairs_out: PairsTableName) -> Run[Unit]:
+        do_not_link_table = _tables_get_optional(ctx.tables, DoNotLinkTableName)
+        link_type = SplinkLinkType.from_settings(ctx.settings)
+        return (
+            sql_exec(SQL(
+                f"CREATE OR REPLACE TABLE {pairs_out} AS "
+                f"SELECT * FROM {PairsSourceTableName(
+                    linker.inference.predict(
+                        threshold_match_probability=ctx.predict_threshold
+                    ).physical_name
+                )}"
+            ))
+            ^ (
+                _with_splink_context(_filter_pairs_table_do_not_link_step)
+                if do_not_link_table.is_present()
+                else pure(unit)
+            )
+            ^ (
+                sql_exec(SQL(f"""
+                    CREATE OR REPLACE TABLE {pairs_out}_top1 AS
+                    WITH ranked AS (
+                    SELECT
+                        *,
+                        ROW_NUMBER() OVER (
+                        PARTITION BY unique_id_r
+                        ORDER BY
+                            match_probability DESC,
+                            -- stable tie-breakers so results are deterministic:
+                            COALESCE(match_weight, 0) DESC,
+                            CAST(unique_id_l AS VARCHAR)
+                        ) AS rn
+                    FROM {pairs_out}
+                    )
+                    SELECT * EXCLUDE (rn)
+                    FROM ranked
+                    WHERE rn = 1;
+                    """
+                    )
+                )
+                if link_type == SplinkLinkType.LINK_ONLY
+                else pure(unit)
+            )
+        )
+
+    return _tables_get_required(ctx.tables, PairsTableName) >> _with_pairs
+
+
+def _predict_pairs_step(_: SplinkContext) -> Run[Unit]:
+    return (
+        _with_splink_context(_validate_predict_plan)
+        ^ _with_splink_context_linker_plan(_predict_pairs_from_ctx)
+    )
+
+
 
 
 def _input_table_value(
-    input_table: PredictionInputTableName | PredictionInputTableNames,
+    input_table: PredictionInputTableNames,
 ) -> str | list[str]:
-    if isinstance(input_table, PredictionInputTableName):
-        return input_table.name
-    return _table_names_value(input_table)
+    left = input_table.left().value_or("")
+    right = input_table.right()
+    if right.is_present():
+        return [left, right.value_or("")]
+    return left
 
 def _add_all_tables(
     tables: SplinkTableNames,
     pairs_out: PairsTableName,
-    input_tables: PredictionInputTableName | PredictionInputTableNames,
+    input_tables: PredictionInputTableNames,
 ) -> SplinkTableNames:
     return (
         tables
@@ -467,7 +1373,6 @@ def _add_dedupe_tables(
     clusters_out: ClustersTableName,
     do_not_link_table: DoNotLinkTableName,
     blocked_pairs_out: BlockedPairsTableName,
-    capture_blocked_edges: bool,
     pairs_out: PairsTableName,
 ) -> SplinkTableNames:
     if link_type != SplinkLinkType.DEDUPE_ONLY:
@@ -478,70 +1383,65 @@ def _add_dedupe_tables(
         .set(ClustersCountsTableName.from_clusters(clusters_out))
     )
     tables = _add_blocking_tables(tables, do_not_link_table, blocked_pairs_out)
-    tables = _add_capture_tables(tables, capture_blocked_edges, pairs_out)
+    tables = _add_capture_tables(tables, True, pairs_out)
     return tables
 def _validate_splink_dedupe_input_tables(
-    input_tables: PredictionInputTableName | PredictionInputTableNames,
+    input_tables: PredictionInputTableNames,
     link_type: SplinkLinkType,
     clusters_out: ClustersTableName,
     unique_matching: bool,
     unique_pairs_table: UniquePairsTableName,
-    capture_blocked_edges: bool,
     blocked_pairs_out: BlockedPairsTableName,
     do_not_link_table: DoNotLinkTableName,
 ) -> Run[Unit]:
+    if not input_tables.left().is_present():
+        return throw(
+            ErrorPayload("Input table name must be provided.")
+        )
     if link_type == SplinkLinkType.LINK_ONLY:
-        if not isinstance(input_tables, PredictionInputTableNames) or len(input_tables.names) != 2:
+        if not input_tables.has_right():
             return throw(
                 ErrorPayload(
                     "Link-only mode requires exactly two input tables "
                     f"(got {input_tables})."
                 )
             )
-        if clusters_out.name != "":
+        if clusters_out.is_present():
             return throw(
                 ErrorPayload("Link-only mode requires clusters_out to be empty.")
             )
-        if capture_blocked_edges:
-            return throw(
-                ErrorPayload("Link-only mode does not support capture_blocked_edges.")
-            )
-        if blocked_pairs_out.name != "" or do_not_link_table.name != "":
+        if blocked_pairs_out.is_present() or do_not_link_table.is_present():
             return throw(
                 ErrorPayload("Link-only mode requires no blocked/exclusion tables.")
             )
     else:
-        if isinstance(input_tables, PredictionInputTableNames):
+        if input_tables.has_right():
             return throw(
                 ErrorPayload(
                     "Dedupe mode requires a single input table "
                     f"(got {input_tables})."
                 )
             )
-        if clusters_out.name == "":
+        if not clusters_out.is_present():
             return throw(
                 ErrorPayload("Dedupe mode requires clusters_out to be set.")
             )
-        if not capture_blocked_edges:
-            return throw(
-                ErrorPayload("Dedupe mode requires capture_blocked_edges to be True.")
-            )
-        if blocked_pairs_out.name == "" or do_not_link_table.name == "":
+        if not blocked_pairs_out.is_present() or not do_not_link_table.is_present():
             return throw(
                 ErrorPayload("Dedupe mode requires blocked/exclusion table names.")
             )
-        if blocked_pairs_out.name == do_not_link_table.name:
+        if str(blocked_pairs_out) == str(do_not_link_table):
             return throw(
                 ErrorPayload(
                     "Dedupe mode requires blocked_pairs_out and do_not_link_table "
                     "to be distinct."
                 )
             )
-    if unique_matching and unique_pairs_table.name == "":
+    if unique_matching and not unique_pairs_table.is_present():
         return throw(
             ErrorPayload("unique_matching requires unique_pairs_table.")
         )
-    if not unique_matching and unique_pairs_table.name != "":
+    if not unique_matching and unique_pairs_table.is_present():
         return throw(
             ErrorPayload("unique_pairs_table is set but unique_matching is False.")
         )
@@ -619,41 +1519,168 @@ def _resolve_pair_id_cols(
         f"Expected ({left_id_col}, {right_id_col}) or (unique_id_l, unique_id_r)."
     )
 
+
+def _resolve_pair_id_cols_typed(
+    pair_cols: HashSet[ColumnName],
+    unique_id_column_name: UniqueIdColumnName,
+    pairs_table: PairsTableName,
+) -> Tuple[PairLeftIdColumnName, PairRightIdColumnName]:
+    """
+    Typed variant for monadic call sites.
+    """
+    left_id_col = PairLeftIdColumnName(f"{unique_id_column_name}_l")
+    right_id_col = PairRightIdColumnName(f"{unique_id_column_name}_r")
+    if left_id_col in pair_cols and right_id_col in pair_cols:
+        return Tuple(
+            left_id_col,
+            right_id_col,
+        )
+    if ColumnName("unique_id_l") in pair_cols and ColumnName("unique_id_r") in pair_cols:
+        return Tuple(
+            PairLeftIdColumnName("unique_id_l"),
+            PairRightIdColumnName("unique_id_r"),
+        )
+    raise SplinkPairsSchemaError(
+        f"Constrained clustering cannot find id columns in {pairs_table}. "
+        f"Expected ({left_id_col}, {right_id_col}) or (unique_id_l, unique_id_r)."
+    )
+
+
+def _resolve_pair_id_cols_from_table_step(
+    pairs_table: PairsTableName,
+    unique_id_column_name: UniqueIdColumnName,
+) -> Run[Tuple[HashSet[ColumnName], Tuple[PairLeftIdColumnName, PairRightIdColumnName]]]:
+    def _with_cols(rows: Array) -> Run[Tuple[HashSet[ColumnName], Tuple[PairLeftIdColumnName, PairRightIdColumnName]]]:
+        cols_array = (lambda row: ColumnName(str(row["name"]))) & rows
+        pair_cols = HashSet.fromArray(cols_array)
+        id_cols = _resolve_pair_id_cols_typed(
+            pair_cols,
+            unique_id_column_name,
+            pairs_table,
+        )
+        return pure(Tuple(pair_cols, id_cols))
+
+    return sql_query(SQL(
+        f"SELECT name FROM pragma_table_info('{pairs_table}')"
+    )) >> _with_cols
+
 def _with_temp_blocking_rules_on_linker(
     linker: Linker,
-    rules: Sequence[str | BlockingRuleCreator],
-    action,
-):
+    rules: Array[BlockingRuleLike],
+    action: Callable[[], A],
+) -> Run[A]:
+    def _with_preceding_rules(
+        dialected: Array[BlockingRule],
+    ) -> Run[Array[BlockingRule]]:
+        def _step(
+            acc: Array[BlockingRule],
+            rule: BlockingRule,
+        ) -> Run[Array[BlockingRule]]:
+            rule.add_preceding_rules(list(acc.a))
+            return pure(Array.snoc(acc, rule))
+        return fold_run(dialected, Array.empty(), _step)
+
+    def _run() -> Run[A]:
+        settings_obj = linker._settings_obj
+        old_rules = settings_obj._blocking_rules_to_generate_predictions
+        sql_dialect = cast(str, linker._db_api.sql_dialect.sql_dialect_str)
+        dialected = rules.map(
+            lambda rule: to_blocking_rule_creator(rule).get_blocking_rule(sql_dialect)
+        )
+
+        def _with_rules(blocking_rules_dialected: Array[BlockingRule]) -> Run[A]:
+            settings_obj._blocking_rules_to_generate_predictions = \
+                list(blocking_rules_dialected)
+            try:
+                return pure(action())
+            finally:
+                settings_obj._blocking_rules_to_generate_predictions = old_rules
+
+        return _with_preceding_rules(dialected) >> _with_rules
+
+    return _run()
+
+
+def _with_temp_blocking_rules_on_linker_sync(
+    linker: Linker,
+    rules: Array[BlockingRuleLike],
+    action: Callable[[], A],
+) -> A:
     settings_obj = linker._settings_obj
     old_rules = settings_obj._blocking_rules_to_generate_predictions
     try:
         sql_dialect = cast(str, linker._db_api.sql_dialect.sql_dialect_str)
-        rules_array = Array.make(tuple(rules))
-        dialected = rules_array.map(
+        dialected = rules.map(
             lambda rule: to_blocking_rule_creator(rule).get_blocking_rule(sql_dialect)
         )
-        blocking_rules_dialected = dialected.map_with_index(
-            lambda idx, br: (
-                br.add_preceding_rules(list(dialected.a[:idx])),
-                br,
-            )[1]
-        )
-        settings_obj._blocking_rules_to_generate_predictions = list(blocking_rules_dialected)
+        acc = Array.empty()
+        for rule in dialected:
+            rule.add_preceding_rules(list(acc.a))
+            acc = Array.snoc(acc, rule)
+        settings_obj._blocking_rules_to_generate_predictions = list(acc)
         return action()
     finally:
         settings_obj._blocking_rules_to_generate_predictions = old_rules
 
 def _append_clause_to_rules(
-    rules: Sequence[str | BlockingRuleCreator],
+    rules: BlockingRuleLikes,
     clause: str,
-) -> list[str | BlockingRuleCreator]:
-    updated: list[str | BlockingRuleCreator] = []
+) -> Array[BlockingRuleLike]:
+    updated: list[BlockingRuleLike] = []
     for rule in rules:
         if isinstance(rule, BlockingRuleCreator):
             updated.append(rule)
         else:
-            updated.append(f"({rule}) AND {clause}")
-    return updated
+            updated.append(CustomStringBlockingRule(f"({rule}) AND {clause}"))
+    return Array.make(tuple(updated))
+
+
+def _persist_pairs_tables(
+    *,
+    pairs_out: PairsTableName,
+    pairs_source: PairsSourceTableName,
+    do_not_link_table: DoNotLinkTableName,
+    id_left_col: BlockedIdLeftColumnName,
+    id_right_col: BlockedIdRightColumnName,
+    unique_id_column_name: UniqueIdColumnName,
+    link_type: SplinkLinkType,
+    query_fn: Callable[[str], Array],
+    exec_fn: Callable[[str], None],
+) -> None:
+    exec_fn(
+        f"CREATE OR REPLACE TABLE {pairs_out} AS "
+        f"SELECT * FROM {pairs_source}"
+    )
+    if do_not_link_table.is_present():
+        _filter_pairs_table_do_not_link(
+            pairs_table=str(pairs_out),
+            do_not_link_table=str(do_not_link_table),
+            bl_id_left_col=str(id_left_col),
+            bl_id_right_col=str(id_right_col),
+            unique_id_column_name=str(unique_id_column_name),
+            query_fn=query_fn,
+            exec_fn=exec_fn,
+        )
+    if link_type == SplinkLinkType.LINK_ONLY:
+        exec_fn(f"""
+            CREATE OR REPLACE TABLE {pairs_out}_top1 AS
+            WITH ranked AS (
+            SELECT
+                *,
+                ROW_NUMBER() OVER (
+                PARTITION BY unique_id_r
+                ORDER BY
+                    match_probability DESC,
+                    -- stable tie-breakers so results are deterministic:
+                    COALESCE(match_weight, 0) DESC,
+                    CAST(unique_id_l AS VARCHAR)
+                ) AS rn
+            FROM {pairs_out}
+            )
+            SELECT * EXCLUDE (rn)
+            FROM ranked
+            WHERE rn = 1;
+            """)
 
 
 def _create_exclusion_list_table(
@@ -696,12 +1723,49 @@ def _create_exclusion_list_table(
         """
     )
 
+def _create_exclusion_list_table_step(
+    *,
+    input_table: PredictionInputTableName,
+    output_table: ExclusionInputTableName,
+    do_not_link_table: DoNotLinkTableName,
+    unique_id_column_name: UniqueIdColumnName,
+    bl_id_left_col: BlockedIdLeftColumnName,
+    bl_id_right_col: BlockedIdRightColumnName,
+) -> Run[Unit]:
+    return sql_exec(SQL(f"""
+        CREATE OR REPLACE TABLE {output_table} AS
+        WITH pairs AS (
+          SELECT
+            CAST({bl_id_left_col} AS VARCHAR) AS victim_id,
+            CAST({bl_id_right_col} AS VARCHAR) AS other_id
+          FROM {do_not_link_table}
+          UNION ALL
+          SELECT
+            CAST({bl_id_right_col} AS VARCHAR) AS victim_id,
+            CAST({bl_id_left_col} AS VARCHAR) AS other_id
+          FROM {do_not_link_table}
+        ),
+        agg AS (
+          SELECT
+            victim_id,
+            array_agg(DISTINCT other_id) AS exclusion_ids
+          FROM pairs
+          GROUP BY victim_id
+        )
+        SELECT
+          v.*,
+          COALESCE(a.exclusion_ids, []::VARCHAR[]) AS exclusion_ids
+        FROM {input_table} v
+        LEFT JOIN agg a
+          ON CAST(v.{unique_id_column_name} AS VARCHAR) = a.victim_id
+        """))
+
 def _filter_pairs_table_do_not_link(
     *,
     pairs_table: str,
     do_not_link_table: str,
-    id_left_col: str,
-    id_right_col: str,
+    bl_id_left_col: str,
+    bl_id_right_col: str,
     unique_id_column_name: str,
     query_fn,
     exec_fn,
@@ -726,15 +1790,54 @@ def _filter_pairs_table_do_not_link(
           SELECT 1
           FROM {do_not_link_table} d
           WHERE (
-            CAST(d.{id_left_col} AS VARCHAR) = CAST(p.{left_id_col} AS VARCHAR)
-            AND CAST(d.{id_right_col} AS VARCHAR) = CAST(p.{right_id_col} AS VARCHAR)
+            CAST(d.{bl_id_left_col} AS VARCHAR) = CAST(p.{left_id_col} AS VARCHAR)
+            AND CAST(d.{bl_id_right_col} AS VARCHAR) = CAST(p.{right_id_col} AS VARCHAR)
           ) OR (
-            CAST(d.{id_left_col} AS VARCHAR) = CAST(p.{right_id_col} AS VARCHAR)
-            AND CAST(d.{id_right_col} AS VARCHAR) = CAST(p.{left_id_col} AS VARCHAR)
+            CAST(d.{bl_id_left_col} AS VARCHAR) = CAST(p.{right_id_col} AS VARCHAR)
+            AND CAST(d.{bl_id_right_col} AS VARCHAR) = CAST(p.{left_id_col} AS VARCHAR)
           )
         )
         """
     )
+
+def _filter_pairs_table_do_not_link_step(ctx: SplinkContext) -> Run[Unit]:
+    pairs_table = ctx.tables.get_required(PairsTableName)
+    do_not_link_table = ctx.tables.get_required(DoNotLinkTableName)
+    unique_id_column_name = ctx.unique_id_col
+    bl_id_left_col = ctx.do_not_link_left_col
+    bl_id_right_col = ctx.do_not_link_right_col
+
+    def _with_cols(
+        resolved: Tuple[HashSet[ColumnName], Tuple[PairLeftIdColumnName, PairRightIdColumnName]]
+    ) -> Run[Unit]:
+        id_cols = resolved.snd
+        left_id_col = id_cols.fst
+        right_id_col = id_cols.snd
+        return sql_exec(SQL(f"""
+            CREATE OR REPLACE TABLE {pairs_table} AS
+            SELECT p.*
+            FROM {pairs_table} p
+            WHERE NOT EXISTS (
+              SELECT 1
+              FROM {do_not_link_table} d
+              WHERE (
+                CAST(d.{bl_id_left_col} AS VARCHAR)
+                    = CAST(p.{left_id_col} AS VARCHAR)
+                AND CAST(d.{bl_id_right_col} AS VARCHAR)
+                    = CAST(p.{right_id_col} AS VARCHAR)
+              ) OR (
+                CAST(d.{bl_id_left_col} AS VARCHAR)
+                    = CAST(p.{right_id_col} AS VARCHAR)
+                AND CAST(d.{bl_id_right_col} AS VARCHAR) 
+                    = CAST(p.{left_id_col} AS VARCHAR)
+              )
+            )
+            """))
+
+    return _resolve_pair_id_cols_from_table_step(
+        pairs_table,
+        unique_id_column_name,
+    ) >> _with_cols
 
 def _collect_blocked_edges(
     *,
@@ -774,6 +1877,48 @@ def _collect_blocked_edges(
         """
     )
 
+def _collect_blocked_edges_step(
+    *,
+    pairs_table: PairsTableName,
+    do_not_link_table: DoNotLinkTableName,
+    bl_id_left_col: BlockedIdLeftColumnName,
+    bl_id_right_col: BlockedIdRightColumnName,
+    unique_id_column_name: UniqueIdColumnName,
+) -> Run[Unit]:
+    def _with_cols(
+            resolved: Tuple[
+                HashSet[ColumnName],
+                Tuple[PairLeftIdColumnName, PairRightIdColumnName]
+                ]
+        ) -> Run[Unit]:
+        pair_cols = resolved.fst
+        id_cols = resolved.snd
+        left_id_col = id_cols.fst
+        right_id_col = id_cols.snd
+        if ColumnName("exclusion_id_l") not in pair_cols \
+            or ColumnName("exclusion_id_r") not in pair_cols:
+            return throw(ErrorPayload(
+                "Blocked edge capture requires exclusion_id_l/exclusion_id_r "
+                f"in {pairs_table}."
+            ))
+        return sql_exec(SQL(f"""
+            CREATE OR REPLACE TABLE {do_not_link_table} AS
+            SELECT DISTINCT
+              CAST({left_id_col} AS VARCHAR) AS {bl_id_left_col},
+              CAST({right_id_col} AS VARCHAR) AS {bl_id_right_col}
+            FROM {pairs_table}
+            WHERE CAST(exclusion_id_l AS VARCHAR) 
+                = CAST(exclusion_id_r AS VARCHAR)
+              AND CAST(exclusion_id_l AS VARCHAR) NOT IN ('', 'None')
+              AND CAST({bl_id_left_col} AS VARCHAR) <> CAST({bl_id_right_col}
+                AS VARCHAR)
+            """))
+
+    return _resolve_pair_id_cols_from_table_step(
+        pairs_table,
+        unique_id_column_name,
+    ) >> _with_cols
+
 def _drop_all_splink_tables(exec_fn, query_fn) -> None:
     rows = query_fn(
         "SELECT table_name, table_type "
@@ -787,6 +1932,27 @@ def _drop_all_splink_tables(exec_fn, query_fn) -> None:
             exec_fn(f"DROP VIEW IF EXISTS {name}")
         else:
             exec_fn(f"DROP TABLE IF EXISTS {name}")
+
+def _drop_all_splink_tables_step() -> Run[Unit]:
+    def _drop_one(row: Any) -> Run[Unit]:
+        name = row["table_name"]
+        table_type = str(row["table_type"]).upper()
+        stmt = f"DROP VIEW IF EXISTS {name}" if table_type == "VIEW" \
+            else f"DROP TABLE IF EXISTS {name}"
+        return sql_exec(SQL(stmt))
+
+    return (
+        sql_query(SQL(
+            "SELECT table_name, table_type "
+            "FROM information_schema.tables "
+            "WHERE table_name LIKE '__splink__%'"
+        ))
+        >> (lambda rows:
+            pure(unit)
+            if rows.length == 0
+            else array_traverse_run(rows, _drop_one).map(lambda _: unit)
+        )
+    )
 
 
 def _constrained_greedy_clusters(
@@ -904,15 +2070,15 @@ def _constrained_greedy_clusters(
 
 
 def splink_dedupe_job(
-    input_table: PredictionInputTableName | PredictionInputTableNames,
+    input_table: PredictionInputTableName | PredictionInputTableNames | Sequence[str | PredictionInputTableName],
     settings: dict,
     predict_threshold: float = 0.05,
     cluster_threshold: float = 0,
     pairs_out: PairsTableName = PairsTableName("incidents_pairs"),
     clusters_out: ClustersTableName = ClustersTableName(""),
     train_first: bool = False,
-    training_blocking_rules: Sequence[str] | None = None,
-    deterministic_rules: Sequence[str | BlockingRuleCreator] | None = None,
+    training_blocking_rules: StringBlockingRules | Sequence[StringBlockingRule] | None = None,
+    deterministic_rules: StringBlockingRules | Sequence[StringBlockingRule] | None = None,
     deterministic_recall: float = 0.5,
     visualize: bool = False,
     unique_matching: bool = False,
@@ -924,7 +2090,6 @@ def splink_dedupe_job(
     do_not_link_table: DoNotLinkTableName = DoNotLinkTableName(""),
     do_not_link_left_col: BlockedIdLeftColumnName = BlockedIdLeftColumnName("id_l"),
     do_not_link_right_col: BlockedIdRightColumnName = BlockedIdRightColumnName("id_r"),
-    capture_blocked_edges: bool = False,
     blocked_pairs_out: BlockedPairsTableName = BlockedPairsTableName("")
 
 
@@ -936,16 +2101,16 @@ def splink_dedupe_job(
     return Run(
         lambda self: self._perform(
             SplinkDedupeJob(
-                input_table,
+                PredictionInputTableNames.from_input(input_table),
                 settings,
                 predict_threshold,
                 cluster_threshold,
                 pairs_out,
-                deterministic_rules or [],
+                Array.make(tuple(deterministic_rules or ())),
                 deterministic_recall,
                 clusters_out,
                 train_first,
-                training_blocking_rules or [],
+                Array.make(tuple(training_blocking_rules or ())),
                 visualize,
                 unique_matching,
                 unique_pairs_table,
@@ -956,7 +2121,6 @@ def splink_dedupe_job(
                 do_not_link_table,
                 do_not_link_left_col,
                 do_not_link_right_col,
-                capture_blocked_edges,
                 blocked_pairs_out,
             ),
             self,
@@ -1002,7 +2166,7 @@ def _run_splink_visualize(linker: Linker, job: SplinkVisualizeJob) -> None:
     def _midpoint_blocking_rule(
         left_midpoints: Sequence[int] | None,
         right_midpoints: Sequence[int] | None,
-    ) -> str | None:
+    ) -> CustomStringBlockingRule | None:
         clauses: list[str] = []
         if left_midpoints:
             left_vals = ",".join(str(int(v)) for v in left_midpoints)
@@ -1012,7 +2176,7 @@ def _run_splink_visualize(linker: Linker, job: SplinkVisualizeJob) -> None:
             clauses.append(f"r.midpoint_day in ({right_vals})")
         if not clauses:
             return None
-        return " and ".join(clauses)
+        return CustomStringBlockingRule(" and ".join(clauses))
 
     def _sql_literal(value: Any) -> str:
         return "'" + str(value).replace("'", "''") + "'"
@@ -1190,9 +2354,9 @@ def _run_splink_visualize(linker: Linker, job: SplinkVisualizeJob) -> None:
         rule = _midpoint_blocking_rule(job.left_midpoints, job.right_midpoints)
         if rule:
             print("Using midpoint-only blocking for prediction.")
-            df_pairs = _with_temp_blocking_rules_on_linker(
+            df_pairs = _with_temp_blocking_rules_on_linker_sync(
                 linker,
-                [rule],
+                Array.pure(rule),
                 lambda: linker.inference.predict(threshold_match_probability=0),
             )
         else:
@@ -1354,182 +2518,126 @@ def _run_splink_visualize(linker: Linker, job: SplinkVisualizeJob) -> None:
     print("Cluster studio dashboard written to cluster_studio.html")
 
 
+def _predict_config_from_job(job: SplinkDedupeJob) -> PredictStepConfig:
+    prediction_rules: BlockingRuleLikes = Array.make(
+        tuple(job.settings.get("blocking_rules_to_generate_predictions", []))
+    )
+    training_rules = (
+        job.training_blocking_rules
+        if job.training_blocking_rules
+        else prediction_rules
+    )
+    link_type = SplinkLinkType.from_settings(job.settings)
+    return PredictStepConfig(
+        settings=job.settings,
+        prediction_rules=prediction_rules,
+        training_rules=training_rules,
+        deterministic_rules=job.deterministic_rules,
+        deterministic_recall=job.deterministic_recall,
+        train_first=job.train_first,
+        em_max_runs=job.em_max_runs,
+        em_min_runs=job.em_min_runs,
+        em_stop_delta=job.em_stop_delta,
+        capture_blocked_edges=link_type == SplinkLinkType.DEDUPE_ONLY,
+        predict_threshold=job.predict_threshold,
+        input_table=job.input_table,
+        pairs_out=job.pairs_out,
+        clusters_out=job.clusters_out,
+        unique_pairs_table=job.unique_pairs_table,
+        blocked_pairs_out=job.blocked_pairs_out,
+        do_not_link_table=job.do_not_link_table,
+        do_not_link_left_col=job.do_not_link_left_col,
+        do_not_link_right_col=job.do_not_link_right_col,
+    )
+
+
+def _predict_config_from_ctx(ctx: SplinkContext) -> Run[PredictStepConfig]:
+    def _training_rules_from_ctx(
+        prediction_rules: BlockingRuleLikes,
+    ) -> BlockingRuleLikes:
+        if len(ctx.training_rules) > 0:
+            return ctx.training_rules
+        return prediction_rules
+
+    def _with_pairs(pairs_out: PairsTableName) -> Run[PredictStepConfig]:
+        def _with_inputs(input_tables: PredictionInputTableNames) -> Run[PredictStepConfig]:
+            clusters_out = _tables_get_optional(ctx.tables, ClustersTableName)
+            unique_pairs_table = _tables_get_optional(ctx.tables, UniquePairsTableName)
+            blocked_pairs_out = _tables_get_optional(ctx.tables, BlockedPairsTableName)
+            do_not_link_table = _tables_get_optional(ctx.tables, DoNotLinkTableName)
+            training_rules = _training_rules_from_ctx(ctx.prediction_rules)
+            return pure(
+                PredictStepConfig(
+                    settings=ctx.settings,
+                    prediction_rules=ctx.prediction_rules,
+                    training_rules=training_rules,
+                    deterministic_rules=ctx.deterministic_rules,
+                    deterministic_recall=ctx.deterministic_recall,
+                    train_first=ctx.train_first,
+                    em_max_runs=ctx.em_max_runs,
+                    em_min_runs=ctx.em_min_runs,
+                    em_stop_delta=ctx.em_stop_delta,
+                    capture_blocked_edges=ctx.capture_blocked_edges,
+                    predict_threshold=ctx.predict_threshold,
+                    input_table=input_tables,
+                    pairs_out=pairs_out,
+                    clusters_out=clusters_out,
+                    unique_pairs_table=unique_pairs_table,
+                    blocked_pairs_out=blocked_pairs_out,
+                    do_not_link_table=do_not_link_table,
+                    do_not_link_left_col=ctx.do_not_link_left_col,
+                    do_not_link_right_col=ctx.do_not_link_right_col,
+                )
+            )
+
+        return _tables_get_required(ctx.tables, PredictionInputTableNames) >> _with_inputs
+
+    return _tables_get_required(ctx.tables, PairsTableName) >> _with_pairs
+
+
+def _cluster_config_from_job(job: SplinkDedupeJob) -> ClusterStepConfig:
+    link_type = SplinkLinkType.from_settings(job.settings)
+    return ClusterStepConfig(
+        settings=job.settings,
+        unique_matching=job.unique_matching,
+        cluster_threshold=job.cluster_threshold,
+        capture_blocked_edges=link_type == SplinkLinkType.DEDUPE_ONLY,
+    )
+
+
+def _cluster_config_from_ctx(ctx: SplinkContext) -> ClusterStepConfig:
+    return ClusterStepConfig(
+        settings=ctx.settings,
+        unique_matching=ctx.unique_matching,
+        cluster_threshold=ctx.cluster_threshold,
+        capture_blocked_edges=ctx.capture_blocked_edges,
+    )
+
+
 def _run_splink_predict_pairs_with_conn(
-    job: SplinkDedupeJob,
+    cfg: PredictStepConfig,
     con: duckdb.DuckDBPyConnection,
     current: Run[Any],
 ) -> SplinkPredictResult:
     def _duckdb_exec(sql: str) -> None:
         with_duckdb(sql_exec(SQL(sql)))._step(current)
 
-    def _duckdb_query(sql: str) -> Array:
-        return with_duckdb(sql_query(SQL(sql)))._step(current)
-
-    def _duckdb_register(name: str, df: DataFrame) -> None:
-        with_duckdb(sql_register(name, df))._step(current)
-
     db_api = DuckDBAPI(connection=con)
-    unique_id_col = cast(str, job.settings.get("unique_id_column_name", "unique_id"))
-    base_prediction_rules = list(job.settings.get("blocking_rules_to_generate_predictions", []))
-    base_training_rules = (
-        list(job.training_blocking_rules)
-        if job.training_blocking_rules
-        else base_prediction_rules
-    )
-    input_table = _input_table_value(job.input_table)
-    pairs_out = _table_name_value(job.pairs_out)
-    clusters_out = _table_name_value(job.clusters_out)
-    unique_pairs_table = _table_name_value(job.unique_pairs_table)
-    blocked_pairs_out = _table_name_value(job.blocked_pairs_out)
-    do_not_link_table = _table_name_value(job.do_not_link_table)
-    do_not_link_left_col = str(job.do_not_link_left_col)
-    do_not_link_right_col = str(job.do_not_link_right_col)
-
-    def _build_linker(
-        prediction_rules: Sequence[str | BlockingRuleCreator],
-        input_table: str | list[str],
-        extra_columns_to_retain: Sequence[str] | None = None,
-    ) -> Linker:
-        settings = dict(job.settings)
-        if extra_columns_to_retain:
-            existing = list(settings.get("additional_columns_to_retain", []))
-            merged = list(dict.fromkeys(existing + list(extra_columns_to_retain)))
-            settings["additional_columns_to_retain"] = merged
-        return Linker(
-            input_table,
-            settings
-            | {
-                "retain_intermediate_calculation_columns": True,
-                "max_iterations": 100,
-                "blocking_rules_to_generate_predictions": list(prediction_rules),
-            },
-            db_api=db_api,
-        )
-
-    def _print_prediction_counts(
-        prediction_rules: Sequence[str | BlockingRuleCreator],
-        input_table: str | list[str],
-    ) -> None:
-        if not prediction_rules:
-            return
-        try:
-            tables = input_table if isinstance(input_table, list) else [input_table]
-            counts_df = blocking_analysis.cumulative_comparisons_to_be_scored_from_blocking_rules_data(
-                table_or_tables=tables,
-                blocking_rules=prediction_rules,
-                link_type=job.settings.get("link_type", "dedupe_only"),
-                db_api=db_api,
-                unique_id_column_name=job.settings.get("unique_id_column_name", "unique_id"),
-                source_dataset_column_name=job.settings.get("source_dataset_column_name"),
-            )
-            total_comparisons = int(counts_df["row_count"].sum())
-            print(f"Total comparisons to be scored (pre-threshold): {total_comparisons}")
-        except Exception as exc: #pylint: disable=W0718
-            print(f"Skipping blocking count analysis: {exc}")
-
-    def _train_linker(
-        linker: Linker,
-        training_rules: Sequence[str | BlockingRuleCreator],
-        input_table: str | list[str],
-    ) -> None:
-        linker.training.estimate_probability_two_random_records_match(
-            list(job.deterministic_rules), recall=job.deterministic_recall
-        )
-        linker.training.estimate_u_using_random_sampling(1e8)
-
-        if not job.train_first:
-            return
-        prev_params: EmParams | None = None
-        for run_idx in range(job.em_max_runs):
-            prev_block_params: EmParams | None = None
-            current_params: EmParams | None = None
-            for training_rule in training_rules:
-                em_session = linker.training.estimate_parameters_using_expectation_maximisation(
-                    blocking_rule=training_rule,
-                    fix_probability_two_random_records_match=False
-                )
-                try:
-                    lambda_history = em_session._lambda_history_records
-                except AttributeError:
-                    lambda_history = []
-                if lambda_history:
-                    print("EM lambda history (probability_two_random_records_match):")
-                    for record in lambda_history:
-                        print(
-                            f"  iter {record['iteration']}: "
-                            f"{record['probability_two_random_records_match']:.6f}"
-                        )
-                current_settings = linker.misc.save_model_to_json(out_path=None)
-                current_params = _extract_em_params(current_settings)
-                deltas: list[float] = []
-                if prev_block_params is not None:
-                    max_key: ComparisonLevelKey | None = None
-                    max_delta_local = -1.0
-                    for key, now in current_params.items():
-                        if key not in prev_block_params:
-                            continue
-                        prev = prev_block_params[key]
-                        match now.m, now.u, prev.m, prev.u:
-                            case Just(m_now), Just(u_now), Just(m_prev), Just(u_prev):
-                                if u_now != 0 and u_prev != 0:
-                                    delta = abs(
-                                        math.log2(m_now / u_now)
-                                        - math.log2(m_prev / u_prev)
-                                    )
-                                    deltas.append(delta)
-                                    if delta > max_delta_local:
-                                        max_key = key
-                                        max_delta_local = delta
-                    max_delta = max(deltas) if deltas else 1.0
-                    print(
-                        f"EM run {run_idx + 1}/{job.em_max_runs} block drift: "
-                        f"max_delta={max_delta:.6f} (block to block)"
-                    )
-                    if max_key is not None:
-                        print(
-                            f"  max_delta_key={max_key.comparison_name}::"
-                            f"{max_key.level_name}"
-                        )
-                prev_block_params = current_params
-            if current_params is None:
-                break
-            if prev_params is not None:
-                deltas = []
-                max_key = None
-                max_delta_local = -1.0
-                for key, now in current_params.items():
-                    if key not in prev_params:
-                        continue
-                    prev = prev_params[key]
-                    match now.m, now.u, prev.m, prev.u:
-                        case Just(m_now), Just(u_now), Just(m_prev), Just(u_prev):
-                            if u_now != 0 and u_prev != 0:
-                                delta = abs(
-                                    math.log2(m_now / u_now)
-                                    - math.log2(m_prev / u_prev)
-                                )
-                                deltas.append(delta)
-                                if delta > max_delta_local:
-                                    max_key = key
-                                    max_delta_local = delta
-                max_delta = max(deltas) if deltas else 1.0
-                print(
-                    f"EM run {run_idx + 1}/{job.em_max_runs}: "
-                    f"max_delta={max_delta:.6f} "
-                    f"(stop if < {job.em_stop_delta:.6f} after {job.em_min_runs} runs)"
-                )
-                if max_key is not None:
-                    print(
-                        f"  max_delta_key={max_key.comparison_name}::"
-                        f"{max_key.level_name}"
-                    )
-                if run_idx + 1 >= job.em_min_runs and max_delta < job.em_stop_delta:
-                    break
-            prev_params = current_params
+    unique_id_col = cast(str, cfg.settings.get("unique_id_column_name", "unique_id"))
+    base_prediction_rules = cfg.prediction_rules
+    base_training_rules = cfg.training_rules
+    input_table = _input_table_value(cfg.input_table)
+    pairs_out = str(cfg.pairs_out)
+    clusters_out = str(cfg.clusters_out)
+    unique_pairs_table = str(cfg.unique_pairs_table)
+    blocked_pairs_out = str(cfg.blocked_pairs_out)
+    do_not_link_table = str(cfg.do_not_link_table)
+    do_not_link_left_col = str(cfg.do_not_link_left_col)
+    do_not_link_right_col = str(cfg.do_not_link_right_col)
 
     def _predict_to_table(linker: Linker, table_name: str) -> None:
         df_pairs = linker.inference.predict(
-            threshold_match_probability=job.predict_threshold
+            threshold_match_probability=cfg.predict_threshold
         )
         _duckdb_exec(
             f"CREATE OR REPLACE TABLE {table_name} AS "
@@ -1538,38 +2646,58 @@ def _run_splink_predict_pairs_with_conn(
 
     do_not_link_table_value = do_not_link_table if do_not_link_table != "" else None
     input_table_for_prediction = input_table
-    if job.capture_blocked_edges:
-        linker = _build_linker(base_prediction_rules, input_table)
-        _print_prediction_counts(base_prediction_rules, input_table)
-        _train_linker(linker, base_training_rules, input_table)
-        capture_rules: list[str | BlockingRuleCreator] = []
+    if cfg.capture_blocked_edges:
+        linker = _build_linker_for_prediction(
+            settings=cfg.settings,
+            db_api=db_api,
+            prediction_rules=base_prediction_rules,
+            input_table=input_table,
+            extra_columns_to_retain=Array.empty(),
+        )
+        _print_prediction_counts_for_rules_with(
+            settings=cfg.settings,
+            db_api=db_api,
+            prediction_rules=base_prediction_rules,
+            input_table=input_table,
+        )._step(current)
+        _train_linker_for_prediction_with(
+            deterministic_rules=cfg.deterministic_rules,
+            deterministic_recall=cfg.deterministic_recall,
+            train_first=cfg.train_first,
+            em_max_runs=cfg.em_max_runs,
+            em_min_runs=cfg.em_min_runs,
+            em_stop_delta=cfg.em_stop_delta,
+            linker=linker,
+            training_rules=base_training_rules,
+            input_table=input_table,
+        )._step(current)
+        capture_rules_list: list[BlockingRuleLike] = []
         seen_rules: set[str] = set()
-        for rule in base_training_rules + base_prediction_rules:
+        for rule in _concat_blocking_rule_likes(base_training_rules, base_prediction_rules):
             if isinstance(rule, BlockingRuleCreator):
-                capture_rules.append(rule)
+                capture_rules_list.append(rule)
                 continue
             if rule in seen_rules:
                 continue
-            capture_rules.append(rule)
+            capture_rules_list.append(rule)
             seen_rules.add(rule)
-        capture_pairs_table = f"{pairs_out}_capture"
+        capture_rules = Array.make(tuple(capture_rules_list))
+        capture_pairs_table = PairsCaptureTableName(f"{pairs_out}_capture")
         _with_temp_blocking_rules_on_linker(
             linker,
             capture_rules,
-            lambda: _predict_to_table(linker, capture_pairs_table),
-        )
-        _collect_blocked_edges(
-            pairs_table=capture_pairs_table,
-            do_not_link_table=do_not_link_table_value or "do_not_link",
-            id_left_col=do_not_link_left_col,
-            id_right_col=do_not_link_right_col,
-            unique_id_column_name=unique_id_col,
-            query_fn=_duckdb_query,
-            exec_fn=_duckdb_exec,
-        )
+            lambda: _predict_to_table(linker, str(capture_pairs_table)),
+        )._step(current)
+        _collect_blocked_edges_step(
+            pairs_table=PairsTableName(str(capture_pairs_table)),
+            do_not_link_table=DoNotLinkTableName(do_not_link_table_value or "do_not_link"),
+            bl_id_left_col=BlockedIdLeftColumnName(do_not_link_left_col),
+            bl_id_right_col=BlockedIdRightColumnName(do_not_link_right_col),
+            unique_id_column_name=UniqueIdColumnName(unique_id_col),
+        )._step(current)
         try:
             linker.table_management.invalidate_cache()
-            _drop_all_splink_tables(_duckdb_exec, _duckdb_query)
+            _drop_all_splink_tables_step()._step(current)
         except Exception: #pylint: disable=W0718
             pass
 
@@ -1577,91 +2705,109 @@ def _run_splink_predict_pairs_with_conn(
         training_rules = base_training_rules
         if do_not_link_table_value and isinstance(input_table, str):
             input_table_for_prediction = f"{input_table}_exc"
-            _create_exclusion_list_table(
-                input_table=input_table,
-                output_table=input_table_for_prediction,
-                do_not_link_table=do_not_link_table_value,
-                unique_id_column_name=unique_id_col,
-                id_left_col=do_not_link_left_col,
-                id_right_col=do_not_link_right_col,
-                exec_fn=_duckdb_exec,
-            )
+            _create_exclusion_list_table_step(
+                input_table=PredictionInputTableName(input_table),
+                output_table=ExclusionInputTableName(input_table_for_prediction),
+                do_not_link_table=DoNotLinkTableName(do_not_link_table_value),
+                unique_id_column_name=UniqueIdColumnName(unique_id_col),
+                bl_id_left_col=BlockedIdLeftColumnName(do_not_link_left_col),
+                bl_id_right_col=BlockedIdRightColumnName(do_not_link_right_col),
+            )._step(current)
             exclusion_clause = (
                 f"NOT (list_contains(l.exclusion_ids, r.{unique_id_col}) "
                 f"OR list_contains(r.exclusion_ids, l.{unique_id_col}))"
             )
             prediction_rules = _append_clause_to_rules(prediction_rules, exclusion_clause)
             training_rules = _append_clause_to_rules(training_rules, exclusion_clause)
-        extra_cols = ["exclusion_ids"] if do_not_link_table_value else None
-        linker = _build_linker(prediction_rules, input_table_for_prediction, extra_cols)
-        _print_prediction_counts(prediction_rules, input_table_for_prediction)
-        _train_linker(linker, training_rules, input_table_for_prediction)
+        extra_cols = (
+            Array.pure(RetainColumnName("exclusion_ids"))
+            if do_not_link_table_value
+            else Array.empty()
+        )
+        linker = _build_linker_for_prediction(
+            settings=cfg.settings,
+            db_api=db_api,
+            prediction_rules=prediction_rules,
+            input_table=input_table_for_prediction,
+            extra_columns_to_retain=extra_cols,
+        )
+        _print_prediction_counts_for_rules_with(
+            settings=cfg.settings,
+            db_api=db_api,
+            prediction_rules=prediction_rules,
+            input_table=input_table_for_prediction,
+        )._step(current)
+        _train_linker_for_prediction_with(
+            deterministic_rules=cfg.deterministic_rules,
+            deterministic_recall=cfg.deterministic_recall,
+            train_first=cfg.train_first,
+            em_max_runs=cfg.em_max_runs,
+            em_min_runs=cfg.em_min_runs,
+            em_stop_delta=cfg.em_stop_delta,
+            linker=linker,
+            training_rules=training_rules,
+            input_table=input_table_for_prediction,
+        )._step(current)
     else:
         prediction_rules = base_prediction_rules
         training_rules = base_training_rules
-        linker = _build_linker(prediction_rules, input_table)
-        _print_prediction_counts(prediction_rules, input_table)
-        _train_linker(linker, training_rules, input_table)
-    df_pairs = linker.inference.predict(
-        threshold_match_probability=job.predict_threshold
-    )
-
-    _duckdb_exec(
-        f"CREATE OR REPLACE TABLE {pairs_out} AS "
-        f"SELECT * FROM {df_pairs.physical_name}"
-    )
-    if do_not_link_table_value:
-        _filter_pairs_table_do_not_link(
-            pairs_table=pairs_out,
-            do_not_link_table=do_not_link_table_value,
-            id_left_col=do_not_link_left_col,
-            id_right_col=do_not_link_right_col,
-            unique_id_column_name=unique_id_col,
-            query_fn=_duckdb_query,
-            exec_fn=_duckdb_exec,
+        linker = _build_linker_for_prediction(
+            settings=cfg.settings,
+            db_api=db_api,
+            prediction_rules=prediction_rules,
+            input_table=input_table,
+            extra_columns_to_retain=Array.empty(),
         )
-    if job.settings.get("link_type", SplinkLinkType.DEDUPE_ONLY.value) \
-        == SplinkLinkType.LINK_ONLY.value:
-        _duckdb_exec(f"""
-            CREATE OR REPLACE TABLE {pairs_out}_top1 AS
-            WITH ranked AS (
-            SELECT
-                *,
-                ROW_NUMBER() OVER (
-                PARTITION BY unique_id_r
-                ORDER BY
-                    match_probability DESC,
-                    -- stable tie-breakers so results are deterministic:
-                    COALESCE(match_weight, 0) DESC,
-                    CAST(unique_id_l AS VARCHAR)
-                ) AS rn
-            FROM {pairs_out}
-            )
-            SELECT * EXCLUDE (rn)
-            FROM ranked
-            WHERE rn = 1;
-            """)
+        _print_prediction_counts_for_rules_with(
+            settings=cfg.settings,
+            db_api=db_api,
+            prediction_rules=prediction_rules,
+            input_table=input_table,
+        )._step(current)
+        _train_linker_for_prediction_with(
+            deterministic_rules=cfg.deterministic_rules,
+            deterministic_recall=cfg.deterministic_recall,
+            train_first=cfg.train_first,
+            em_max_runs=cfg.em_max_runs,
+            em_min_runs=cfg.em_min_runs,
+            em_stop_delta=cfg.em_stop_delta,
+            linker=linker,
+            training_rules=training_rules,
+            input_table=input_table,
+        )._step(current)
+    df_pairs = linker.inference.predict(
+        threshold_match_probability=cfg.predict_threshold
+    )
 
-    prediction_table: TableName | TableNames
-    if isinstance(input_table_for_prediction, str):
-        prediction_table = TableName(input_table_for_prediction)
-    else:
-        prediction_table = TableNames(tuple(input_table_for_prediction))
+    _persist_pairs_tables_step( #type: ignore #pylint: disable=E0602
+        pairs_out=cfg.pairs_out,
+        pairs_source=PairsSourceTableName(df_pairs.physical_name),
+        do_not_link_table=(
+            cfg.do_not_link_table
+            if cfg.do_not_link_table is not None
+            else DoNotLinkTableName("")
+        ),
+        id_left_col=cfg.do_not_link_left_col,
+        id_right_col=cfg.do_not_link_right_col,
+        unique_id_column_name=UniqueIdColumnName(unique_id_col),
+        link_type=SplinkLinkType.from_settings(cfg.settings),
+    )._step(current)
+
     return SplinkPredictResult(
         linker=linker,
-        input_table_for_prediction=prediction_table,
+        input_table_for_prediction=PredictionInputTableNames(input_table_for_prediction),
         unique_id_col=UniqueIdColumnName(unique_id_col),
-        pairs_out=job.pairs_out,
-        clusters_out=job.clusters_out,
-        do_not_link_table=job.do_not_link_table if do_not_link_table_value else None,
-        do_not_link_left_col=job.do_not_link_left_col,
-        do_not_link_right_col=job.do_not_link_right_col,
-        blocked_pairs_out=job.blocked_pairs_out,
-        unique_pairs_table=job.unique_pairs_table,
+        pairs_out=cfg.pairs_out,
+        clusters_out=cfg.clusters_out,
+        do_not_link_table=cfg.do_not_link_table if do_not_link_table_value else None,
+        do_not_link_left_col=cfg.do_not_link_left_col,
+        do_not_link_right_col=cfg.do_not_link_right_col,
+        blocked_pairs_out=cfg.blocked_pairs_out,
+        unique_pairs_table=cfg.unique_pairs_table,
     )
 
 def _run_splink_unique_matching_and_cluster_with_conn(
-    job: SplinkDedupeJob,
+    cfg: ClusterStepConfig,
     predict: SplinkPredictResult,
     con: duckdb.DuckDBPyConnection,
     current: Run[Any],
@@ -1677,25 +2823,21 @@ def _run_splink_unique_matching_and_cluster_with_conn(
     def _duckdb_register(name: str, df: DataFrame) -> None:
         with_duckdb(sql_register(name, df))._step(current)
 
-    input_table_for_prediction = (
-        _table_name_value(predict.input_table_for_prediction)
-        if isinstance(predict.input_table_for_prediction, TableName)
-        else _table_names_value(predict.input_table_for_prediction)
-    )
+    input_table_for_prediction = _input_table_value(predict.input_table_for_prediction)
     unique_id_col = str(predict.unique_id_col)
-    pairs_out = _table_name_value(predict.pairs_out)
-    clusters_out = _table_name_value(predict.clusters_out)
+    pairs_out = str(predict.pairs_out)
+    clusters_out = str(predict.clusters_out)
     do_not_link_table_value = (
-        _table_name_value(predict.do_not_link_table)
+        str(predict.do_not_link_table)
         if predict.do_not_link_table is not None
         else None
     )
     do_not_link_left_col = str(predict.do_not_link_left_col)
     do_not_link_right_col = str(predict.do_not_link_right_col)
-    blocked_pairs_out = _table_name_value(predict.blocked_pairs_out)
-    unique_pairs_table = _table_name_value(predict.unique_pairs_table)
+    blocked_pairs_out = str(predict.blocked_pairs_out)
+    unique_pairs_table = str(predict.unique_pairs_table)
 
-    if job.unique_matching and unique_pairs_table != "":
+    if cfg.unique_matching and unique_pairs_table != "":
         pairs = _duckdb_query(
             f"""
             SELECT unique_id_l, unique_id_r, match_probability 
@@ -1737,7 +2879,7 @@ def _run_splink_unique_matching_and_cluster_with_conn(
                 )
                 """)
 
-    if job.settings.get("link_type", SplinkLinkType.DEDUPE_ONLY.value) != SplinkLinkType.LINK_ONLY.value:
+    if cfg.settings.get("link_type", SplinkLinkType.DEDUPE_ONLY.value) != SplinkLinkType.LINK_ONLY.value:
         if not isinstance(input_table_for_prediction, str):
             raise RuntimeError(
                 "Constrained clustering currently requires a single input table name "
@@ -1774,7 +2916,7 @@ def _run_splink_unique_matching_and_cluster_with_conn(
               CAST({right_id_col} AS VARCHAR) AS uid_r,
               match_probability
             FROM {pairs_out}
-            WHERE match_probability >= {job.cluster_threshold}
+            WHERE match_probability >= {cfg.cluster_threshold}
             ORDER BY
               match_probability DESC,
               CAST({left_id_col} AS VARCHAR),
@@ -1786,7 +2928,7 @@ def _run_splink_unique_matching_and_cluster_with_conn(
             for row in edges_rows
         ]
         capture_blocked = (
-            job.capture_blocked_edges
+            cfg.capture_blocked_edges
             and bool(blocked_pairs_out)
             and blocked_pairs_out != do_not_link_table_value
         )
@@ -1833,8 +2975,8 @@ def _run_splink_unique_matching_and_cluster_with_conn(
             """
         )
     return (
-        unique_pairs_table if job.unique_matching and unique_pairs_table != "" else pairs_out,
-        clusters_out if job.settings.get("link_type", SplinkLinkType.DEDUPE_ONLY.value) != SplinkLinkType.LINK_ONLY.value else ""
+        unique_pairs_table if cfg.unique_matching and unique_pairs_table != "" else pairs_out,
+        clusters_out if cfg.settings.get("link_type", SplinkLinkType.DEDUPE_ONLY.value) != SplinkLinkType.LINK_ONLY.value else ""
     )
 
 def _run_splink_dedupe_with_conn(
@@ -1855,9 +2997,11 @@ def _run_splink_dedupe_with_conn(
     _configure_splink_logger("splink")
     _configure_splink_logger("splink.internals")
 
-    predict = _run_splink_predict_pairs_with_conn(job, con, current)
+    predict_cfg = _predict_config_from_job(job)
+    predict = _run_splink_predict_pairs_with_conn(predict_cfg, con, current)
+    cluster_cfg = _cluster_config_from_job(job)
     pairs_table, clusters_table = _run_splink_unique_matching_and_cluster_with_conn(
-        job,
+        cluster_cfg,
         predict,
         con,
         current,
@@ -1879,6 +3023,7 @@ def _init_splink_dedupe_context(job: SplinkDedupeJob) -> Run[Unit]:
         )
     )
     link_type = SplinkLinkType.from_settings(job.settings)
+    capture_blocked_edges = link_type == SplinkLinkType.DEDUPE_ONLY
     def _build_tables() -> SplinkTableNames:
         tables = _add_all_tables(SplinkTableNames.empty(), job.pairs_out, job.input_table)
         tables = _add_dedupe_tables(
@@ -1887,7 +3032,6 @@ def _init_splink_dedupe_context(job: SplinkDedupeJob) -> Run[Unit]:
             job.clusters_out,
             job.do_not_link_table,
             job.blocked_pairs_out,
-            job.capture_blocked_edges,
             job.pairs_out,
         )
         tables = _add_unique_matching_tables(
@@ -1908,17 +3052,19 @@ def _init_splink_dedupe_context(job: SplinkDedupeJob) -> Run[Unit]:
             settings=job.settings,
             predict_threshold=job.predict_threshold,
             cluster_threshold=job.cluster_threshold,
-            deterministic_rules=Array.make(tuple(job.deterministic_rules)),
+            deterministic_rules=job.deterministic_rules,
             deterministic_recall=job.deterministic_recall,
             train_first=job.train_first,
-        visualize=job.visualize,
-        unique_matching=job.unique_matching,
+            visualize=job.visualize,
+            unique_matching=job.unique_matching,
             em_max_runs=job.em_max_runs,
             em_min_runs=job.em_min_runs,
             em_stop_delta=job.em_stop_delta,
-            capture_blocked_edges=job.capture_blocked_edges,
-        )
-        return put_splink_context(ctx) ^ pure(unit)
+            capture_blocked_edges=capture_blocked_edges,
+            do_not_link_left_col=job.do_not_link_left_col,
+            do_not_link_right_col=job.do_not_link_right_col,
+    )
+        return put_splink_context(ctx)
 
     return _validate_splink_dedupe_input_tables(
         input_tables=job.input_table,
@@ -1926,7 +3072,6 @@ def _init_splink_dedupe_context(job: SplinkDedupeJob) -> Run[Unit]:
         clusters_out=job.clusters_out,
         unique_matching=job.unique_matching,
         unique_pairs_table=job.unique_pairs_table,
-        capture_blocked_edges=job.capture_blocked_edges,
         blocked_pairs_out=job.blocked_pairs_out,
         do_not_link_table=job.do_not_link_table,
     ) ^ _finish(_build_tables())
@@ -1943,12 +3088,12 @@ def _configure_splink_logger_step() -> Run[Unit]:
             logger.addHandler(handler)
         logger.propagate = False
 
-    def _run(_: Any) -> Run[Unit]:
+    def _configure_all(_: Unit) -> Unit:
         _configure("splink")
         _configure("splink.internals")
-        return pure(unit)
+        return unit
 
-    return pure(unit) >> _run
+    return _configure_all & pure(unit)
 
 
 def _load_splink_duckdb_step() -> Run[Unit]:
@@ -1958,95 +3103,120 @@ def _load_splink_duckdb_step() -> Run[Unit]:
             return throw(ErrorPayload("Splink requires a DuckDB connection."))
 
         def _update(ctx: SplinkContext) -> SplinkContext:
-            return replace(ctx, phase=SplinkPhase.PREPARE)
+            return replace(
+                ctx,
+                phase=SplinkPhase.PREPARE,
+                db_api=Just(DuckDBAPI(connection=cast(duckdb.DuckDBPyConnection, con))),
+            )
 
         return _update_splink_context(_update)
 
     return ask() >> _with_env
 
 
-def _splink_dedupe_predict_pairs_step(
-    job: SplinkDedupeJob,
-) -> Run[SplinkPredictResult]:
-    def _run(ctx: SplinkContext) -> Run[SplinkPredictResult]:
-        def _with_env(env: Environment) -> Run[SplinkPredictResult]:
-            con = env["connections"].get(DbBackend.DUCKDB)
-            if con is None:
-                return throw(ErrorPayload("Splink requires a DuckDB connection."))
+def _with_duckdb_conn(f: Callable[[duckdb.DuckDBPyConnection], Run[A]]) -> Run[A]:
+    def _with_env(env: Environment) -> Run[A]:
+        con = env["connections"].get(DbBackend.DUCKDB)
+        if con is None:
+            return throw(ErrorPayload("Splink requires a DuckDB connection."))
+        return f(cast(duckdb.DuckDBPyConnection, con))
 
-            def _step(self_run: Run[Any]) -> SplinkPredictResult:
-                result = _run_splink_predict_pairs_with_conn(job, con, self_run)
-                updated = replace(
-                    ctx,
-                    linker=result.linker,
-                    phase=SplinkPhase.PREDICT,
-                )
-                put_splink_context(updated)._step(self_run)
-                return result
+    return ask() >> _with_env
 
-            return Run(_step, lambda i, c: c._perform(i, c))
 
-        return ask() >> _with_env
+def _splink_predict_pairs_from_ctx(_: SplinkContext) -> Run[SplinkPredictResult]:
+    def _with_ctx(ctx: SplinkContext) -> Run[SplinkPredictResult]:
+        if ctx.capture_blocked_edges:
+            return (
+                _with_splink_context(_set_diagnostic_plan)
+                ^ _with_splink_context_api_plan(_build_linker_from_ctx)
+                ^ _train_linker_for_prediction()
+                ^ _with_splink_context(_capture_blocked_edges)
+                ^ _with_splink_context(_diagnostic_cluster_blocked_edges)
+                ^ _with_splink_context(_prepare_exclusion_list)
+                ^ _with_splink_context(_set_final_plan)
+                ^ _with_splink_context_api_plan(_build_linker_from_ctx)
+                ^ _train_linker_for_prediction()
+                ^ _with_splink_context(_predict_pairs_step)
+                ^ _with_splink_context_linker_plan(_predict_result_from_ctx)
+            )
+        return (
+            _with_splink_context(_set_final_plan)
+            ^ _with_splink_context_api_plan(_build_linker_from_ctx)
+            ^ _train_linker_for_prediction()
+            ^ _with_splink_context(_predict_pairs_step)
+            ^ _with_splink_context_linker_plan(_predict_result_from_ctx)
+        )
 
-    return _require_splink_context() >> _run
+    return (
+        _with_splink_context(_validate_predict_tables)
+        ^ _with_splink_context(_with_ctx)
+    )
 
-def _splink_dedupe_unique_matching_and_cluster_step(
-    job: SplinkDedupeJob,
-    predict: SplinkPredictResult,
+
+def _splink_dedupe_predict_pairs() -> Run[Unit]:
+    def _store_result(result: SplinkPredictResult) -> Run[Unit]:
+        return _context_replace(
+            linker=Just(result.linker),
+            phase=SplinkPhase.PREDICT,
+        )
+    return (
+        _with_splink_context(_splink_predict_pairs_from_ctx)
+        >> _store_result
+    )
+
+
+def _splink_dedupe_unique_matching_and_cluster() -> Run[Unit]:
+    return _with_splink_context_api_plan(_run_unique_matching_and_cluster_from_ctx)
+
+
+def _run_unique_matching_and_cluster_from_ctx(
+    ctx: SplinkContext,
+    db_api: DuckDBAPI,
+    _: PredictPlan,
 ) -> Run[Unit]:
-    def _run(ctx: SplinkContext) -> Run[Unit]:
-        def _with_env(env: Environment) -> Run[Unit]:
-            con = env["connections"].get(DbBackend.DUCKDB)
-            if con is None:
-                return throw(ErrorPayload("Splink requires a DuckDB connection."))
+    def _with_predict(predict: SplinkPredictResult) -> Run[Unit]:
+        cfg = _cluster_config_from_ctx(ctx)
+        def _step(self_run: Run[Any]) -> Unit:
+            con = cast(duckdb.DuckDBPyConnection, db_api._con)  # pylint: disable=W0212
+            pairs_table, clusters_table = _run_splink_unique_matching_and_cluster_with_conn(
+                cfg,
+                predict,
+                con,
+                self_run,
+            )
+            tables = ctx.tables.set(ResultPairsTableName(pairs_table))
+            if clusters_table:
+                tables = tables.set(ResultClustersTableName(clusters_table))
+            return _context_replace(
+                tables=tables,
+                phase=SplinkPhase.PERSIST,
+            )._step(self_run)
 
-            def _step(self_run: Run[Any]) -> Unit:
-                pairs_table, clusters_table = _run_splink_unique_matching_and_cluster_with_conn(
-                    job,
-                    predict,
-                    con,
-                    self_run,
-                )
-                tables = ctx.tables.set(ResultPairsTableName(pairs_table))
-                if clusters_table:
-                    tables = tables.set(ResultClustersTableName(clusters_table))
-                updated = replace(
-                    ctx,
-                    tables=tables,
-                    phase=SplinkPhase.PERSIST,
-                )
-                put_splink_context(updated)._step(self_run)
-                return unit
+        return Run(_step, lambda i, c: c._perform(i, c))
 
-            return Run(_step, lambda i, c: c._perform(i, c))
-
-        return ask() >> _with_env
-
-    return _require_splink_context() >> _run
+    return (
+        _with_splink_context_linker_plan(_predict_result_from_ctx)
+        >> _with_predict
+    )
 
 
-def _splink_dedupe_finalize() -> Run[tuple[Linker, str, str]]:
-    def _finish(ctx: SplinkContext) -> Run[tuple[Linker, str, str]]:
-        linker = ctx.linker
-        if linker is None:
-            return throw(ErrorPayload("Splink linker was not created."))
-        return _tables_get_required(ctx.tables, ResultPairsTableName) >> (
-            lambda pairs_table:
-            _tables_get_optional(ctx.tables, ResultClustersTableName)
-            >> (lambda clusters_table: pure((pairs_table, clusters_table)))
-        ) >> (
-            lambda tables:
-            put_splink_context(replace(ctx, phase=SplinkPhase.DONE)) >> (
+def _splink_dedupe_finalize(ctx: SplinkContext) -> Run[tuple[Linker, str, str]]:
+    def _with_pairs(pairs_table: ResultPairsTableName) -> Run[tuple[Linker, str, str]]:
+        clusters_table = _tables_get_optional(ctx.tables, ResultClustersTableName)
+        return _maybe_get_required(ctx.linker, label="Splink linker") >> (lambda linker:
+            _context_replace(phase=SplinkPhase.DONE) >> (
                 lambda _: pure(
                     (
                         linker,
-                        str(tables[0]),
-                        str(from_maybe(ResultClustersTableName(""), tables[1])),
+                        str(pairs_table),
+                        str(clusters_table),
                     )
                 )
             )
         )
-    return _require_splink_context() >> _finish
+
+    return _tables_get_required(ctx.tables, ResultPairsTableName) >> _with_pairs
 
 
 def run_splink_dedupe_monadic(job: SplinkDedupeJob) -> Run[tuple[Linker, str, str]]:
@@ -2055,11 +3225,11 @@ def run_splink_dedupe_monadic(job: SplinkDedupeJob) -> Run[tuple[Linker, str, st
     """
     chain = (
         _init_splink_dedupe_context(job)
-        >> (lambda _: _configure_splink_logger_step())
-        >> (lambda _: _load_splink_duckdb_step())
-        >> (lambda _: _splink_dedupe_predict_pairs_step(job))
-        >> (lambda predict: _splink_dedupe_unique_matching_and_cluster_step(job, predict))
-        >> (lambda _: _splink_dedupe_finalize())
+        ^ _configure_splink_logger_step()
+        ^ _load_splink_duckdb_step()
+        ^ _splink_dedupe_predict_pairs()
+        ^ _splink_dedupe_unique_matching_and_cluster()
+        ^ _with_splink_context(_splink_dedupe_finalize)
     )
     return with_duckdb(chain)
 
@@ -2074,7 +3244,7 @@ def _splink_model_paths(splink_key: Any) -> tuple[Path, Path]:
 def _save_splink_model(
     splink_key: Any,
     linker: Linker,
-    input_table: PredictionInputTableName | PredictionInputTableNames,
+    input_table: PredictionInputTableNames,
 ) -> None:
     if splink_key is None:
         return
@@ -2168,3 +3338,5 @@ def run_splink(prog: Run[A]) -> Run[A]:
         return inner._step(inner)
 
     return Run(step, lambda i, c: c._perform(i, c))
+class ExclusionInputTableName(TableName):
+    """Input table name used after exclusion enrichment."""

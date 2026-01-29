@@ -90,7 +90,6 @@ def _dedupe_named_victims(_: Unit) -> Run[Unit]:
         em_max_runs=1,
         visualize=False,
         splink_key=SplinkType.DEDUP,
-        capture_blocked_edges=True,
         do_not_link_table=DoNotLinkTableName("victim_cluster_exclusion"),
         blocked_pairs_out=BlockedPairsTableName("victim_cluster_blocked_edges"),
     ) >> (

@@ -15,6 +15,7 @@ from openpyxl.formatting.rule import FormulaRule
 from openpyxl.cell import Cell
 
 from .array import Array
+from .monad import Unit
 from .environment import DbBackend, Environment
 from .run import Run, _unhandled, ask, local, throw, ErrorPayload
 from .string import String
@@ -141,7 +142,7 @@ def sql_query(sql: SQL, params: SQLParams = SQLParams(())) -> Run[Array]:
     return Run(lambda self: self._perform(SqlQuery(sql, params), self), _unhandled)
 
 
-def sql_exec(sql: SQL, params: SQLParams = SQLParams(())) -> Run[None]:
+def sql_exec(sql: SQL, params: SQLParams = SQLParams(())) -> Run[Unit]:
     """
     Smart constructor for SQL execution with intent.
     """
@@ -370,12 +371,12 @@ def _get_backend_and_conn_run() -> Run[tuple[DbBackend, Any]]:
 
 def _duckdb_query_dicts(
     con: duckdb.DuckDBPyConnection, sql_s: str, params: SQLParams
-) -> list[dict]:
+) -> Array[dict]:
     try:
         cur = con.execute(sql_s, params.to_params())
         cols = [d[0] for d in (cur.description or [])]
         rows = cur.fetchall()
-        return [dict(zip(cols, tup)) for tup in rows]
+        return Array(tuple(dict(zip(cols, tup)) for tup in rows))
     except Exception as ex:  # noqa: BLE001
         raise SQLExecutionError(sql_s, params.to_params(), ex) from ex
 
