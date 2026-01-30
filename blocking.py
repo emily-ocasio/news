@@ -248,7 +248,6 @@ ORPHAN_DETERMINISTIC_BLOCKS = [
 
 ORPHAN_TRAINING_BLOCKS = [
     TrainBlockRule.YEAR_MONTH,
-    TrainBlockRule.SAME_NAMES,
     TrainBlockRule.AGE_SEX,
     TrainBlockRule.OFFENDER_AGE_SEX
 ]
