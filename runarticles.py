@@ -59,7 +59,6 @@ def main() -> None:
         "fasttext_model": SentenceTransformerModel(),
         "mar_key": MAR_API_KEY,
         "extras": {
-            EnvKey("splink_use_monadic"): True,
         }
     }
     try:
