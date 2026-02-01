@@ -17,6 +17,14 @@ from .environment import (
     DbBackend,
 )
 from .functor import Functor, map  # pylint: disable=redefined-builtin
+from .geocode import (
+    GeocodeResult,
+    AddressResultType,
+    mar_result_type,
+    mar_result_score,
+    address_result_type_for_score,
+    mar_result_type_with_input,
+)
 from .hashmap import HashMap
 from .hashset import HashSet
 from .lens import Lens, view, set_, over, modify, lens

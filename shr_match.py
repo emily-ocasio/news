@@ -11,7 +11,6 @@ from pymonad import (
     pure,
     PredictionInputTableNames,
     PairsTableName,
-    ClustersTableName,
     UniquePairsTableName,
     splink_dedupe_job,
     sql_exec,

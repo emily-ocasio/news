@@ -3,10 +3,10 @@ Defines functions with side effects and maps them to intents
 """
 
 from dataclasses import dataclass
-from typing import Callable, TypedDict
-import json
+from typing import Callable
 import time
-import requests
+
+from .geocode import GeocodeResult, MarGeocode, mar_geocode_handler
 
 from .string import String
 
@@ -15,19 +15,6 @@ class InputPrompt(String):
     """
     Represents a prompt for user input.
     """
-
-
-class GeocodeResult(TypedDict, total=False):
-    """
-    Result of geocode query
-    """
-
-    ok: bool
-    normalized_input: str
-    matched_address: str
-    x_lon: float  # MAR returns X/Y; X = lon, Y = lat
-    y_lat: float
-    raw_json: dict
 
 
 @dataclass(frozen=True)
@@ -45,15 +32,6 @@ class GetLine:
     prompt: InputPrompt
 
 
-
-
-@dataclass(frozen=True)
-class MarGeocode:
-    """Effect: Geocode a DC address via MAR 2 API (findAddress2)."""
-
-    address: str
-    mar_key: str
-    # You can add optional params here if needed (e.g., preferScoreMin, etc.)
 
 
 @dataclass(frozen=True)
@@ -98,136 +76,7 @@ def _getline(x: GetLine) -> String:
 
 @intentdef(MarGeocode)
 def _mar_geocode(x: MarGeocode) -> GeocodeResult:
-    # MAR 2: https://geocoder.doc.dc.gov/api (findAddress2 endpoint)
-    # Simple GET with 'address' and 'f=json'
-    url = f"https://datagate.dc.gov/mar/open/api/v2.2/locations/{x.address}"
-    params = {"apikey": x.mar_key}
-    try:
-        resp = requests.get(url, params=params, timeout=10)
-        resp.raise_for_status()
-        j = resp.json()
-    except requests.exceptions.Timeout as e:
-        return GeocodeResult(
-            ok=False,
-            normalized_input=x.address,
-            matched_address="",
-            x_lon=0,
-            y_lat=0,
-            raw_json={"message": f"timeout error: {str(e)}"},
-        )
-    except requests.exceptions.SSLError as e:
-        return GeocodeResult(
-            ok=False,
-            normalized_input=x.address,
-            matched_address="",
-            x_lon=0,
-            y_lat=0,
-            raw_json={"message": f"ssl error: {str(e)}"},
-        )
-    except requests.exceptions.HTTPError as e:
-        code = getattr(e.response, "status_code", None)
-        return GeocodeResult(
-            ok=False,
-            normalized_input=x.address,
-            matched_address="",
-            x_lon=0,
-            y_lat=0,
-            raw_json={"message": f"http_error {code}, {str(e)}"},
-        )
-    except requests.exceptions.RequestException as e:
-        return GeocodeResult(
-            ok=False,
-            normalized_input=x.address,
-            matched_address="",
-            x_lon=0,
-            y_lat=0,
-            raw_json={"message": f"network_error: {str(e)}"},
-        )
-    except (json.JSONDecodeError, ValueError) as e:
-        return GeocodeResult(
-            ok=False,
-            normalized_input=x.address,
-            matched_address="",
-            x_lon=0,
-            y_lat=0,
-            raw_json={"message": f"invalid_json: {str(e)}"},
-        )
-    try:
-        success = j.get("Success", False)
-        if not success:
-            return GeocodeResult(
-                ok=False,
-                normalized_input=x.address,
-                matched_address="",
-                x_lon=0,
-                y_lat=0,
-                raw_json={"message": j.get("message", "Success= False")},
-            )
-        result = j.get("Result", {})
-        # This is what happens when MAR cannot recognize the address
-        if not result:
-            return GeocodeResult(
-                ok=False,
-                normalized_input=x.address,
-                matched_address="",
-                x_lon=0,
-                y_lat=0,
-                raw_json={"message": j.get("message", "No Result present")},
-            )
-        addresses = result.get("addresses", [])
-        if not addresses:
-            intersections = result.get("intersections", [])
-            if not intersections:
-                blocks = result.get("blocks", [])
-                if not blocks:
-                    return GeocodeResult(
-                        ok=False,
-                        normalized_input=x.address,
-                        matched_address="",
-                        x_lon=0,
-                        y_lat=0,
-                        raw_json={"message": "No addresses or intersections found"},
-                    )
-                # Take first block candidate
-                b0 = blocks[0].get("block", {}).get("properties", {})
-                return GeocodeResult(
-                    ok=True,
-                    normalized_input=x.address,
-                    matched_address=b0.get("FullBlock", ""),
-                    x_lon=float(b0.get("Longitude", 0)),
-                    y_lat=float(b0.get("Latitude", 0)),
-                    raw_json=j,
-                )
-            # Take first intersection candidate
-            c0 = intersections[0].get("intersection", {}).get("properties", {})
-            return GeocodeResult(
-                ok=True,
-                normalized_input=x.address,
-                matched_address=c0.get("FullIntersection", ""),
-                x_lon=float(c0.get("Longitude", 0)),
-                y_lat=float(c0.get("Latitude", 0)),
-                raw_json=j,
-            )
-        # Take top candidate
-        c0 = addresses[0].get("address", {}).get("properties", {})
-
-        return GeocodeResult(
-            ok=True,
-            normalized_input=x.address,
-            matched_address=c0.get("FullAddress", ""),
-            x_lon=float(c0.get("Longitude", 0)),
-            y_lat=float(c0.get("Latitude", 0)),
-            raw_json=j,
-        )
-    except (TypeError, ValueError) as e:
-        return GeocodeResult(
-            ok=False,
-            normalized_input=x.address,
-            matched_address="",
-            x_lon=0,
-            y_lat=0,
-            raw_json={"message": f"parse_error: {str(e)}"},
-        )
+    return mar_geocode_handler(x)
 
 
 @intentdef(Sleep)

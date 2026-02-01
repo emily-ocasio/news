@@ -4,8 +4,6 @@ Classes and helper functions for defining blocking rules in Splink
 
 from enum import StrEnum
 
-from pymonad import Array, String
-from splink.internals.blocking_rule_creator import BlockingRuleCreator
 
 class BlockComp(StrEnum):
     """

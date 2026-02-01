@@ -2174,7 +2174,40 @@ def _run_splink_visualize(linker: Linker, job: SplinkVisualizeJob) -> None:
         chart.show()  # type: ignore
         return
     if job.chart_type == SplinkChartType.PARAMETER_ESTIMATE_COMPARISONS:
+        records = linker._settings_obj._parameter_estimates_as_records
+        not_observed_text = "level not observed in training dataset"
+        null_log_odds = [
+            r
+            for r in records
+            if r.get("estimated_probability_as_log_odds") is None
+        ]
+        if null_log_odds:
+            print(
+                "Parameter estimate comparisons: levels with no plotted points "
+                "(null log-odds)."
+            )
+            print(f"Total records: {len(records)}; null log-odds: {len(null_log_odds)}")
+            print("Examples (comparison, level, m/u, estimate):")
+            for r in null_log_odds[:12]:
+                estimate = r.get("estimated_probability")
+                if estimate == not_observed_text:
+                    estimate = not_observed_text
+                print(
+                    f"  - {r.get('comparison_name')} | "
+                    f"{r.get('comparison_level_label')} | "
+                    f"{r.get('m_or_u')} | {estimate}"
+                )
         chart = linker.visualisations.parameter_estimate_comparisons_chart()
+        chart = chart.encode( #type: ignore
+                color=alt.Color(
+                "estimate_description:N",
+                legend=alt.Legend(
+                    labelLimit=800,
+                    titleLimit=800,
+                    columns=1   # prevents horizontal squeezing
+                )
+            )
+        )
         chart.show()  # type: ignore
         return
     if job.chart_type == SplinkChartType.UNLINKABLES:

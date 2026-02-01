@@ -348,11 +348,15 @@ def render_as_failure(err: ErrorPayload) -> FailureDetails:
         s=ArticleErrInfo(f"Exception: {err}")
     ),))
 
-def after_processing_either(articles: Articles,
-                            result: Either[
-                                StopProcessing[Article, Article],
-                                V[Array[ArticleFailures], Array[Article]]
-                            ]) -> Run[NextStep]:
+def after_processing_either(
+        articles: Articles,
+        result: Either[
+            StopProcessing[Article, Article],
+            V[Array[ArticleFailures], Array[Article]]
+        ]) -> Run[NextStep]:
+    """
+    Handle the result after processing all articles, including stop processing.
+    """
     match result:
         case Left(stop):
             processed = stop.acc.processed
