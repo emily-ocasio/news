@@ -179,7 +179,16 @@ parts AS (
     *,
     CASE
       WHEN victim_name_raw IS NULL THEN NULL
-      WHEN name_core LIKE '% %' THEN regexp_extract(name_core, '^([a-z''\-]+)', 1)
+      WHEN name_core LIKE '% %' THEN
+        CASE
+          -- If leading initial + one name, keep initial as forename (e.g., "A Gonzalez")
+          WHEN regexp_matches(name_core, '^[a-z]\s+[a-z''\-]+$')
+            THEN regexp_extract(name_core, '^([a-z])', 1)
+          -- If leading initial + multiple names, use the first name after initial (e.g., "A Orlando Gonzalez")
+          WHEN regexp_matches(name_core, '^[a-z]\s+[a-z''\-]+\s+')
+            THEN regexp_extract(name_core, '^[a-z]\s+([a-z''\-]+)', 1)
+          ELSE regexp_extract(name_core, '^([a-z''\-]+)', 1)
+        END
       ELSE NULL
     END AS victim_forename_norm,
     CASE

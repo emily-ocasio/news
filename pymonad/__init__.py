@@ -20,6 +20,7 @@ from .functor import Functor, map  # pylint: disable=redefined-builtin
 from .geocode import (
     GeocodeResult,
     AddressResultType,
+    addr_key_type,
     mar_result_type,
     mar_result_score,
     address_result_type_for_score,

@@ -27,12 +27,40 @@ class AddressResultType(Enum):
 
     NO_SUCCESS = "NO_SUCCESS"
     NO_RESULT = "NO_RESULT"
+    NO_SUCCESS_ADDRESS = "NO_SUCCESS_ADDRESS"
+    NO_SUCCESS_STREET_ONLY = "NO_SUCCESS_STREET_ONLY"
+    NO_SUCCESS_BLOCK = "NO_SUCCESS_BLOCK"
+    NO_SUCCESS_INTERSECTION = "NO_SUCCESS_INTERSECTION"
+    NO_RESULT_ADDRESS = "NO_RESULT_ADDRESS"
+    NO_RESULT_STREET_ONLY = "NO_RESULT_STREET_ONLY"
+    NO_RESULT_BLOCK = "NO_RESULT_BLOCK"
+    NO_RESULT_INTERSECTION = "NO_RESULT_INTERSECTION"
     ADDRESS = "ADDRESS"
+    APPROXIMATE_PLACE = "APPROXIMATE_PLACE"
     NAMED_PLACE = "NAMED_PLACE"
     UNRECOGNIZED_PLACE = "UNRECOGNIZED_PLACE"
     STREET_ONLY = "STREET_ONLY"
     INTERSECTION = "INTERSECTION"
     BLOCK = "BLOCK"
+
+
+def addr_key_type(addr_key: str) -> AddressResultType:
+    upper = (addr_key or "").upper()
+    street_type = r"(STREET|AVENUE|ROAD|PLACE|PLAZA|TERRACE|BOULEVARD|PARKWAY|HIGHWAY|DRIVE|COURT|LANE|CIRCLE|WAY|SQUARE)"
+    quadrant = r"(NW|NE|SW|SE)"
+    street_addr = rf"^[0-9]+\s+.+\s+{street_type}(?:\s+{quadrant})?$"
+    street_only = rf"^.+\s+{street_type}(?:\s+{quadrant})?$"
+    block = rf"^[0-9]+\s+(BLOCK|BLK)\s+OF\s+.+\s+{street_type}(?:\s+{quadrant})?$"
+    intersection = rf".+\s+{street_type}(?:\s+{quadrant})?\s+(AND|&|AT)\s+.+\s+{street_type}(?:\s+{quadrant})?$"
+    if re.match(block, upper):
+        return AddressResultType.BLOCK
+    if re.match(intersection, upper):
+        return AddressResultType.INTERSECTION
+    if re.match(street_addr, upper):
+        return AddressResultType.ADDRESS
+    if re.match(street_only, upper):
+        return AddressResultType.STREET_ONLY
+    return AddressResultType.UNRECOGNIZED_PLACE
 
 
 @dataclass(frozen=True)
@@ -67,6 +95,19 @@ def mar_result_type(j: dict) -> AddressResultType:
 def mar_result_type_with_input(addr_key: str, j: dict) -> AddressResultType:
     """Determine result type using input address plus MAR response."""
     base_type = mar_result_type(j)
+    if base_type == AddressResultType.NO_SUCCESS or base_type == AddressResultType.NO_RESULT:
+        base_guess = addr_key_type(addr_key)
+        if base_guess == AddressResultType.BLOCK:
+            return AddressResultType.NO_SUCCESS_BLOCK if base_type == AddressResultType.NO_SUCCESS else AddressResultType.NO_RESULT_BLOCK
+        if base_guess == AddressResultType.INTERSECTION:
+            return AddressResultType.NO_SUCCESS_INTERSECTION if base_type == AddressResultType.NO_SUCCESS else AddressResultType.NO_RESULT_INTERSECTION
+        if base_guess == AddressResultType.ADDRESS:
+            return AddressResultType.NO_SUCCESS_ADDRESS if base_type == AddressResultType.NO_SUCCESS else AddressResultType.NO_RESULT_ADDRESS
+        if base_guess == AddressResultType.STREET_ONLY:
+            return AddressResultType.NO_SUCCESS_STREET_ONLY if base_type == AddressResultType.NO_SUCCESS else AddressResultType.NO_RESULT_STREET_ONLY
+        if base_guess == AddressResultType.UNRECOGNIZED_PLACE:
+            return base_type
+        return base_type
     if base_type != AddressResultType.ADDRESS:
         return base_type
     result = j.get("Result", {})
@@ -81,7 +122,15 @@ def mar_result_type_with_input(addr_key: str, j: dict) -> AddressResultType:
     derived = address_result_type_for_score(
         addr_key, score, base_type, props.get("FullAddress")
     )
-    if derived == AddressResultType.ADDRESS and not (props.get("FullAddress") or "").strip():
+    if (
+        derived == AddressResultType.ADDRESS
+        and addr_key_type(addr_key) == AddressResultType.UNRECOGNIZED_PLACE
+    ):
+        return AddressResultType.APPROXIMATE_PLACE
+    if (
+        derived == AddressResultType.ADDRESS
+        and not (props.get("FullAddress") or "").strip()
+    ):
         return AddressResultType.UNRECOGNIZED_PLACE
     return derived
 
@@ -93,7 +142,12 @@ def mar_result_score(j: dict) -> float:
         return 0
     result = j.get("Result", {})
     match result_type:
-        case AddressResultType.ADDRESS | AddressResultType.NAMED_PLACE | AddressResultType.STREET_ONLY:
+        case (
+            AddressResultType.ADDRESS
+            | AddressResultType.APPROXIMATE_PLACE
+            | AddressResultType.NAMED_PLACE
+            | AddressResultType.STREET_ONLY
+        ):
             addresses = result.get("addresses", [])
             c0 = addresses[0].get("address", {}).get("properties", {})
         case AddressResultType.INTERSECTION:
@@ -116,9 +170,10 @@ def address_result_type_for_score(
     base_type: AddressResultType,
     full_address: str | None = None,
 ) -> AddressResultType:
+    """Refine address result type based on score and input address."""
     if base_type != AddressResultType.ADDRESS:
         return base_type
-    if not (0 < score):
+    if not 0 < score:
         return base_type
     if score >= 100 and not (full_address or "").strip():
         return AddressResultType.NAMED_PLACE
@@ -218,7 +273,7 @@ def mar_geocode_handler(x: MarGeocode) -> GeocodeResult:
         blocks = result.get("blocks", [])
 
         match result_type:
-            case AddressResultType.NO_SUCCESS:
+            case AddressResultType.NO_SUCCESS | AddressResultType.NO_SUCCESS_ADDRESS | AddressResultType.NO_SUCCESS_STREET_ONLY | AddressResultType.NO_SUCCESS_BLOCK | AddressResultType.NO_SUCCESS_INTERSECTION:
                 return GeocodeResult(
                     ok=False,
                     normalized_input=x.address,
@@ -227,7 +282,7 @@ def mar_geocode_handler(x: MarGeocode) -> GeocodeResult:
                     y_lat=0,
                     raw_json={"message": j.get("message", "Success= False")},
                 )
-            case AddressResultType.NO_RESULT:
+            case AddressResultType.NO_RESULT | AddressResultType.NO_RESULT_ADDRESS | AddressResultType.NO_RESULT_STREET_ONLY | AddressResultType.NO_RESULT_BLOCK | AddressResultType.NO_RESULT_INTERSECTION:
                 if result and not addresses and not intersections and not blocks:
                     message = "No addresses or intersections found"
                 else:
@@ -250,22 +305,34 @@ def mar_geocode_handler(x: MarGeocode) -> GeocodeResult:
                     y_lat=float(c0.get("Latitude", 0)),
                     raw_json=j,
                 )
+            case AddressResultType.APPROXIMATE_PLACE:
+                c0 = addresses[0].get("address", {}).get("properties", {})
+                return GeocodeResult(
+                    ok=True,
+                    normalized_input=x.address,
+                    matched_address=x.address,
+                    x_lon=float(c0.get("Longitude", 0)),
+                    y_lat=float(c0.get("Latitude", 0)),
+                    raw_json=j,
+                )
             case AddressResultType.STREET_ONLY:
+                c0 = addresses[0].get("address", {}).get("properties", {})
                 return GeocodeResult(
                     ok=True,
                     normalized_input=x.address,
                     matched_address="",
-                    x_lon=0,
-                    y_lat=0,
+                    x_lon=float(c0.get("Longitude", 0)),
+                    y_lat=float(c0.get("Latitude", 0)),
                     raw_json=j,
                 )
             case AddressResultType.UNRECOGNIZED_PLACE:
+                c0 = addresses[0].get("address", {}).get("properties", {})
                 return GeocodeResult(
                     ok=True,
                     normalized_input=x.address,
                     matched_address="",
-                    x_lon=0,
-                    y_lat=0,
+                    x_lon=float(c0.get("Longitude", 0)),
+                    y_lat=float(c0.get("Latitude", 0)),
                     raw_json=j,
                 )
             case AddressResultType.ADDRESS:

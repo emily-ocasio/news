@@ -7,6 +7,8 @@ from dataclasses import dataclass, asdict
 
 import splink.internals.comparison_library as cl
 import splink.internals.comparison_level_library as cll
+from splink import ColumnExpression
+import splink.internals.comparison_level_composition as cllc
 
 from blocking import _clause_from_comps
 
@@ -188,18 +190,28 @@ DATE_COMP = cl.CustomComparison(
             "exact match incident date",
             ComparisonComp.EXACT_YEAR_MONTH_DAY.value
         ).to_dict(),
-        ComparisonLevel(
-            "exact year and month",
-            ComparisonComp.EXACT_YEAR_MONTH.value
-        ).to_dict(),
-        ComparisonLevel(
-            "midpoint within 2 days",
-            _clause_from_comps(
-                ComparisonComp.MIDPOINT_EXISTS,
-                ComparisonComp.MIDPOINT_2DAYS,
-                ComparisonComp.DAY_PRECISION
-            )
-        ).to_dict(),
+        cllc.Or(
+            cllc.And(
+                cll.ExactMatchLevel("year"),
+                cll.ExactMatchLevel("month")
+            ),
+            cllc.And(
+                cll.AbsoluteDifferenceLevel("midpoint_day", 2),
+                cll.LiteralMatchLevel("date_precision", "day", "string")
+            ),
+        ).configure(label_for_charts="exact yr/mon or within 2 days"),
+        # ComparisonLevel(
+        #     "exact year and month",
+        #     ComparisonComp.EXACT_YEAR_MONTH.value
+        # ).to_dict(),
+        # ComparisonLevel(
+        #     "midpoint within 2 days",
+        #     _clause_from_comps(
+        #         ComparisonComp.MIDPOINT_EXISTS,
+        #         ComparisonComp.MIDPOINT_2DAYS,
+        #         ComparisonComp.DAY_PRECISION
+        #     )
+        # ).to_dict(),
         # ComparisonLevel(
         #     "midpoint within 10 days",
         #     _clause_from_comps(
@@ -428,6 +440,83 @@ DIST_COMP = cl.DistanceInKMAtThresholds(
     lat_col="lat",
     long_col="lon",
     km_thresholds=[0.1, 0.5, 1.5],
+)
+
+DIST_STREET_PLACE = cllc.Or(
+    cll.LiteralMatchLevel("address_type", "ADDRESS", "string", "left"),
+    cll.LiteralMatchLevel("address_type", "ADDRESS", "string", "right"),
+    cll.LiteralMatchLevel("address_type", "INTERSECTION", "string", "left"),
+    cll.LiteralMatchLevel("address_type", "INTERSECTION", "string", "right"),
+    cll.LiteralMatchLevel("address_type", "BLOCK", "string", "left"),
+    cll.LiteralMatchLevel("address_type", "BLOCK", "string", "right"),
+    cll.LiteralMatchLevel("address_type", "STREET ONLY", "string", "left"),
+    cll.LiteralMatchLevel("address_type", "STREET ONLY", "string", "right"),
+    cll.LiteralMatchLevel("address_type", "NO_SUCCESS_ADDRESS", "string", "left"),
+    cll.LiteralMatchLevel("address_type", "NO_SUCCESS_ADDRESS", "string", "right"),
+    cll.LiteralMatchLevel("address_type", "NO_SUCCESS_INTERSECTION", "string", "left"),
+    cll.LiteralMatchLevel("address_type", "NO_SUCCESS_INTERSECTION", "string", "right"),
+    cll.LiteralMatchLevel("address_type", "NO_SUCCESS_BLOCK", "string", "left"),
+    cll.LiteralMatchLevel("address_type", "NO_SUCCESS_BLOCK", "string", "right"),
+    cll.LiteralMatchLevel("address_type", "NO_SUCCESS_STREET_ONLY", "string", "left"),
+    cll.LiteralMatchLevel("address_type", "NO_SUCCESS_STREET_ONLY", "string", "right"),
+    cll.LiteralMatchLevel("address_type", "NO_RESULT_ADDRESS", "string", "left"),
+    cll.LiteralMatchLevel("address_type", "NO_RESULT_ADDRESS", "string", "right"),
+    cll.LiteralMatchLevel("address_type", "NO_RESULT_INTERSECTION", "string", "left"),
+    cll.LiteralMatchLevel("address_type", "NO_RESULT_INTERSECTION", "string", "right"),
+    cll.LiteralMatchLevel("address_type", "NO_RESULT_BLOCK", "string", "left"),
+    cll.LiteralMatchLevel("address_type", "NO_RESULT_BLOCK", "string", "right"),
+    cll.LiteralMatchLevel("address_type", "NO_RESULT_STREET_ONLY", "string", "left"),
+    cll.LiteralMatchLevel("address_type", "NO_RESULT_STREET_ONLY", "string", "right"),
+)
+
+DIST_ADDR_PLACE = cllc.Or(
+    cll.LiteralMatchLevel("address_type", "NAMED_PLACE", "string", "left"),
+    cll.LiteralMatchLevel("address_type", "NAMED_PLACE", "string", "right"),
+    cll.LiteralMatchLevel("address_type", "NO_SUCCESS", "string", "left"),
+    cll.LiteralMatchLevel("address_type", "NO_SUCCESS", "string", "right"),
+    cll.LiteralMatchLevel("address_type", "UNRECOGNIZED_PLACE", "string", "left"),
+    cll.LiteralMatchLevel("address_type", "UNRECOGNIZED_PLACE", "string", "right"),
+    cll.LiteralMatchLevel("address_type", "NO_RESULT", "string", "left"),
+    cll.LiteralMatchLevel("address_type", "NO_RESULT", "string", "right"),
+    cll.LiteralMatchLevel("address_type", "APPROXIMATE_PLACE", "string", "left"),
+    cll.LiteralMatchLevel("address_type", "APPROXIMATE_PLACE", "string", "right"),
+)
+
+DIST_COMP_NEW = cl.CustomComparison(
+    output_column_name = "location",
+    comparison_levels = [
+        cll.NullLevel(ColumnExpression("geo_address_norm").nullif("UNKNOWN")),
+        cllc.Or(
+            cllc.And(
+                cll.DistanceInKMLevel("lat", "lon", 0.0001),
+                cllc.Or(
+                    cll.LiteralMatchLevel("address_type", "ADDRESS", "string"),
+                    cll.LiteralMatchLevel("address_type", "INTERSECTION", "string"),
+                    cll.LiteralMatchLevel("address_type", "BLOCK", "string"),
+                    cll.LiteralMatchLevel("geo_score", "100", "float"),
+                    cll.ExactMatchLevel("geo_address_norm")
+                )
+            ),
+            cllc.And(
+                cll.LiteralMatchLevel("address_type", "NAMED_PLACE", "string"),
+                cll.ExactMatchLevel("geo_address_norm")
+            ),
+        ).configure(label_for_charts="exact location match"),
+        cllc.Or(
+            cll.DistanceInKMLevel("lat", "lon", 0.4),
+            cllc.And(
+                DIST_STREET_PLACE,
+                cll.JaroLevel(
+                    "geo_address_short", 0.95)
+            ),
+            cllc.And(
+                DIST_ADDR_PLACE,
+                cll.JaroLevel(
+                    "geo_address_short", 0.5)
+            ),
+        ).configure(label_for_charts="within 0.4 km or similar address"),
+        cll.ElseLevel()
+    ]
 )
 
 OFFENDER_COMP = cl.CustomComparison(
