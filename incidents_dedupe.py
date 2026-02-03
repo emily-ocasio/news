@@ -46,7 +46,6 @@ from pymonad import (
     with_duckdb,
 )
 
-
 def _create_victims_named_table() -> Run[Unit]:
     """
     Create a table of victims that have name present.

@@ -151,8 +151,12 @@ def _print_prediction_counts(ctx: SplinkContext) -> Run[Unit]:
                 blocking_rules=rules,
                 link_type=ctx.settings.get("link_type", "dedupe_only"),
                 db_api=db_api,
-                unique_id_column_name=ctx.settings.get("unique_id_column_name", "unique_id"),
-                source_dataset_column_name=ctx.settings.get("source_dataset_column_name"),
+                unique_id_column_name=ctx.settings.get(
+                    "unique_id_column_name", "unique_id"
+                ),
+                source_dataset_column_name=ctx.settings.get(
+                    "source_dataset_column_name"
+                ),
             )
             total_comparisons = int(counts_df["row_count"].sum())
             return _put_line_unit(
@@ -306,7 +310,6 @@ def _train_linker_for_prediction() -> Run[Unit]:
         _with_splink_context_linker_plan(_train_linker_setup)
         ^ _with_splink_context_linker_plan(_train_linker_em_runs)
     )
-
 
 
 class SplinkPhase(str, Enum):
@@ -821,7 +824,6 @@ def _with_splink_context_linker(
     return _with_splink_context(_with_ctx)
 
 
-
 def _update_splink_context(update_fn) -> Run[Unit]:
     return _require_splink_context() >> (
         lambda ctx: put_splink_context(update_fn(ctx))
@@ -1328,7 +1330,6 @@ def _build_linker_from_ctx(
     )
 
 
-
 def _predict_pairs_from_ctx(
     ctx: SplinkContext,
     linker: Linker,
@@ -1437,7 +1438,6 @@ def _run_unique_matching_from_ctx(ctx: SplinkContext) -> Run[Unit]:
         FROM {pairs_out} WHERE match_probability > 0
         """
     )) >> _with_pairs
-
 
 
 def _input_table_value(
@@ -2469,7 +2469,6 @@ def _run_splink_visualize(linker: Linker, job: SplinkVisualizeJob) -> None:
         overwrite=True,
     )
     print("Cluster studio dashboard written to cluster_studio.html")
-
 
 
 def _init_splink_dedupe_context(job: SplinkDedupeJob) -> Run[Unit]:

@@ -39,7 +39,7 @@ def input_record_id() -> Run[int]:
     Prompt the user to input a record ID.
     """
     def normalize_record_id(record_id: int) -> Run[int]:
-        if record_id < 100000000:
+        if 0 < record_id < 100000000:
             return pure(record_id + 100000000)
         return pure(record_id)
     def check_if_zero(record_id: int) -> Run[int]:

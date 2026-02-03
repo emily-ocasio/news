@@ -1,4 +1,6 @@
 {
+  "venvPath": "/Users/wendell/miniforge3/envs",
+  "venv": "news",
   "typeCheckingMode": "basic",
   "reportMissingTypeStubs": true,
   "stubPath": "./typings",

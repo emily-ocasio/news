@@ -310,6 +310,11 @@ def _apply_band_formatting_xlsx(
                 direct_ok = False
                 break
         if seen_any and direct_ok:
+            if ws.max_row < 2:
+                ws.freeze_panes = 'A2'
+                wb.save(filename)
+                wb.close()
+                return
             last_col = ws.max_column
             last_col_letter = cast(Cell, ws.cell(row=1, column=last_col)).column_letter
             data_range = f"A2:{last_col_letter}{ws.max_row}"
@@ -375,6 +380,13 @@ def _apply_band_formatting_xlsx(
     # Apply conditional formatting across all columns A -> last column
     last_col = ws.max_column
     last_col_letter = cast(Cell, ws.cell(row=1, column=last_col)).column_letter
+    if ws.max_row < 2:
+        if group_col.startswith("__"):
+            ws.column_dimensions[grp_col_letter].hidden = True
+        ws.freeze_panes = 'A2'
+        wb.save(filename)
+        wb.close()
+        return
     for i in range(max_wrap):
         formula = f"${helper_letter}2 = {i}"
         ws.conditional_formatting.add(

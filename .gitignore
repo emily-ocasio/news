@@ -31,3 +31,6 @@ code_analyzer.py
 *.xlsx
 test_sbert.ipynb
 splink_models/
+*.code-workspace
+.dmypy.*
+pyrightconfig.*

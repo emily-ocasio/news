@@ -1,6 +1,41 @@
 # copilot-instructions.md
 Start every chat response to questions about this program with the following text: "THANK YOU FOR THE QUESTION ABOUT THE NEWS ARTICLES ANALYSIS PROJECT."
 
+## Mypy (dmypy) Type Checking
+
+After any code changes:
+
+1. Run the mypy daemon using the same Python interpreter and flags the extension uses:
+
+/Users/wendell/miniforge3/envs/news/bin/dmypy
+--status-file .dmypy.json 
+run 
+-- 
+--python-executable /Users/wendell/miniforge3/envs/news/bin/python 
+. 
+--show-error-end 
+--no-error-summary 
+--no-pretty 
+--no-color-output 
+--config-file mypy.ini
+
+2. If any type errors are reported (non-zero exit status or output with errors), treat them as failures and fix them before completing the change.
+
+3. Optionally check daemon status:
+/Users/wendell/miniforge3/envs/news/bin/python -m mypy.dmypy 
+--status-file .dmypy.json status
+
+## Pyright (Pylance) Type Checking
+
+After any code changes:
+
+1. Run Pyright using the CLI-specific config (keeps VS Code Pylance behavior unchanged):
+
+/Users/wendell/miniforge3/envs/news/bin/pyright --project pyrightconfig.cli.json
+
+2. If any type errors are reported (non-zero exit status or output with errors), treat them as failures and fix them before completing the change.
+
+
 ## 1. Project Overview
 
 This project is a terminal-based tool for managing, analyzing, and interacting with news articles and crime data. The data is stored and managed in a SQLite database  newarticles.db and the logic includes managing calls to OpenAI GPT API. The main entry point is [runarticles.py](../runarticles.py).
@@ -82,5 +117,3 @@ The typical user workflow for analyzing news articles and crime data follows a s
 9. **Optional Fixes/Reviews**: Use FIX (F) for manual review/re-processing of individual articles, or placeholders like REVIEW/NEW for additional tasks.
 
 This workflow ensures data integrity through monadic composition, with all operations logged and validated via applicative validation.
-
-
