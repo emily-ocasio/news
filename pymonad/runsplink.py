@@ -24,6 +24,9 @@ from splink.internals.blocking_rule_creator_utils import to_blocking_rule_creato
 from splink.internals.blocking import BlockingRule
 from splink.internals.cache_dict_with_logging import CacheDictWithLogging
 from splink.internals.charts import unlinkables_chart
+from splink.internals.comparison import Comparison as SplinkComparison
+from splink.internals.comparison_creator import ComparisonCreator
+from splink.internals.misc import bayes_factor_to_prob, prob_to_bayes_factor
 from splink.internals.pipeline import CTEPipeline
 
 # pylint:disable=W0212
@@ -34,7 +37,7 @@ from .run import Run, ask, throw, ErrorPayload, pure, put_line, fold_run, \
     HasSplinkLinker
 from .runsql import SQL, sql_exec, sql_query, sql_register, with_duckdb
 from .array import Array
-from .monad import Unit, unit
+from .monad import Unit, unit, bind_first
 from .hashmap import HashMap, flatten_map
 from .hashset import HashSet
 from .string import String
@@ -119,6 +122,44 @@ def _build_linker_for_prediction(
     )
 
 
+def comparison_level_key(
+    comparison: ComparisonCreator | SplinkComparison,
+    level_label: str,
+    *,
+    sql_dialect: str = "duckdb",
+) -> ComparisonLevelKey:
+    """
+    Build a ComparisonLevelKey from a Splink comparison and a level label.
+    """
+    if isinstance(comparison, ComparisonCreator):
+        comparison = comparison.get_comparison(sql_dialect)
+    comparison_name = (
+        f"{comparison.output_column_name}_{comparison.comparison_description}"
+    )
+    return ComparisonLevelKey(comparison_name=comparison_name, level_name=level_label)
+
+
+def comparison_level_keys(
+    comparison: ComparisonCreator | SplinkComparison,
+    level_labels: Sequence[str],
+    *,
+    sql_dialect: str = "duckdb",
+) -> Array[ComparisonLevelKey]:
+    """
+    Build a list of ComparisonLevelKey entries for a comparison.
+    """
+    return Array.make(
+        tuple(
+            comparison_level_key(
+                comparison,
+                level_label,
+                sql_dialect=sql_dialect,
+            )
+            for level_label in level_labels
+        )
+    )
+
+
 def _put_line_unit(line: str) -> Run[Unit]:
     return put_line(line) ^ pure(unit)
 
@@ -182,6 +223,127 @@ def _train_linker_setup(
     return _run()
 
 
+def _maybe_adjust_lambda_for_training_rule(
+    training_rule: BlockingRuleLike,
+    ctx: SplinkContext,
+    linker: Linker,
+) -> Run[Unit]:
+    if len(ctx.training_block_level_map) == 0:
+        return pure(unit)
+    level_keys = ctx.training_block_level_map.get(training_rule)
+    if level_keys is None:
+        training_rule_str = str(training_rule)
+        for rule_key, mapped_levels in ctx.training_block_level_map.items():
+            rule_key_str = str(rule_key)
+            if rule_key_str and rule_key_str in training_rule_str:
+                level_keys = mapped_levels
+                break
+    if level_keys is None:
+        return pure(unit)
+    settings_obj = linker._settings_obj
+    debug_lines = [
+        "Manual lambda adjustment debug:",
+        f"  training_rule={training_rule}",
+    ]
+    available_names = sorted(
+        {
+            f"{comp.output_column_name}_{comp.comparison_description}"
+            for comp in settings_obj.comparisons
+        }
+    )
+    debug_lines.append("  available_comparison_names:")
+    debug_lines.extend([f"    {name}" for name in available_names])
+    target_name = "incident_date_CustomComparison"
+    target_levels: list[str] = []
+    for comp in settings_obj.comparisons:
+        name = f"{comp.output_column_name}_{comp.comparison_description}"
+        if name != target_name:
+            continue
+        for level in comp.comparison_levels:
+            if level.label_for_charts:
+                target_levels.append(level.label_for_charts)
+    if target_levels:
+        debug_lines.append(
+            f"  available_levels_for_{target_name}:"
+        )
+        debug_lines.extend([f"    {name}" for name in sorted(target_levels)])
+    total_m = 0.0
+    total_u = 0.0
+    matched_levels: list[ComparisonLevelKey] = []
+    for level_key in level_keys:
+        found_level = None
+        for comp in settings_obj.comparisons:
+            name = f"{comp.output_column_name}_{comp.comparison_description}"
+            if name != level_key.comparison_name:
+                continue
+            for level in comp.comparison_levels:
+                if level.label_for_charts == level_key.level_name:
+                    found_level = level
+                    break
+            if found_level is not None:
+                break
+        if found_level is None:
+            debug_lines.append(
+                f"  missing {level_key.comparison_name!r}::"
+                f"{level_key.level_name!r}"
+            )
+            continue
+        m = found_level.m_probability
+        u = found_level.u_probability
+        if m is None or u is None:
+            debug_lines.append(
+                f"  found_untrained {level_key.comparison_name}::"
+                f"{level_key.level_name} m={m} u={u}"
+            )
+            continue
+        if u == 0:
+            debug_lines.append(
+                f"  found_zero_u {level_key.comparison_name}::"
+                f"{level_key.level_name} m={m} u={u}"
+            )
+            continue
+        total_m += m
+        total_u += u
+        matched_levels.append(level_key)
+        debug_lines.append(
+            f"  matched {level_key.comparison_name}::"
+            f"{level_key.level_name} m={m:.6f} u={u:.6f}"
+        )
+    if not matched_levels:
+        return _put_lines(
+            debug_lines + [
+                "Manual lambda adjustment skipped: missing m/u probabilities.",
+            ]
+        )
+    if total_u == 0:
+        return _put_lines(
+            debug_lines + [
+                "Manual lambda adjustment skipped: summed u_probability is 0.",
+            ]
+        )
+    bayes_factor = total_m / total_u
+    original_lambda = linker._settings_obj._probability_two_random_records_match
+    adjusted_lambda = bayes_factor_to_prob(
+        prob_to_bayes_factor(original_lambda) * bayes_factor
+    )
+    linker._settings_obj._probability_two_random_records_match = adjusted_lambda
+    level_lines = [
+        f"    {level.comparison_name}::{level.level_name}"
+        for level in matched_levels
+    ]
+    lines = [
+        "Manual lambda adjustment for training block:",
+        f"  training_rule={training_rule}",
+        "  comparison_levels:",
+        *level_lines,
+        f"  overall_bayes_factor=sum(m)/sum(u)={bayes_factor:.6f}",
+        f"  lambda_pre={original_lambda:.6f}",
+        f"  lambda_post={adjusted_lambda:.6f}",
+        f"  lambda_result={adjusted_lambda:.6f}",
+    ]
+    return _put_lines(lines)
+
+
 def _train_linker_em_runs(
     ctx: SplinkContext,
     linker: Linker,
@@ -219,43 +381,60 @@ def _train_linker_em_runs(
         training_rule: BlockingRuleLike,
         run_idx: int,
     ) -> Run[EmParams]:
-        em_session = linker.training.estimate_parameters_using_expectation_maximisation(
-            blocking_rule=training_rule,
-            fix_probability_two_random_records_match=False
+        def _run_em() -> Run[EmParams]:
+            em_session = \
+                linker.training.estimate_parameters_using_expectation_maximisation(
+                    blocking_rule=training_rule,
+                    fix_probability_two_random_records_match=False
+                )
+            try:
+                lambda_history = em_session._lambda_history_records
+            except AttributeError:
+                lambda_history = []
+            block_lines: list[str] = []
+            if lambda_history:
+                block_lines.append(
+                    "EM lambda history (probability_two_random_records_match):"
+                )
+                for record in lambda_history:
+                    block_lines.append(
+                        f"  iter {record['iteration']}: "
+                        f"{record['probability_two_random_records_match']:.6f}"
+                    )
+            current_settings = linker.misc.save_model_to_json(out_path=None)
+            current_params = _extract_em_params(current_settings)
+            if len(prev_block_params) != 0:
+                max_delta, max_key = _max_delta_from_params(
+                    prev_block_params,
+                    current_params,
+                )
+                block_lines.append(
+                    f"EM run {run_idx + 1}/{ctx.em_max_runs} block drift: "
+                    f"max_delta={max_delta:.6f} (block to block)"
+                )
+                if max_key is not None:
+                    block_lines.append(
+                        f"  max_delta_key={max_key.comparison_name}::"
+                        f"{max_key.level_name}"
+                    )
+            if block_lines:
+                return _put_lines(block_lines) ^ pure(current_params)
+            return pure(current_params)
+
+        def _restore_lambda(original_lambda: float, params: EmParams) -> Run[EmParams]:
+            linker._settings_obj._probability_two_random_records_match = (
+                original_lambda
+            )
+            return pure(params)
+
+        original_lambda = linker._settings_obj._probability_two_random_records_match
+        return (
+            _with_splink_context_linker(
+                bind_first(_maybe_adjust_lambda_for_training_rule, training_rule)
+            )
+            >> (lambda _: _run_em())
+            >> (lambda params: _restore_lambda(original_lambda, params))
         )
-        try:
-            lambda_history = em_session._lambda_history_records
-        except AttributeError:
-            lambda_history = []
-        block_lines: list[str] = []
-        if lambda_history:
-            block_lines.append(
-                "EM lambda history (probability_two_random_records_match):"
-            )
-            for record in lambda_history:
-                block_lines.append(
-                    f"  iter {record['iteration']}: "
-                    f"{record['probability_two_random_records_match']:.6f}"
-                )
-        current_settings = linker.misc.save_model_to_json(out_path=None)
-        current_params = _extract_em_params(current_settings)
-        if len(prev_block_params) != 0:
-            max_delta, max_key = _max_delta_from_params(
-                prev_block_params,
-                current_params,
-            )
-            block_lines.append(
-                f"EM run {run_idx + 1}/{ctx.em_max_runs} block drift: "
-                f"max_delta={max_delta:.6f} (block to block)"
-            )
-            if max_key is not None:
-                block_lines.append(
-                    f"  max_delta_key={max_key.comparison_name}::"
-                    f"{max_key.level_name}"
-                )
-        if block_lines:
-            return _put_lines(block_lines) ^ pure(current_params)
-        return pure(current_params)
 
     def _train_run(
         state: tuple[EmParams, bool],
@@ -341,6 +520,8 @@ BlockingRuleLikes = (
     | BlockingRuleCreators
     | Array[BlockingRuleLike]
 )
+
+type TrainingBlockToComparisonLevelMap = HashMap[BlockingRuleLike, Array[ComparisonLevelKey]]
 
 def _concat_blocking_rule_likes(
     left: BlockingRuleLikes,
@@ -655,6 +836,9 @@ class SplinkContext:
     unique_id_col: UniqueIdColumnName = UniqueIdColumnName("unique_id")
     prediction_rules: BlockingRuleLikes = field(default_factory=Array.empty)
     training_rules: BlockingRuleLikes = field(default_factory=Array.empty)
+    training_block_level_map: TrainingBlockToComparisonLevelMap = field(
+        default_factory=HashMap.empty
+    )
     linker: Maybe[Linker] = field(default_factory=nothing)
     db_api: Maybe[DuckDBAPI] = field(default_factory=nothing)
     predict_plan: Maybe[PredictPlan] = field(default_factory=nothing)
@@ -755,6 +939,9 @@ class SplinkDedupeJob:
     clusters_out: ClustersTableName = ClustersTableName("")
     train_first: bool = False
     training_blocking_rules: StringBlockingRules | None = None
+    training_block_level_map: TrainingBlockToComparisonLevelMap = field(
+        default_factory=HashMap.empty
+    )
     visualize: bool = False
     unique_matching: bool = False
     unique_pairs_table: UniquePairsTableName = UniquePairsTableName("")
@@ -1982,6 +2169,7 @@ def splink_dedupe_job(
     clusters_out: ClustersTableName = ClustersTableName(""),
     train_first: bool = False,
     training_blocking_rules: StringBlockingRules | Sequence[StringBlockingRule] | None = None,
+    training_block_level_map: TrainingBlockToComparisonLevelMap = HashMap.empty(),
     deterministic_rules: StringBlockingRules | Sequence[StringBlockingRule] | None = None,
     deterministic_recall: float = 0.5,
     visualize: bool = False,
@@ -2015,6 +2203,7 @@ def splink_dedupe_job(
                 clusters_out,
                 train_first,
                 Array.make(tuple(training_blocking_rules or ())),
+                training_block_level_map,
                 visualize,
                 unique_matching,
                 unique_pairs_table,
@@ -2511,6 +2700,7 @@ def _init_splink_dedupe_context(job: SplinkDedupeJob) -> Run[Unit]:
             unique_id_col=unique_id_col,
             prediction_rules=prediction_rules,
             training_rules=training_rules,
+            training_block_level_map=job.training_block_level_map,
             settings=job.settings,
             predict_threshold=job.predict_threshold,
             cluster_threshold=job.cluster_threshold,

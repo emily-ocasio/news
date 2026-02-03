@@ -103,6 +103,9 @@ from .runsplink import (
     splink_dedupe_job,
     splink_visualize_job,
     run_splink,
+    comparison_level_keys,
+    BlockingRuleLike,
+    TrainingBlockToComparisonLevelMap,
     SplinkChartType,
     PredictionInputTableName,
     PredictionInputTableNames,
@@ -111,6 +114,7 @@ from .runsplink import (
     UniquePairsTableName,
     BlockedPairsTableName,
     DoNotLinkTableName,
+    ComparisonLevelKey
 )
 from .string import Char, String, from_char_array, from_string
 from .traverse import array_sequence, array_traverse

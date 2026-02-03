@@ -10,13 +10,14 @@ from blocking import (
     ORPHAN_VICTIM_BLOCKS,
     ORPHAN_DETERMINISTIC_BLOCKS,
     ORPHAN_TRAINING_BLOCKS,
+    TrainBlockRule,
 )
 
 from comparison import (
-    DATE_COMP_ORPHAN,
+    DATE_COMP as DATE_COMP_ORPHAN,
     AGE_COMP_ORPHAN,
     VICTIM_COUNT_COMP,
-    DIST_COMP,
+    DIST_COMP_NEW as DIST_COMP,
     OFFENDER_COMP,
     TF_WEAPON_COMP,
     CIRC_COMP,
@@ -32,7 +33,9 @@ from pymonad import (
     pure,
     PredictionInputTableNames,
     PairsTableName,
-    ClustersTableName,
+    HashMap,
+    BlockingRuleLike,
+    comparison_level_keys,
     with_duckdb,
     splink_dedupe_job,
     sql_exec,
@@ -107,8 +110,13 @@ def _create_linkage_input_tables() -> Run[Unit]:
                     ) AS month,
                     -- NEW: all article ids from cluster as CSV
                     article_ids_csv,
-                    lat_centroid AS lat,
-                    lon_centroid AS lon,
+                    canonical_geo_address_norm AS geo_address_norm,
+                    canonical_geo_address_short AS geo_address_short,
+                    canonical_geo_address_short_2 AS geo_address_short_2,
+                    canonical_geo_score AS geo_score,
+                    canonical_address_type AS address_type,
+                    canonical_lat AS lat,
+                    canonical_lon AS lon,
                     canonical_age AS victim_age,
                     canonical_victim_count AS victim_count,
                     canonical_sex AS victim_sex,
@@ -150,6 +158,11 @@ def _create_linkage_input_tables() -> Run[Unit]:
                     year,
                     year AS year_block,
                     month,
+                    geo_address_norm,
+                    geo_address_short,
+                    geo_address_short_2,
+                    geo_score,
+                    address_type,
                     lat,
                     lon,
                     victim_age,
@@ -340,10 +353,20 @@ def _debug_preview_orphans() -> Run[Unit]:
     )
 
 
-def _link_orphans_to_entities(env: Environment) -> Run[Unit]:
+def _link_orphans_to_entities(_: Environment) -> Run[Unit]:
     """
     Link orphan victims to existing victim entities using Splink.
     """
+    training_rule: BlockingRuleLike = TrainBlockRule.YEAR_MONTH
+    training_block_level_map = HashMap.make({
+        training_rule: comparison_level_keys(
+            DATE_COMP_ORPHAN,
+            [
+                "exact match incident date",
+                "midpoint within 2 days",
+            ],
+        ),
+    })
     return splink_dedupe_job(
         input_table=PredictionInputTableNames(("entity_link_input", "orphan_link_input")),
         settings={
@@ -362,15 +385,16 @@ def _link_orphans_to_entities(env: Environment) -> Run[Unit]:
                 VICTIM_COUNT_COMP,
             ],
         },
-        predict_threshold=0.1,
+        predict_threshold=0.5,
         cluster_threshold=0.0,
         pairs_out=PairsTableName("orphan_entity_pairs"),
         deterministic_rules=ORPHAN_DETERMINISTIC_BLOCKS,
         deterministic_recall=0.1,
         train_first=True,
         training_blocking_rules=ORPHAN_TRAINING_BLOCKS,
+        training_block_level_map=training_block_level_map,
         visualize=False,
-        em_max_runs=5,
+        em_max_runs=1,
         splink_key=SplinkType.ORPHAN,
     ) >> (
         lambda outnames: put_line(f"[D] Wrote {outnames[1]} in DuckDB.")
@@ -493,8 +517,6 @@ def _integrate_orphan_matches() -> Run[Unit]:
                   SELECT
                     entity_uid,
                     COUNT(*) AS num_orphans,
-                    AVG(lat) AS avg_orphan_lat,
-                    AVG(lon) AS avg_orphan_lon,
                     MIN(midpoint_day) AS min_orphan_mid,
                     MAX(midpoint_day) AS max_orphan_mid,
                     STRING_AGG(DISTINCT CAST(article_id AS VARCHAR), ',') AS orphan_article_ids,
@@ -506,12 +528,6 @@ def _integrate_orphan_matches() -> Run[Unit]:
                 UPDATE victim_entity_reps_new
                 SET
                   cluster_size = cluster_size + COALESCE(mu.num_orphans, 0),
-                  lat_centroid = CASE WHEN mu.num_orphans IS NOT NULL THEN
-                    (lat_centroid * cluster_size + mu.avg_orphan_lat * mu.num_orphans) / (cluster_size + mu.num_orphans)
-                  ELSE lat_centroid END,
-                  lon_centroid = CASE WHEN mu.num_orphans IS NOT NULL THEN
-                    (lon_centroid * cluster_size + mu.avg_orphan_lon * mu.num_orphans) / (cluster_size + mu.num_orphans)
-                  ELSE lon_centroid END,
                   min_event_day = CASE WHEN mu.num_orphans IS NOT NULL THEN LEAST(min_event_day, mu.min_orphan_mid) ELSE min_event_day END,
                   max_event_day = CASE WHEN mu.num_orphans IS NOT NULL THEN GREATEST(max_event_day, mu.max_orphan_mid) ELSE max_event_day END,
                   article_ids_csv = article_ids_csv || ',' || COALESCE(mu.orphan_article_ids, ''),
@@ -561,8 +577,13 @@ def _integrate_orphan_matches() -> Run[Unit]:
                   offender_fullname,
                   cluster_size,
                   article_ids_csv,
-                  lat_centroid,
-                  lon_centroid,
+                  canonical_geo_address_norm,
+                  canonical_geo_address_short,
+                  canonical_geo_address_short_2,
+                  canonical_geo_score,
+                  canonical_address_type,
+                  canonical_lat,
+                  canonical_lon,
                   min_event_day,
                   max_event_day,
                   entity_date_precision,
@@ -584,8 +605,13 @@ def _integrate_orphan_matches() -> Run[Unit]:
                   offender_name AS offender_fullname,
                   1 AS cluster_size,
                   CAST(article_id AS VARCHAR) AS article_ids_csv,
-                  lat AS lat_centroid,
-                  lon AS lon_centroid,
+                  geo_address_norm AS canonical_geo_address_norm,
+                  geo_address_short AS canonical_geo_address_short,
+                  geo_address_short_2 AS canonical_geo_address_short_2,
+                  geo_score AS canonical_geo_score,
+                  address_type AS canonical_address_type,
+                  lat AS canonical_lat,
+                  lon AS canonical_lon,
                   midpoint_day AS min_event_day,
                   midpoint_day AS max_event_day,
                   date_precision AS entity_date_precision,
@@ -611,7 +637,14 @@ def _integrate_orphan_matches() -> Run[Unit]:
                                 m.date_precision,
                                 m.incident_date,
                                 m.midpoint_day,
-                                m.offender_count
+                                m.offender_count,
+                                m.geo_address_norm,
+                                m.geo_address_short,
+                                m.geo_address_short_2,
+                                m.geo_score,
+                                m.address_type,
+                                m.lat,
+                                m.lon
                             FROM victim_entity_members m
                             JOIN affected_entities ae ON m.victim_entity_id = ae.entity_uid
                             UNION ALL
@@ -620,7 +653,14 @@ def _integrate_orphan_matches() -> Run[Unit]:
                                 vce.date_precision,
                                 vce.incident_date,
                                 vce.midpoint_day,
-                                vce.offender_count
+                                vce.offender_count,
+                                vce.geo_address_norm,
+                                vce.geo_address_short,
+                                vce.geo_address_short_2,
+                                vce.geo_score,
+                                vce.address_type,
+                                vce.lat,
+                                vce.lon
                             FROM final_orphan_matches fom
                             JOIN victims_cached_enh vce ON vce.victim_row_id = CAST(fom.orphan_uid AS VARCHAR);
                             """
@@ -642,9 +682,80 @@ def _integrate_orphan_matches() -> Run[Unit]:
                                 MAX(offender_count) FILTER (WHERE offender_count IS NOT NULL) AS max_offender_count
                               FROM all_members_temp
                               GROUP BY victim_entity_id
+                            ),
+                            location_base AS (
+                              SELECT
+                                victim_entity_id,
+                                geo_address_norm,
+                                geo_address_short,
+                                geo_address_short_2,
+                                geo_score,
+                                address_type,
+                                lat,
+                                lon,
+                                COUNT(*) OVER (
+                                  PARTITION BY victim_entity_id, geo_address_norm
+                                ) AS geo_norm_count,
+                                MAX(geo_score) OVER (
+                                  PARTITION BY victim_entity_id, geo_address_norm
+                                ) AS geo_norm_max_score,
+                                MAX(
+                                  CASE
+                                    WHEN upper(address_type) = 'NAMED_PLACE' THEN 5
+                                    WHEN upper(address_type) = 'ADDRESS' THEN 4
+                                    WHEN upper(address_type) = 'INTERSECTION' THEN 3
+                                    WHEN upper(address_type) = 'BLOCK' THEN 2
+                                    ELSE 1
+                                  END
+                                ) OVER (
+                                  PARTITION BY victim_entity_id, geo_address_norm
+                                ) AS geo_norm_best_addr_rank,
+                                CASE
+                                  WHEN upper(address_type) = 'NAMED_PLACE' THEN 5
+                                  WHEN upper(address_type) = 'ADDRESS' THEN 4
+                                  WHEN upper(address_type) = 'INTERSECTION' THEN 3
+                                  WHEN upper(address_type) = 'BLOCK' THEN 2
+                                  ELSE 1
+                                END AS addr_rank
+                              FROM all_members_temp
+                              WHERE geo_address_norm IS NOT NULL
+                                AND geo_address_norm <> ''
+                                AND geo_address_norm <> 'UNKNOWN'
+                            ),
+                            location_ranked AS (
+                              SELECT
+                                *,
+                                ROW_NUMBER() OVER (
+                                  PARTITION BY victim_entity_id
+                                  ORDER BY
+                                    geo_norm_max_score DESC NULLS LAST,
+                                    geo_norm_count DESC,
+                                    geo_norm_best_addr_rank DESC,
+                                    addr_rank DESC,
+                                    geo_address_norm ASC,
+                                    geo_score DESC NULLS LAST,
+                                    lat ASC NULLS LAST,
+                                    lon ASC NULLS LAST,
+                                    geo_address_short ASC NULLS LAST,
+                                    geo_address_short_2 ASC NULLS LAST
+                                ) AS rn
+                              FROM location_base
+                            ),
+                            location_best AS (
+                              SELECT
+                                victim_entity_id,
+                                geo_address_norm AS canonical_geo_address_norm,
+                                geo_address_short AS canonical_geo_address_short,
+                                geo_address_short_2 AS canonical_geo_address_short_2,
+                                geo_score AS canonical_geo_score,
+                                address_type AS canonical_address_type,
+                                lat AS canonical_lat,
+                                lon AS canonical_lon
+                              FROM location_ranked
+                              WHERE rn = 1
                             )
                             SELECT
-                              victim_entity_id,
+                              agg.victim_entity_id,
                               CASE
                                 WHEN n_day > 0 THEN 'day'
                                 WHEN n_month > 0 THEN 'month'
@@ -661,8 +772,17 @@ def _integrate_orphan_matches() -> Run[Unit]:
                                   ELSE mode_year_mid
                                 END AS INTEGER
                               ) AS entity_midpoint_day,
-                              max_offender_count
-                            FROM agg;
+                              max_offender_count,
+                              lb.canonical_geo_address_norm,
+                              lb.canonical_geo_address_short,
+                              lb.canonical_geo_address_short_2,
+                              lb.canonical_geo_score,
+                              lb.canonical_address_type,
+                              lb.canonical_lat,
+                              lb.canonical_lon
+                            FROM agg
+                            LEFT JOIN location_best lb
+                              ON agg.victim_entity_id = lb.victim_entity_id;
                             """
                         )
                     )
@@ -674,6 +794,13 @@ def _integrate_orphan_matches() -> Run[Unit]:
                               entity_date_precision = ra.entity_date_precision,
                               incident_date = ra.incident_date,
                               entity_midpoint_day = ra.entity_midpoint_day,
+                              canonical_geo_address_norm = ra.canonical_geo_address_norm,
+                              canonical_geo_address_short = ra.canonical_geo_address_short,
+                              canonical_geo_address_short_2 = ra.canonical_geo_address_short_2,
+                              canonical_geo_score = ra.canonical_geo_score,
+                              canonical_address_type = ra.canonical_address_type,
+                              canonical_lat = ra.canonical_lat,
+                              canonical_lon = ra.canonical_lon,
                               canonical_offender_count = CASE
                                 WHEN ra.max_offender_count IS NOT NULL AND canonical_offender_count IS NOT NULL
                                   THEN GREATEST(canonical_offender_count, ra.max_offender_count)
@@ -746,6 +873,11 @@ def _export_orphan_matches_debug_excel() -> Run[Unit]:
                 CAST(NULL AS BIGINT) AS article_id,
                 e.article_ids_csv,
                 e.city_id, e.year, e.month,
+                e.geo_address_norm,
+                e.geo_address_short,
+                e.geo_address_short_2,
+                e.geo_score,
+                e.address_type,
                 e.lat, e.lon,
                 e.victim_age, e.victim_sex, e.victim_race, e.victim_ethnicity,
                 e.victim_fullname_norm,  -- Added
@@ -774,6 +906,11 @@ def _export_orphan_matches_debug_excel() -> Run[Unit]:
                 o.article_id,
                 o.article_ids_csv,
                 o.city_id, o.year, o.month,
+                o.geo_address_norm,
+                o.geo_address_short,
+                o.geo_address_short_2,
+                o.geo_score,
+                o.address_type,
                 o.lat, o.lon,
                 o.victim_age, o.victim_sex, o.victim_race, o.victim_ethnicity,
                 o.victim_fullname_norm,  -- Added
@@ -798,6 +935,8 @@ def _export_orphan_matches_debug_excel() -> Run[Unit]:
               article_id,
                 city_id, year, month,
               date_precision, incident_date, midpoint_day,
+              geo_address_norm, geo_address_short, geo_address_short_2,
+              geo_score, address_type,
               lat, lon,
               victim_age, victim_sex, victim_race, victim_ethnicity,
               victim_fullname_norm,  -- Added

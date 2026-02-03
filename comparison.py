@@ -511,6 +511,44 @@ DIST_COMP_NEW = cl.CustomComparison(
                     "geo_address_short", 0.90)
             ),
             cllc.And(
+                cllc.Or(
+                    cll.LiteralMatchLevel("address_type", "INTERSECTION", "string", "right"),
+                    cll.LiteralMatchLevel("address_type", "NO_SUCCESS_INTERSECTION", "string", "right"),
+                    cll.LiteralMatchLevel("address_type", "NO_RESULT_INTERSECTION", "string", "right"),
+                ),
+                cll.CustomLevel(
+                    'jaro_winkler_similarity("geo_address_short_l", "geo_address_short_2_r") >= 0.90',
+                    label_for_charts="short vs short2 jw >= 0.90 (right intersection)"
+                ),
+            ),
+            cllc.And(
+                cllc.Or(
+                    cll.LiteralMatchLevel("address_type", "INTERSECTION", "string", "left"),
+                    cll.LiteralMatchLevel("address_type", "NO_SUCCESS_INTERSECTION", "string", "left"),
+                    cll.LiteralMatchLevel("address_type", "NO_RESULT_INTERSECTION", "string", "left"),
+                ),
+                cll.CustomLevel(
+                    'jaro_winkler_similarity("geo_address_short_2_l", "geo_address_short_r") >= 0.90',
+                    label_for_charts="short2 vs short jw >= 0.90 (left intersection)"
+                ),
+            ),
+            cllc.And(
+                cllc.Or(
+                    cll.LiteralMatchLevel("address_type", "INTERSECTION", "string", "left"),
+                    cll.LiteralMatchLevel("address_type", "NO_SUCCESS_INTERSECTION", "string", "left"),
+                    cll.LiteralMatchLevel("address_type", "NO_RESULT_INTERSECTION", "string", "left"),
+                ),
+                cllc.Or(
+                    cll.LiteralMatchLevel("address_type", "INTERSECTION", "string", "right"),
+                    cll.LiteralMatchLevel("address_type", "NO_SUCCESS_INTERSECTION", "string", "right"),
+                    cll.LiteralMatchLevel("address_type", "NO_RESULT_INTERSECTION", "string", "right"),
+                ),
+                cll.CustomLevel(
+                    'jaro_winkler_similarity("geo_address_short_2_l", "geo_address_short_2_r") >= 0.90',
+                    label_for_charts="short2 vs short2 jw >= 0.90 (both intersection)"
+                ),
+            ),
+            cllc.And(
                 DIST_PLACE_TYPE,
                 cll.JaroLevel(
                     "geo_address_norm", 0.5)

@@ -6,6 +6,7 @@ from itertools import groupby
 import splink.internals.comparison_library as cl
 
 from blocking import (
+    DedupBlockRule,
     NAMED_VICTIM_BLOCKS,
     NAMED_VICTIM_DETERMINISTIC_BLOCKS,
     NAMED_VICTIM_BLOCKS_FOR_TRAINING,
@@ -37,6 +38,9 @@ from pymonad import (
     ClustersTableName,
     BlockedPairsTableName,
     DoNotLinkTableName,
+    HashMap,
+    BlockingRuleLike,
+    comparison_level_keys,
     splink_dedupe_job,
     sql_exec,
     sql_export,
@@ -77,6 +81,16 @@ def _dedupe_named_victims(_: Unit) -> Run[Unit]:
     """
     Run initial pass of Splink deduplication on the victims_named table.
     """
+    training_rule: BlockingRuleLike = DedupBlockRule.YEAR_MONTH
+    training_block_level_map = HashMap.make({
+        training_rule: comparison_level_keys(
+            DATE_COMP,
+            [
+                "exact match incident date",
+                "exact yr/mon or within 2 days",
+            ],
+        ),
+    })
     return splink_dedupe_job(
         input_table=PredictionInputTableName("victims_named"),
         settings=_settings_for_victim_dedupe(),
@@ -86,6 +100,7 @@ def _dedupe_named_victims(_: Unit) -> Run[Unit]:
         clusters_out=ClustersTableName("victim_clusters"),
         train_first=True,
         training_blocking_rules=NAMED_VICTIM_BLOCKS_FOR_TRAINING,
+        training_block_level_map=training_block_level_map,
         deterministic_rules=NAMED_VICTIM_DETERMINISTIC_BLOCKS,
         deterministic_recall=0.8,
         em_max_runs=1,
@@ -234,6 +249,7 @@ def _build_representative_victims() -> Run[Unit]:
                 excluding NULL and 'unknown'
       - circumstance: mode excluding NULL and 'undetermined'
       - canonical_age: mode(victim_age) excluding NULL
+      - canonical location: best-of per geo_address_norm (score > mode > address_type rank > tie-break)
       - offender: pick mode(offender_fullname_concat) and corresponding forename/surname
     """
     return (
@@ -300,10 +316,6 @@ def _build_representative_victims() -> Run[Unit]:
                     mode(m.midpoint_day)
                       FILTER (WHERE m.date_precision = 'year')
                       AS mode_year_mid,
-
-                    -- stats
-                    avg(m.lat)  FILTER (WHERE m.lat IS NOT NULL) AS lat_centroid,
-                    avg(m.lon)  FILTER (WHERE m.lon IS NOT NULL) AS lon_centroid,
 
                     -- canonical age: mode excluding NULLs
                     mode(m.victim_age) FILTER (WHERE m.victim_age IS NOT NULL) AS canonical_age,
@@ -398,6 +410,78 @@ def _build_representative_victims() -> Run[Unit]:
                 weapon_canonical AS (
                   SELECT victim_entity_id, canonical_weapon
                   FROM weapon_choice
+                  WHERE rn = 1
+                ),
+                -- -------- Canonical location: best-of --------
+                location_base AS (
+                  SELECT
+                    victim_entity_id,
+                    geo_address_norm,
+                    geo_address_short,
+                    geo_address_short_2,
+                    geo_score,
+                    address_type,
+                    lat,
+                    lon,
+                    COUNT(*) OVER (
+                      PARTITION BY victim_entity_id, geo_address_norm
+                    ) AS geo_norm_count,
+                    MAX(geo_score) OVER (
+                      PARTITION BY victim_entity_id, geo_address_norm
+                    ) AS geo_norm_max_score,
+                    MAX(
+                      CASE
+                        WHEN upper(address_type) = 'NAMED_PLACE' THEN 5
+                        WHEN upper(address_type) = 'ADDRESS' THEN 4
+                        WHEN upper(address_type) = 'INTERSECTION' THEN 3
+                        WHEN upper(address_type) = 'BLOCK' THEN 2
+                        ELSE 1
+                      END
+                    ) OVER (
+                      PARTITION BY victim_entity_id, geo_address_norm
+                    ) AS geo_norm_best_addr_rank,
+                    CASE
+                      WHEN upper(address_type) = 'NAMED_PLACE' THEN 5
+                      WHEN upper(address_type) = 'ADDRESS' THEN 4
+                      WHEN upper(address_type) = 'INTERSECTION' THEN 3
+                      WHEN upper(address_type) = 'BLOCK' THEN 2
+                      ELSE 1
+                    END AS addr_rank
+                  FROM victim_entity_members
+                  WHERE geo_address_norm IS NOT NULL
+                    AND geo_address_norm <> ''
+                    AND geo_address_norm <> 'UNKNOWN'
+                ),
+                location_ranked AS (
+                  SELECT
+                    *,
+                    ROW_NUMBER() OVER (
+                      PARTITION BY victim_entity_id
+                      ORDER BY
+                        geo_norm_max_score DESC NULLS LAST,
+                        geo_norm_count DESC,
+                        geo_norm_best_addr_rank DESC,
+                        addr_rank DESC,
+                        geo_address_norm ASC,
+                        geo_score DESC NULLS LAST,
+                        lat ASC NULLS LAST,
+                        lon ASC NULLS LAST,
+                        geo_address_short ASC NULLS LAST,
+                        geo_address_short_2 ASC NULLS LAST
+                    ) AS rn
+                  FROM location_base
+                ),
+                location_best AS (
+                  SELECT
+                    victim_entity_id,
+                    geo_address_norm AS canonical_geo_address_norm,
+                    geo_address_short AS canonical_geo_address_short,
+                    geo_address_short_2 AS canonical_geo_address_short_2,
+                    geo_score AS canonical_geo_score,
+                    address_type AS canonical_address_type,
+                    lat AS canonical_lat,
+                    lon AS canonical_lon
+                  FROM location_ranked
                   WHERE rn = 1
                 ),
                 -- -------- Offender modal selection (unchanged) --------
@@ -506,8 +590,13 @@ def _build_representative_victims() -> Run[Unit]:
                   a.canonical_offender_count,
 
                   -- location/age
-                  a.lat_centroid,
-                  a.lon_centroid,
+                  lb.canonical_geo_address_norm,
+                  lb.canonical_geo_address_short,
+                  lb.canonical_geo_address_short_2,
+                  lb.canonical_geo_score,
+                  lb.canonical_address_type,
+                  lb.canonical_lat,
+                  lb.canonical_lon,
                   a.canonical_age,
                   a.canonical_victim_count,
                   a.avg_age,
@@ -530,6 +619,8 @@ def _build_representative_victims() -> Run[Unit]:
                   ON wc.victim_entity_id = a.victim_entity_id
                 LEFT JOIN offender_names onm
                   ON onm.victim_entity_id = a.victim_entity_id
+                LEFT JOIN location_best lb
+                  ON lb.victim_entity_id = a.victim_entity_id
                 LEFT JOIN entity_articles ea
                   ON ea.victim_entity_id = a.victim_entity_id;
                 """
