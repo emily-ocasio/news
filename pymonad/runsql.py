@@ -13,6 +13,7 @@ from openpyxl import load_workbook
 from openpyxl.styles import PatternFill
 from openpyxl.formatting.rule import FormulaRule
 from openpyxl.cell import Cell
+from openpyxl.utils import get_column_letter
 
 from .array import Array
 from .monad import Unit
@@ -127,6 +128,17 @@ class SqlExport:
 
 
 @dataclass(frozen=True)
+class SqlImport:
+    """
+    Intent to import a spreadsheet (or CSV) into DuckDB.
+    """
+
+    filename: str
+    table_name: str
+    sheet: str | None = None
+
+
+@dataclass(frozen=True)
 class SqlRegister:
     """
     Intent to register a pandas DataFrame with DuckDB.
@@ -182,6 +194,20 @@ def sql_export(
     )
 
 
+def sql_import(
+    filename: str,
+    table_name: str,
+    sheet: str | None = None,
+) -> Run[None]:
+    """
+    Smart constructor for importing a spreadsheet (or CSV) into DuckDB.
+    """
+    return Run(
+        lambda self: self._perform(SqlImport(filename, table_name, sheet), self),
+        _unhandled,
+    )
+
+
 def sql_register(name: str, df: pd.DataFrame) -> Run[None]:
     """
     Smart constructor for registering a pandas DataFrame in DuckDB.
@@ -192,6 +218,7 @@ def sql_register(name: str, df: pd.DataFrame) -> Run[None]:
 A = TypeVar("A")
 
 def _sql_export(df: pd.DataFrame, filename, sheet, band_by_group_col, band_wrap):
+    widths = _compute_column_widths(df)
     try:
         with pd.ExcelWriter(filename, engine="openpyxl") as writer:
             df.to_excel(writer, sheet_name=sheet or "Sheet1", index=False)
@@ -203,8 +230,10 @@ def _sql_export(df: pd.DataFrame, filename, sheet, band_by_group_col, band_wrap)
                 band_by_group_col,
                 band_wrap,
             )
+            _auto_fit_columns_xlsx(filename, sheet or "Sheet1", widths)
         else:
             _set_freeze_panes_xlsx(filename, sheet or "Sheet1")
+            _auto_fit_columns_xlsx(filename, sheet or "Sheet1", widths)
     except (
         PermissionError,
         FileNotFoundError,
@@ -218,6 +247,16 @@ def _sql_export(df: pd.DataFrame, filename, sheet, band_by_group_col, band_wrap)
             else (filename + ".csv")
         )
         df.to_csv(fallback, index=False)
+
+
+def _sql_import(filename: str, sheet: str | None) -> pd.DataFrame:
+    if filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+        if sheet is None:
+            return pd.read_excel(filename, sheet_name=0)
+        return pd.read_excel(filename, sheet_name=sheet)
+    if filename.lower().endswith(".csv"):
+        return pd.read_csv(filename)
+    raise ValueError(f"Unsupported import file type: {filename}")
 
 
 def _apply_band_formatting_xlsx(
@@ -293,6 +332,8 @@ def _apply_band_formatting_xlsx(
                     data_range,
                     FormulaRule(formula=[formula], fill=fill_list[i]),
                 )
+            if group_col.startswith("__"):
+                ws.column_dimensions[grp_col_letter_direct].hidden = True
             ws.freeze_panes = 'A2'
             wb.save(filename)
             wb.close()
@@ -341,7 +382,84 @@ def _apply_band_formatting_xlsx(
             FormulaRule(formula=[formula], fill=fill_list[i]),
         )
 
+    if group_col.startswith("__"):
+        ws.column_dimensions[grp_col_letter].hidden = True
     ws.freeze_panes = 'A2'
+    wb.save(filename)
+    wb.close()
+
+
+def _estimate_text_width(value: Any) -> float:
+    if value is None:
+        return 0.0
+    if isinstance(value, float) and pd.isna(value):
+        return 0.0
+    text = str(value)
+    if not text:
+        return 0.0
+    max_line = max(text.splitlines(), key=len)
+    width = 0.0
+    for ch in max_line:
+        if "A" <= ch <= "Z":
+            width += 0.9
+        elif "a" <= ch <= "z":
+            width += 0.8
+        elif "0" <= ch <= "9":
+            width += 1.0
+        elif ch.isspace():
+            width += 0.5
+        else:
+            width += 1.0
+    return width
+
+
+def _compute_column_widths(
+    df: pd.DataFrame,
+    sample_limit: int = 1000,
+    padding: float = 2.0,
+    max_width: float = 60.0,
+    min_width: float = 5.0,
+) -> list[float]:
+    widths: list[float] = []
+    for col in df.columns:
+        series = df[col]
+        if len(series) > sample_limit:
+            half = max(sample_limit // 2, 1)
+            sample = pd.concat([series.head(half), series.tail(half)])
+        else:
+            sample = series
+        estimates: list[float] = []
+        for val in sample:
+            est = _estimate_text_width(val)
+            if est > 0:
+                estimates.append(est)
+        if not estimates:
+            widths.append(0.0)
+            continue
+        estimates.sort()
+        cutoff_idx = int(0.97 * (len(estimates) - 1))
+        base = estimates[cutoff_idx]
+        width = min(base + padding, max_width)
+        widths.append(max(width, min_width))
+    return widths
+
+
+def _auto_fit_columns_xlsx(filename: str, sheet: str, widths: list[float]) -> None:
+    try:
+        wb = load_workbook(filename)
+    except KeyError as e:
+        print(f"[WARN] Cannot load {filename} for auto-fit: {e}")
+        return
+    if sheet not in wb.sheetnames:
+        wb.close()
+        return
+    ws = wb[sheet]
+    has_helper = ws.cell(row=1, column=1).value == "_band_helper"
+    if has_helper:
+        ws.column_dimensions["A"].width = 4
+    start_col = 2 if has_helper else 1
+    for idx, width in enumerate(widths, start=start_col):
+        ws.column_dimensions[get_column_letter(idx)].width = float(width)
     wb.save(filename)
     wb.close()
 
@@ -439,6 +557,31 @@ def run_sql(prog: Run[A]) -> Run[A]:
                         raise SQLExecutionError(str(sql), None, ex) from ex
                     _sql_export(df, filename, sheet, band_by_group_col, band_wrap)
                     return None
+                case SqlImport(filename, table_name, sheet):
+                    backend, con = _get_backend_and_conn_run()._step(current)
+                    if backend != DbBackend.DUCKDB:
+                        raise SQLExecutionError(
+                            f"IMPORT {filename}",
+                            None,
+                            RuntimeError("SqlImport requires DuckDB backend."),
+                        )
+                    try:
+                        df = _sql_import(filename, sheet)
+                        con.register(table_name, df)
+                        cols = [c for c in df.columns if c != "_band_helper"]
+                        if cols:
+                            select_cols = ", ".join(f'"{c}"' for c in cols)
+                        else:
+                            select_cols = "*"
+                        con.execute(
+                            f'CREATE OR REPLACE TABLE "{table_name}" AS SELECT'
+                            f' {select_cols} FROM "{table_name}";'
+                        )
+                        return None
+                    except Exception as ex:  # noqa: BLE001
+                        raise SQLExecutionError(
+                            f"IMPORT {filename}", None, ex
+                        ) from ex
                 case SqlRegister(name, df):
                     backend, con = _get_backend_and_conn_run()._step(current)
                     if backend != DbBackend.DUCKDB:

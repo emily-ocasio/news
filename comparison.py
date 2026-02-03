@@ -200,34 +200,6 @@ DATE_COMP = cl.CustomComparison(
                 cll.LiteralMatchLevel("date_precision", "day", "string")
             ),
         ).configure(label_for_charts="exact yr/mon or within 2 days"),
-        # ComparisonLevel(
-        #     "exact year and month",
-        #     ComparisonComp.EXACT_YEAR_MONTH.value
-        # ).to_dict(),
-        # ComparisonLevel(
-        #     "midpoint within 2 days",
-        #     _clause_from_comps(
-        #         ComparisonComp.MIDPOINT_EXISTS,
-        #         ComparisonComp.MIDPOINT_2DAYS,
-        #         ComparisonComp.DAY_PRECISION
-        #     )
-        # ).to_dict(),
-        # ComparisonLevel(
-        #     "midpoint within 10 days",
-        #     _clause_from_comps(
-        #         ComparisonComp.MIDPOINT_EXISTS,
-        #         ComparisonComp.MIDPOINT_10DAYS,
-        #         ComparisonComp.DAY_PRECISION
-        #     )
-        # ).to_dict(),
-        # ComparisonLevel(
-        #     "midpoint within 90 days",
-        #     _clause_from_comps(
-        #         ComparisonComp.MIDPOINT_EXISTS,
-        #         ComparisonComp.MIDPOINT_90DAYS,
-        #         ComparisonComp.MONTH_PRECISION
-        #     )
-        # ).to_dict(),
         ComparisonLevel(
             "midpoint within 7 months",
             _clause_from_comps(
@@ -355,9 +327,38 @@ AGE_COMP = cl.CustomComparison(
     ]
 )
 
+SUMMARY_NULL_COMP = (
+    cllc.Or(
+        cll.NullLevel("summary_vec"),
+        cll.LiteralMatchLevel(
+            ColumnExpression(
+                "list_max(list_transform(summary_vec, x -> abs(x)))"
+            ),
+            "0",
+            "float",
+            side_of_comparison="left",
+        ),
+        cll.LiteralMatchLevel(
+            ColumnExpression(
+                "list_max(list_transform(summary_vec, x -> abs(x)))"
+            ),
+            "0",
+            "float",
+            side_of_comparison="right",
+        ),
+    )
+)
+
 VICTIM_COUNT_COMP = cl.CustomComparison(
     output_column_name="victim_count",
     comparison_levels=[
+        cllc.Or(
+            cll.NullLevel("victim_count"),
+            SUMMARY_NULL_COMP
+        ).configure(
+            label_for_charts="victim counts NULL or zero",
+            is_null_level=True,
+        ),
         NullComparisonLevel(
             "victim counts NULL",
             _null_comp_builder("victim_count")
@@ -442,7 +443,7 @@ DIST_COMP = cl.DistanceInKMAtThresholds(
     km_thresholds=[0.1, 0.5, 1.5],
 )
 
-DIST_STREET_PLACE = cllc.Or(
+DIST_STREET_TYPE = cllc.Or(
     cll.LiteralMatchLevel("address_type", "ADDRESS", "string", "left"),
     cll.LiteralMatchLevel("address_type", "ADDRESS", "string", "right"),
     cll.LiteralMatchLevel("address_type", "INTERSECTION", "string", "left"),
@@ -469,7 +470,7 @@ DIST_STREET_PLACE = cllc.Or(
     cll.LiteralMatchLevel("address_type", "NO_RESULT_STREET_ONLY", "string", "right"),
 )
 
-DIST_ADDR_PLACE = cllc.Or(
+DIST_PLACE_TYPE = cllc.Or(
     cll.LiteralMatchLevel("address_type", "NAMED_PLACE", "string", "left"),
     cll.LiteralMatchLevel("address_type", "NAMED_PLACE", "string", "right"),
     cll.LiteralMatchLevel("address_type", "NO_SUCCESS", "string", "left"),
@@ -505,14 +506,14 @@ DIST_COMP_NEW = cl.CustomComparison(
         cllc.Or(
             cll.DistanceInKMLevel("lat", "lon", 0.4),
             cllc.And(
-                DIST_STREET_PLACE,
-                cll.JaroLevel(
-                    "geo_address_short", 0.95)
+                DIST_STREET_TYPE,
+                cll.JaroWinklerLevel(
+                    "geo_address_short", 0.90)
             ),
             cllc.And(
-                DIST_ADDR_PLACE,
+                DIST_PLACE_TYPE,
                 cll.JaroLevel(
-                    "geo_address_short", 0.5)
+                    "geo_address_norm", 0.5)
             ),
         ).configure(label_for_charts="within 0.4 km or similar address"),
         cll.ElseLevel()
@@ -661,7 +662,27 @@ OFFENDER_ETHNICITY_COMP = cl.CustomComparison(
     ]
 )
 
-SUMMARY_COMP = cl.CosineSimilarityAtThresholds(
-    col_name="summary_vec",
-    score_threshold_or_thresholds=[0.80, 0.65, 0.50]
+
+
+SUMMARY_COMP = cl.CustomComparison(
+    output_column_name="summary_vec",
+    comparison_levels=[
+        SUMMARY_NULL_COMP.configure(
+            label_for_charts="summary empty or 'No details'",
+            is_null_level=True,
+        ),
+        cll.CosineSimilarityLevel(
+            col_name="summary_vec",
+            similarity_threshold=0.80
+        ),
+        cll.CosineSimilarityLevel(
+            col_name="summary_vec",
+            similarity_threshold=0.65
+        ),
+        cll.CosineSimilarityLevel(
+            col_name="summary_vec",
+            similarity_threshold=0.50
+        ),
+        cll.ElseLevel()
+    ]
 )

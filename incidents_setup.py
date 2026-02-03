@@ -16,11 +16,13 @@ from pymonad import (
     Environment,
     SQLParams,
     String,
-    Unit
+    Unit,
 )
 from pymonad.traverse import array_traverse_run
 from menuprompts import NextStep
 from calculations import sbert_average_vector
+
+ZERO_VEC_SQL = f"ARRAY[{', '.join('0' for _ in range(384))}]"
 
 
 def _row_update_run(env: Environment, row) -> Run[Unit]:
@@ -46,6 +48,42 @@ def _row_update_run(env: Environment, row) -> Run[Unit]:
             )
         )
 
+    if key.lower() == "no details":
+        return (
+            put_line(
+                "[I] Summary marked 'No details' -> zero vector "
+                f"(article_id={row['article_id']}, incident_idx={row['incident_idx']}): "
+                f"{key}"
+            )
+            ^ sql_exec(
+                SQL(
+                    f"""
+            UPDATE incidents_cached
+            SET summary_vec = {ZERO_VEC_SQL}
+            WHERE article_id = {row['article_id']}
+              AND incident_idx = {row['incident_idx']};
+            """
+                )
+            )
+        )
+
+    def _cache_miss_update(vec_vals) -> Run[Unit]:
+        return (
+            put_line(f"[I] Cache miss for summary: {key[:60]}")
+            ^ sql_exec(
+                SQL(
+                    f"INSERT INTO sbert_cache (input_text, vec) VALUES (?, ARRAY[{','.join(format(x, '.17g') for x in vec_vals)}]);"
+                ),
+                SQLParams((String(key),)),
+            )
+            ^ sql_exec(
+                SQL(
+                    f"UPDATE incidents_cached SET summary_vec = ARRAY[{','.join(format(x, '.17g') for x in vec_vals)}] WHERE article_id = ? AND incident_idx = ?;"
+                ),
+                SQLParams((row["article_id"], row["incident_idx"])),
+            )
+        )
+
     # Check cache first (parameterized)
     return sql_query(
         SQL("SELECT vec FROM sbert_cache WHERE input_text = ?;"),
@@ -64,25 +102,7 @@ def _row_update_run(env: Environment, row) -> Run[Unit]:
                 )
             )
             if len(rows) > 0
-            else (
-                (
-                    lambda vec_vals: (
-                        put_line(f"[I] Cache miss for summary: {key[:60]}")
-                        ^ sql_exec(
-                            SQL(
-                                f"INSERT INTO sbert_cache (input_text, vec) VALUES (?, ARRAY[{','.join(format(x, '.17g') for x in vec_vals)}]);"
-                            ),
-                            SQLParams((String(key),)),
-                        )
-                        ^ sql_exec(
-                            SQL(
-                                f"UPDATE incidents_cached SET summary_vec = ARRAY[{','.join(format(x, '.17g') for x in vec_vals)}] WHERE article_id = ? AND incident_idx = ?;"
-                            ),
-                            SQLParams((row["article_id"], row["incident_idx"])),
-                        )
-                    )
-                )(sbert_average_vector(env["fasttext_model"].model, key))
-            )
+            else _cache_miss_update(sbert_average_vector(env["fasttext_model"].model, key))
         )
     )
 

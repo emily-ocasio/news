@@ -2371,9 +2371,25 @@ def _run_splink_visualize(linker: Linker, job: SplinkVisualizeJob) -> None:
         ]
         if display_cols:
             print_df = inspect_df[display_cols].reset_index()
-            print(print_df)
+            with pd.option_context(
+                "display.max_rows",
+                None,
+                "display.max_columns",
+                None,
+                "display.width",
+                None,
+            ):
+                print(print_df)
         else:
-            print(inspect_df.reset_index())
+            with pd.option_context(
+                "display.max_rows",
+                None,
+                "display.max_columns",
+                None,
+                "display.width",
+                None,
+            ):
+                print(inspect_df.reset_index())
 
     if job.chart_type == SplinkChartType.WATERFALL:
         if len(inspect_df) > 0:

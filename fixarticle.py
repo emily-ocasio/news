@@ -21,7 +21,7 @@ FIX_PROMPTS: dict[str, str | tuple[str,]] = {
 }
 ARTICLE_PROMPT = ("Apply [S]econd filter via GPT",
                   "Extract incident via [G]PT",
-                  "[C]ontinue to select another article",
+                  "Select another article to [F]ix",
                   "Go back to [M]ain menu")
 
 class FixAction(Enum):
@@ -30,7 +30,7 @@ class FixAction(Enum):
     """
     SECOND_FILTER = MenuChoice('S')
     EXTRACT_INCIDENTS = MenuChoice('G')
-    CONTINUE = MenuChoice('C')
+    CONTINUE = MenuChoice('F')
     MAIN_MENU = MenuChoice('M')
     QUIT = MenuChoice('Q')
 
@@ -38,12 +38,16 @@ def input_record_id() -> Run[int]:
     """
     Prompt the user to input a record ID.
     """
+    def normalize_record_id(record_id: int) -> Run[int]:
+        if record_id < 100000000:
+            return pure(record_id + 100000000)
+        return pure(record_id)
     def check_if_zero(record_id: int) -> Run[int]:
         if record_id <= 0:
             return throw(ErrorPayload("", ArticleAppError.USER_ABORT))
         return pure(record_id)
     return \
-        input_number(PromptKey('record_id')) >> check_if_zero
+        input_number(PromptKey('record_id')) >> normalize_record_id >> check_if_zero
 
 def retrieve_single_article() -> Run[Article]:
     """

@@ -87,6 +87,7 @@ from .runsql import (
     sql_script,
     with_duckdb,
     sql_export,
+    sql_import,
 )
 from .runopenai import (
     run_openai,

@@ -30,6 +30,7 @@ class BlockComp(StrEnum):
         "floor((r.midpoint_day_block+30)/61)"
     )
     YEAR_BLOCK_1 = "abs(l.year_block - r.year_block) <= 1"
+    YEAR_DIFF_2 = "abs(l.year - r.year) <= 2"
     EXACT_YEAR_BLOCK = "l.year_block = r.year_block"
     EXACT_YEAR = "l.year = r.year"
     EXACT_YEAR_MONTH = "l.year = r.year AND l.month = r.month"
@@ -108,6 +109,7 @@ class TrainBlockRule(StrEnum):
     YEAR = _train_block_from_comps(BlockComp.EXACT_YEAR)
     YEAR_MONTH = _train_block_from_comps(BlockComp.EXACT_YEAR_MONTH)
     YEAR_BLOCK_1 = _train_block_from_comps(BlockComp.YEAR_BLOCK_1)
+    YEAR_DIFF_2 = _train_block_from_comps(BlockComp.YEAR_DIFF_2)
     EXACT_YEAR_BLOCK = _train_block_from_comps(BlockComp.EXACT_YEAR_BLOCK)
     SAME_NAMES = _train_block_from_comps(BlockComp.SAME_NAMES)
     SAME_FULLNAME = _train_block_from_comps(BlockComp.SAME_FULLNAME)
@@ -173,6 +175,10 @@ class DedupBlockRule(StrEnum):
                                         BlockComp.LONG_LAT_EXISTS,
                                         BlockComp.CLOSE_LONG_LAT)
     SAME_NAMES = _block_from_comps(BlockComp.SAME_NAMES)
+    SAME_NAMES_YEAR_DIFF2 = _block_from_comps(
+        BlockComp.SAME_NAMES,
+        BlockComp.YEAR_DIFF_2
+    )
     SAME_FULLNAME = _block_from_comps(BlockComp.SAME_FULLNAME)
     YEAR_SAME_NAMES = _block_from_comps(
         BlockComp.EXACT_YEAR,
@@ -214,7 +220,7 @@ class DedupBlockRule(StrEnum):
 
 
 NAMED_VICTIM_BLOCKS = [
-    DedupBlockRule.SAME_NAMES,
+    DedupBlockRule.SAME_NAMES_YEAR_DIFF2,
     DedupBlockRule.YEAR_MONTH,
     DedupBlockRule.DATE_LOCATION,
     DedupBlockRule.YEAR_SURNAME_SOUNDEX,

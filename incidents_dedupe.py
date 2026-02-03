@@ -25,6 +25,7 @@ from comparison import (
 )
 from menuprompts import NextStep
 from splink_types import SplinkType
+from cluster_compare import ClusterCompareRequest, compare_cluster_tables
 from pymonad import (
     Run,
     SQL,
@@ -40,6 +41,7 @@ from pymonad import (
     sql_exec,
     sql_export,
     sql_query,
+    sql_import,
     unit,
     with_duckdb,
 )
@@ -544,63 +546,144 @@ def _export_final_clusters_excel() -> Run[Unit]:
     """
     Export all clusters (one row per article/member) to an Excel file.
     """
-    return (
-        sql_export(
+    final_clusters_select = SQL(
+        """--sql
+    WITH canon AS (
+      SELECT
+        vc.cluster_id AS cluster_id,
+        mode(v.victim_surname_norm) AS canonical_surname
+      FROM victim_clusters vc
+      JOIN victims_cached_enh v
+        ON vc.victim_row_id = v.victim_row_id
+      WHERE v.victim_surname_norm IS NOT NULL
+      GROUP BY vc.cluster_id
+    )
+    SELECT
+      c.cluster_id,
+      c.member_count,
+      cn.canonical_surname,
+      v.article_id,
+      v.victim_row_id,
+      v.city_id,
+      v.incident_date,
+      v.midpoint_day,
+      v.date_precision,
+      v.victim_name_raw,
+      v.victim_fullname_concat,
+      v.victim_forename_norm,
+      v.victim_surname_norm,
+      v.victim_age,
+      v.victim_count,
+      v.offender_count,
+      v.victim_sex,
+      v.lat,
+      v.lon,
+      v.address_type,
+      v.geo_address_short,
+      v.geo_address_short_2,
+      v.geo_score,
+      COALESCE(v.geo_address_norm, '') AS address,
+      COALESCE(v.offender_name_norm, '') AS offender,
+      COALESCE(v.weapon, '') AS weapon
+    FROM victim_clusters_counts c
+    JOIN victim_clusters vc
+      ON c.cluster_id = vc.cluster_id
+    JOIN victims_cached_enh v
+      ON vc.victim_row_id = v.victim_row_id
+    LEFT JOIN canon cn
+      ON c.cluster_id = cn.cluster_id
+    ORDER BY
+      cn.canonical_surname NULLS LAST,
+      c.cluster_id,
+      v.victim_surname_norm NULLS LAST,
+      v.victim_forename_norm NULLS LAST,
+      v.victim_name_raw,
+      v.article_id
+    """
+    )
+
+    def _register_previous_final_clusters_if_exists() -> Run[bool]:
+        return sql_query(
             SQL(
                 """--sql
-            WITH canon AS (
-              SELECT
-                vc.cluster_id AS cluster_id,
-                mode(v.victim_surname_norm) AS canonical_surname
-              FROM victim_clusters vc
-              JOIN victims_cached_enh v
-                ON vc.victim_row_id = v.victim_row_id
-              WHERE v.victim_surname_norm IS NOT NULL
-              GROUP BY vc.cluster_id
-            )
-            SELECT
-              c.cluster_id,
-              c.member_count,
-              cn.canonical_surname,
-              v.article_id,
-              v.victim_row_id,
-              v.city_id,
-              v.incident_date,
-              v.midpoint_day,
-              v.date_precision,
-              v.victim_name_raw,
-              v.victim_fullname_concat,
-              v.victim_forename_norm,
-              v.victim_surname_norm,
-              v.victim_age,
-              v.victim_count,
-              v.offender_count,
-              v.victim_sex,
-              v.lat,
-              v.lon,
-              v.address_type,
-              v.geo_address_short,
-              v.geo_address_short_2,
-              v.geo_score,
-              COALESCE(v.geo_address_norm, '') AS address,
-              COALESCE(v.offender_name_norm, '') AS offender,
-              COALESCE(v.weapon, '') AS weapon
-            FROM victim_clusters_counts c
-            JOIN victim_clusters vc
-              ON c.cluster_id = vc.cluster_id
-            JOIN victims_cached_enh v
-              ON vc.victim_row_id = v.victim_row_id
-            LEFT JOIN canon cn
-              ON c.cluster_id = cn.cluster_id
-            ORDER BY
-              cn.canonical_surname NULLS LAST,
-              c.cluster_id,
-              v.victim_surname_norm NULLS LAST,
-              v.victim_forename_norm NULLS LAST,
-              v.victim_name_raw,
-              v.article_id
+            SELECT CASE
+              WHEN COUNT(*) > 0 THEN TRUE
+              ELSE FALSE
+            END AS exists_flag
+            FROM glob('final_clusters.xlsx');
             """
-            ),
+            )
+        ) >> (
+            lambda rows: (
+                (
+                    sql_import("final_clusters.xlsx", "final_clusters_prev")
+                    ^ put_line(
+                        "[D] Loaded existing final_clusters.xlsx into final_clusters_prev."
+                    )
+                    ^ pure(True)
+                )
+                if rows and rows[0]["exists_flag"]
+                else (put_line("[D] No existing final_clusters.xlsx found.") ^ pure(False))
+            )
+        )
+
+    def _maybe_export_diffs(has_prev: bool) -> Run[Unit]:
+        if not has_prev:
+            return pure(unit)
+        return (
+            compare_cluster_tables(
+                ClusterCompareRequest(
+                    left_table="final_clusters_prev",
+                    right_table="final_clusters_current",
+                    member_id_col="victim_row_id",
+                    output_table="cluster_diffs",
+                )
+            )
+            >> (
+                lambda _: sql_export(
+                    SQL(
+                        """--sql
+                    SELECT
+                      *,
+                      concat(cast(source AS varchar), '::', cast(cluster_id AS varchar)) AS __band_group
+                    FROM cluster_diffs
+                    ORDER BY
+                      source,
+                      canonical_surname NULLS LAST,
+                      cluster_id,
+                      victim_surname_norm NULLS LAST,
+                      victim_forename_norm NULLS LAST,
+                      victim_name_raw,
+                      article_id
+                    """
+                    ),
+                    "cluster_diffs.xlsx",
+                    "ClusterDiffs",
+                    band_by_group_col="__band_group",
+                    band_wrap=2,
+                )
+            )
+            ^ put_line("[D] Wrote cluster_diffs.xlsx.")
+            ^ pure(unit)
+        )
+
+    return (
+        _register_previous_final_clusters_if_exists()
+        >> (
+            lambda has_prev: (
+                sql_exec(
+                    SQL(
+                        f"""--sql
+                CREATE OR REPLACE TABLE final_clusters_current AS
+                {final_clusters_select}
+                """
+                    )
+                )
+                ^ _maybe_export_diffs(has_prev)
+            )
+        )
+        ^ sql_export(
+            final_clusters_select,
             "final_clusters.xlsx",
             "FinalClusters",
             band_by_group_col="cluster_id",
