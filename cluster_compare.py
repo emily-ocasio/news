@@ -17,6 +17,7 @@ class ClusterCompareRequest:
     left_table: str
     right_table: str
     member_id_col: str
+    cluster_id_col: str = "cluster_id"
     output_table: str = "cluster_compare_unmatched"
 
 
@@ -54,6 +55,8 @@ def _order_by_columns(cols: list[str], member_id_col: str) -> list[str]:
         order.append("canonical_surname")
     if "cluster_id" in cols:
         order.append("cluster_id")
+    if "match_id" in cols and "cluster_id" not in order:
+        order.append("match_id")
     if "victim_surname_norm" in cols:
         order.append("victim_surname_norm")
     if "victim_forename_norm" in cols:
@@ -94,7 +97,7 @@ def _build_compare_sql(
     right_table = _qtable(req.right_table)
     out_table = _qtable(req.output_table)
     member_col = _qident(req.member_id_col)
-    cluster_col = _qident("cluster_id")
+    cluster_col = _qident(req.cluster_id_col)
 
     order_expr = ", ".join([_qident("source")] + [_qident(c) for c in order_cols])
     left_select = _select_list(merged_cols, left_cols, "l")
@@ -155,7 +158,7 @@ def _build_result(req: ClusterCompareRequest) -> Run[ClusterCompareResult]:
                 f"""--sql
 SELECT
   source,
-  COUNT(DISTINCT cluster_id) AS n
+  COUNT(DISTINCT {req.cluster_id_col}) AS n
 FROM {req.output_table}
 GROUP BY source
 ORDER BY source;
@@ -246,7 +249,7 @@ def _validate_columns(
     req: ClusterCompareRequest, left_cols: list[str], right_cols: list[str]
 ) -> Run[None]:
     missing = []
-    for col in ("cluster_id", req.member_id_col):
+    for col in (req.cluster_id_col, req.member_id_col):
         if col not in left_cols:
             missing.append(f"{req.left_table}.{col}")
         if col not in right_cols:

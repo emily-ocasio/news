@@ -20,7 +20,7 @@ from comparison import (
     OFFENDER_COMP,
     OFFENDER_AGE_COMP,
     OFFENDER_SEX_COMP,
-    WEAPON_COMP,
+    TF_WEAPON_COMP,
     CIRC_COMP,
     SUMMARY_COMP
 )
@@ -831,7 +831,7 @@ def _settings_for_victim_dedupe() -> dict:
         OFFENDER_COMP,
         OFFENDER_AGE_COMP,
         OFFENDER_SEX_COMP,
-        WEAPON_COMP,
+        TF_WEAPON_COMP,
         CIRC_COMP,
         SUMMARY_COMP
         # same_article_comp,  # Add the new comparison here

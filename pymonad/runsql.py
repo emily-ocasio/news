@@ -282,6 +282,10 @@ def _apply_band_formatting_xlsx(
 
     # Read header row
     header = [cell.value for cell in ws[1]]
+    for idx, name in enumerate(header, start=1):
+        if isinstance(name, str) and name.startswith("__"):
+            col_letter = cast(Cell, ws.cell(row=1, column=idx)).column_letter
+            ws.column_dimensions[col_letter].hidden = True
     if group_col not in header:
         wb.close()
         return

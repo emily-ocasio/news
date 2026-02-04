@@ -186,10 +186,18 @@ DATE_COMP = cl.CustomComparison(
             "incident dates NULL",
             ComparisonComp.DATE_NULL.value
         ).to_dict(),
-        ComparisonLevel(
-            "exact match incident date",
-            ComparisonComp.EXACT_YEAR_MONTH_DAY.value
-        ).to_dict(),
+        cll.And(
+            cll.ExactMatchLevel("year"),
+            cll.ExactMatchLevel("month"),
+            cll.Or(
+                cll.And(
+                    cll.ExactMatchLevel("midpoint_day"),
+                    cll.LiteralMatchLevel("date_precision", "day", "string")
+                ),
+                cll.LiteralMatchLevel("date_precision", "month", "string", "left"),
+                cll.LiteralMatchLevel("date_precision", "month", "string", "right")
+            ),
+        ).configure(label_for_charts="exact date or month precision match"),
         cllc.Or(
             cllc.And(
                 cll.ExactMatchLevel("year"),
@@ -208,10 +216,12 @@ DATE_COMP = cl.CustomComparison(
                 ComparisonComp.YEAR_PRECISION
             )
         ).to_dict(),
+        cll.AbsoluteDifferenceLevel("midpoint_day", 370).configure(
+            label_for_charts="within a year"
+        ),
         cll.ElseLevel()
     ]
 )
-
 
 DATE_COMP_ORPHAN = cl.CustomComparison(
     output_column_name="incident_date",
@@ -220,34 +230,32 @@ DATE_COMP_ORPHAN = cl.CustomComparison(
             "incident dates NULL",
             ComparisonComp.DATE_NULL.value
         ).to_dict(),
-        ComparisonLevel(
-            "exact match incident date",
-            ComparisonComp.EXACT_YEAR_MONTH_DAY.value
-        ).to_dict(),
-        ComparisonLevel(
-            "midpoint within 2 days",
-            _clause_from_comps(
-                ComparisonComp.MIDPOINT_EXISTS,
-                ComparisonComp.MIDPOINT_2DAYS,
-                ComparisonComp.DAY_PRECISION
-            )
-        ).to_dict(),
-        ComparisonLevel(
-            "midpoint within 10 days",
-            _clause_from_comps(
-                ComparisonComp.MIDPOINT_EXISTS,
-                ComparisonComp.MIDPOINT_10DAYS,
-                ComparisonComp.DAY_PRECISION
-            )
-        ).to_dict(),
-        ComparisonLevel(
-            "midpoint within 90 days",
-            _clause_from_comps(
-                ComparisonComp.MIDPOINT_EXISTS,
-                ComparisonComp.MIDPOINT_90DAYS,
-                ComparisonComp.MONTH_PRECISION
-            )
-        ).to_dict(),
+        cll.And(
+            cll.ExactMatchLevel("year"),
+            cll.ExactMatchLevel("month"),
+            cll.Or(
+                cll.And(
+                    cll.AbsoluteDifferenceLevel("midpoint_day", 2),
+                    cll.LiteralMatchLevel("date_precision", "day", "string")
+                ),
+                cll.LiteralMatchLevel("date_precision", "month", "string", "left"),
+                cll.LiteralMatchLevel("date_precision", "month", "string", "right")
+            ),
+        ).configure(label_for_charts="exact date or month precision match"),
+        cllc.Or(
+            cllc.And(
+                cll.ExactMatchLevel("year"),
+                cll.ExactMatchLevel("month"),
+                cll.LiteralMatchLevel("date_precision", "day", "string")
+            ),
+            cllc.And(
+                cll.AbsoluteDifferenceLevel("midpoint_day", 210),
+                cllc.Or(
+                    cll.LiteralMatchLevel("date_precision", "year", "string", "left"),
+                    cll.LiteralMatchLevel("date_precision", "year", "string", "right")
+                )
+            ),
+        ).configure(label_for_charts="exact yr/mon or year precision match"),
         # ComparisonLevel(
         #     "midpoint within 7 months",
         #     _clause_from_comps(
@@ -256,9 +264,14 @@ DATE_COMP_ORPHAN = cl.CustomComparison(
         #         ComparisonComp.YEAR_PRECISION
         #     )
         # ).to_dict(),
+        cll.AbsoluteDifferenceLevel("midpoint_day", 370).configure(
+            label_for_charts="within a year"
+        ),
         cll.ElseLevel()
     ]
 )
+
+
 
 DATE_COMP_SHR = cl.CustomComparison(
     output_column_name="incident_date",
@@ -432,6 +445,21 @@ AGE_COMP_ORPHAN = cl.CustomComparison(
             "victim ages within 2 years",
             ComparisonComp.AGE_2YEAR.value,
             "victim_age"
+        ).to_dict(),
+        cll.ElseLevel()
+    ]
+)
+
+VICTIM_SEX_COMP = cl.CustomComparison(
+    output_column_name="victim_sex",
+    comparison_levels=[
+        NullComparisonLevel(
+            "victim sex NULL",
+            _null_comp_builder("victim_sex")
+        ).to_dict(),
+        ComparisonLevel(
+            "exact match victim sex",
+            _exact_comp_builder("victim_sex")
         ).to_dict(),
         cll.ElseLevel()
     ]

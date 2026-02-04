@@ -27,6 +27,7 @@ from splink.internals.charts import unlinkables_chart
 from splink.internals.comparison import Comparison as SplinkComparison
 from splink.internals.comparison_creator import ComparisonCreator
 from splink.internals.misc import bayes_factor_to_prob, prob_to_bayes_factor
+from splink.internals.parse_sql import get_columns_used_from_sql
 from splink.internals.pipeline import CTEPipeline
 
 # pylint:disable=W0212
@@ -344,6 +345,91 @@ def _maybe_adjust_lambda_for_training_rule(
     return _put_lines(lines)
 
 
+def _log_training_comparisons(
+    training_rule: BlockingRuleLike,
+    ctx: SplinkContext,
+    linker: Linker,
+) -> Run[Unit]:
+    try:
+        blocking_rule = to_blocking_rule_creator(training_rule).get_blocking_rule(
+            linker._sql_dialect_str
+        )
+    except Exception as exc: #pylint: disable=W0718
+        return _put_line_unit(
+            f"EM training comparisons: unable to resolve blocking rule ({exc})"
+        )
+    try:
+        sqlglot_dialect = linker._db_api.sql_dialect.sqlglot_dialect
+        br_cols = get_columns_used_from_sql(
+            blocking_rule.blocking_rule_sql,
+            sqlglot_dialect=sqlglot_dialect,
+        )
+    except Exception as exc: #pylint: disable=W0718
+        return _put_line_unit(
+            f"EM training comparisons: unable to parse blocking rule ({exc})"
+        )
+
+    comparisons = linker._settings_obj.comparisons
+    included: list[SplinkComparison] = []
+    excluded: list[SplinkComparison] = []
+    br_cols_set = set(br_cols)
+    for comp in comparisons:
+        comp_cols = [c.input_name for c in comp._input_columns_used_by_case_statement]
+        if br_cols_set.intersection(comp_cols):
+            excluded.append(comp)
+        else:
+            included.append(comp)
+
+    def _fmt_comp(comp: SplinkComparison) -> str:
+        description = comp.comparison_description or "no description"
+        return f"{comp.output_column_name} ({description})"
+
+    lines = [
+        f"EM training comparisons for rule: {blocking_rule.blocking_rule_sql}",
+        f"  blocking_columns: {', '.join(sorted(br_cols_set)) or 'none'}",
+        f"  included ({len(included)}):",
+    ]
+    if included:
+        lines.extend([f"    {_fmt_comp(comp)}" for comp in included])
+    else:
+        lines.append("    none")
+    lines.append(f"  excluded_due_to_blocking_columns ({len(excluded)}):")
+    if excluded:
+        lines.extend([f"    {_fmt_comp(comp)}" for comp in excluded])
+    else:
+        lines.append("    none")
+    try:
+        input_tables = list(linker._input_tables_dict.values())
+        if len(input_tables) == 1:
+            table_or_tables: str | list[str] = input_tables[0].physical_name
+        else:
+            table_or_tables = [df.physical_name for df in input_tables]
+        counts = blocking_analysis.count_comparisons_from_blocking_rule(
+            table_or_tables=table_or_tables,
+            blocking_rule=blocking_rule.blocking_rule_sql,
+            link_type=ctx.settings.get("link_type", "dedupe_only"),
+            db_api=linker._db_api,
+            unique_id_column_name=ctx.settings.get(
+                "unique_id_column_name", "unique_id"
+            ),
+            source_dataset_column_name=ctx.settings.get(
+                "source_dataset_column_name"
+            ),
+            compute_post_filter_count=True,
+        )
+        pre_filter = counts.get(
+            "number_of_comparisons_generated_pre_filter_conditions"
+        )
+        post_filter = counts.get(
+            "number_of_comparisons_to_be_scored_post_filter_conditions"
+        )
+        lines.append(f"  training_pairs_pre_filter: {pre_filter}")
+        lines.append(f"  training_pairs_post_filter: {post_filter}")
+    except Exception as exc: #pylint: disable=W0718
+        lines.append(f"  training_pairs_count_skipped: {exc}")
+    return _put_lines(lines)
+
+
 def _train_linker_em_runs(
     ctx: SplinkContext,
     linker: Linker,
@@ -431,6 +517,9 @@ def _train_linker_em_runs(
         return (
             _with_splink_context_linker(
                 bind_first(_maybe_adjust_lambda_for_training_rule, training_rule)
+            )
+            ^ _with_splink_context_linker(
+                bind_first(_log_training_comparisons, training_rule)
             )
             >> (lambda _: _run_em())
             >> (lambda params: _restore_lambda(original_lambda, params))

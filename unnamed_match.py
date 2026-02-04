@@ -4,7 +4,6 @@ Match unnamed (orphan) victims to previously deduped victim clusters.
 
 import hashlib
 import networkx as nx
-from splink.internals import comparison_library as cl
 
 from blocking import (
     ORPHAN_VICTIM_BLOCKS,
@@ -14,18 +13,22 @@ from blocking import (
 )
 
 from comparison import (
-    DATE_COMP as DATE_COMP_ORPHAN,
+    DATE_COMP_ORPHAN,
     AGE_COMP_ORPHAN,
+    VICTIM_SEX_COMP,
     VICTIM_COUNT_COMP,
     DIST_COMP_NEW as DIST_COMP,
     OFFENDER_COMP,
     TF_WEAPON_COMP,
     CIRC_COMP,
     SUMMARY_COMP,
+    OFFENDER_AGE_COMP,
+    OFFENDER_SEX_COMP
 )
 
 from menuprompts import NextStep
 from splink_types import SplinkType
+from cluster_compare import ClusterCompareRequest, compare_cluster_tables
 from pymonad import (
     Environment,
     Run,
@@ -40,6 +43,7 @@ from pymonad import (
     splink_dedupe_job,
     sql_exec,
     sql_export,
+    sql_import,
     SQL,
     sql_query,
     put_line,
@@ -357,14 +361,50 @@ def _link_orphans_to_entities(_: Environment) -> Run[Unit]:
     """
     Link orphan victims to existing victim entities using Splink.
     """
-    training_rule: BlockingRuleLike = TrainBlockRule.YEAR_MONTH
+    year_month_rule: BlockingRuleLike = TrainBlockRule.YEAR_MONTH
+    sex_within_year_rule: BlockingRuleLike = TrainBlockRule.SEX_WITHIN_YEAR
+    geo_short_rule: BlockingRuleLike = TrainBlockRule.GEO_SHORT
+    offender_sex_within_year_rule: BlockingRuleLike = (
+        TrainBlockRule.OFFENDER_SEX_WITHIN_YEAR
+    )
     training_block_level_map = HashMap.make({
-        training_rule: comparison_level_keys(
-            DATE_COMP_ORPHAN,
-            [
-                "exact match incident date",
-                "midpoint within 2 days",
-            ],
+        year_month_rule: (
+            comparison_level_keys(
+                DATE_COMP_ORPHAN,
+                [
+                    "exact date or month precision match",
+                    "exact yr/mon or year precision match",
+                ],
+            )
+        ),
+        sex_within_year_rule: (
+            comparison_level_keys(
+                DATE_COMP_ORPHAN,
+                [
+                    "exact date or month precision match",
+                    "exact yr/mon or year precision match",
+                    "within a year",
+                ],
+            )
+        ),
+        geo_short_rule: (
+            comparison_level_keys(
+                DIST_COMP,
+                [
+                    "exact location match",
+                    "within 0.4 km or similar address",
+                ],
+            )
+        ),
+        offender_sex_within_year_rule: (
+            comparison_level_keys(
+                DATE_COMP_ORPHAN,
+                [
+                    "exact date or month precision match",
+                    "exact yr/mon or year precision match",
+                    "within a year",
+                ],
+            )
         ),
     })
     return splink_dedupe_job(
@@ -377,12 +417,14 @@ def _link_orphans_to_entities(_: Environment) -> Run[Unit]:
                 DATE_COMP_ORPHAN,
                 AGE_COMP_ORPHAN,
                 DIST_COMP,
-                cl.ExactMatch("victim_sex").configure(term_frequency_adjustments=True),
+                VICTIM_SEX_COMP,
                 OFFENDER_COMP,
                 TF_WEAPON_COMP,
                 CIRC_COMP,
                 SUMMARY_COMP,
                 VICTIM_COUNT_COMP,
+                OFFENDER_AGE_COMP,
+                OFFENDER_SEX_COMP,
             ],
         },
         predict_threshold=0.5,
@@ -971,36 +1013,239 @@ def export_final_victim_entities_excel() -> Run[Unit]:
     - 1: entities newly matched to orphans
     - 2: singleton orphans that became new entities
     """
-    return (
-        sql_export(
+    final_victim_entities_select = SQL(
+        """--sql
+        SELECT
+          vern.*,
+          CASE
+            WHEN vern.victim_entity_id IN (SELECT victim_entity_id FROM victim_entity_reps) THEN
+              CASE WHEN vern.victim_entity_id IN (SELECT DISTINCT entity_uid FROM final_orphan_matches) THEN 'newly_matched'
+                   ELSE 'unmatched_entity'
+              END
+            ELSE 'singleton_orphan'
+          END AS category,
+          CASE
+            WHEN vern.victim_entity_id IN (SELECT victim_entity_id FROM victim_entity_reps) THEN
+              CASE WHEN vern.victim_entity_id IN (SELECT DISTINCT entity_uid FROM final_orphan_matches) THEN 1
+                   ELSE 0
+              END
+            ELSE 2
+          END AS band_key
+        FROM victim_entity_reps_new vern
+        ORDER BY entity_midpoint_day
+        """
+    )
+
+    def _register_previous_final_victim_entities_if_exists() -> Run[bool]:
+        return sql_query(
             SQL(
                 """--sql
+            SELECT CASE
+              WHEN COUNT(*) > 0 THEN TRUE
+              ELSE FALSE
+            END AS exists_flag
+            FROM glob('final_victim_entities.xlsx');
+            """
+            )
+        ) >> (
+            lambda rows: (
+                (
+                    sql_import("final_victim_entities.xlsx", "final_victim_entities_prev")
+                    ^ put_line(
+                        "[U] Loaded existing final_victim_entities.xlsx into final_victim_entities_prev."
+                    )
+                    ^ pure(True)
+                )
+                if rows and rows[0]["exists_flag"]
+                else (
+                    put_line("[U] No existing final_victim_entities.xlsx found.")
+                    ^ pure(False)
+                )
+            )
+        )
+
+    def _maybe_export_final_victim_entity_diffs(has_prev: bool) -> Run[Unit]:
+        if not has_prev:
+            return pure(unit)
+        return (
+            sql_exec(
+                SQL(
+                    """--sql
+                CREATE OR REPLACE VIEW final_victim_entities_prev_cmp AS
                 SELECT
-                  vern.*,
+                  victim_entity_id,
+                  city_id,
+                  min_event_day,
+                  max_event_day,
+                  entity_date_precision,
+                  incident_date,
+                  entity_midpoint_day,
+                  canonical_fullname,
+                  canonical_sex,
+                  canonical_race,
+                  canonical_ethnicity,
+                  canonical_offender_age,
+                  canonical_offender_sex,
+                  canonical_offender_race,
+                  canonical_offender_ethnicity,
+                  canonical_offender_count,
+                  canonical_geo_address_norm,
+                  canonical_geo_address_short,
+                  canonical_geo_address_short_2,
+                  canonical_geo_score,
+                  canonical_address_type,
+                  canonical_lat,
+                  canonical_lon,
+                  canonical_age,
+                  canonical_victim_count,
+                  avg_age,
+                  min_age,
+                  max_age,
+                  mode_weapon,
+                  mode_circumstance,
+                  offender_fullname,
+                  offender_forename,
+                  offender_surname,
+                  cluster_size,
+                  article_ids_csv,
+                  category,
+                  band_key,
                   CASE
-                    WHEN vern.victim_entity_id IN (SELECT victim_entity_id FROM victim_entity_reps) THEN
-                      CASE WHEN vern.victim_entity_id IN (SELECT DISTINCT entity_uid FROM final_orphan_matches) THEN 'newly_matched'
-                           ELSE 'unmatched_entity'
-                      END
-                    ELSE 'singleton_orphan'
-                  END AS category,
-                  CASE
-                    WHEN vern.victim_entity_id IN (SELECT victim_entity_id FROM victim_entity_reps) THEN
-                      CASE WHEN vern.victim_entity_id IN (SELECT DISTINCT entity_uid FROM final_orphan_matches) THEN 1
-                           ELSE 0
-                      END
-                    ELSE 2
-                  END AS band_key
-                FROM victim_entity_reps_new vern
-                ORDER BY entity_midpoint_day
+                    WHEN coalesce(trim(article_ids_csv), '') = '' THEN
+                      concat('empty::', cast(victim_entity_id AS varchar))
+                    ELSE array_to_string(
+                      list_sort(
+                        string_split(
+                          regexp_replace(coalesce(article_ids_csv, ''), '\\s+', '', 'g'),
+                          ','
+                        )
+                      ),
+                      '|'
+                    )
+                  END AS __member_norm
+                FROM final_victim_entities_prev;
                 """
-            ),
+                )
+            )
+            ^ sql_exec(
+                SQL(
+                    """--sql
+                CREATE OR REPLACE VIEW final_victim_entities_current_cmp AS
+                SELECT
+                  victim_entity_id,
+                  city_id,
+                  min_event_day,
+                  max_event_day,
+                  entity_date_precision,
+                  incident_date,
+                  entity_midpoint_day,
+                  canonical_fullname,
+                  canonical_sex,
+                  canonical_race,
+                  canonical_ethnicity,
+                  canonical_offender_age,
+                  canonical_offender_sex,
+                  canonical_offender_race,
+                  canonical_offender_ethnicity,
+                  canonical_offender_count,
+                  canonical_geo_address_norm,
+                  canonical_geo_address_short,
+                  canonical_geo_address_short_2,
+                  canonical_geo_score,
+                  canonical_address_type,
+                  canonical_lat,
+                  canonical_lon,
+                  canonical_age,
+                  canonical_victim_count,
+                  avg_age,
+                  min_age,
+                  max_age,
+                  mode_weapon,
+                  mode_circumstance,
+                  offender_fullname,
+                  offender_forename,
+                  offender_surname,
+                  cluster_size,
+                  article_ids_csv,
+                  category,
+                  band_key,
+                  CASE
+                    WHEN coalesce(trim(article_ids_csv), '') = '' THEN
+                      concat('empty::', cast(victim_entity_id AS varchar))
+                    ELSE array_to_string(
+                      list_sort(
+                        string_split(
+                          regexp_replace(coalesce(article_ids_csv, ''), '\\s+', '', 'g'),
+                          ','
+                        )
+                      ),
+                      '|'
+                    )
+                  END AS __member_norm
+                FROM final_victim_entities_current;
+                """
+                )
+            )
+            ^ compare_cluster_tables(
+                ClusterCompareRequest(
+                    left_table="final_victim_entities_prev_cmp",
+                    right_table="final_victim_entities_current_cmp",
+                    cluster_id_col="victim_entity_id",
+                    member_id_col="__member_norm",
+                    output_table="final_victim_entities_diffs",
+                )
+            )
+            >> (
+                lambda _: sql_export(
+                    SQL(
+                        """--sql
+                    SELECT
+                      *,
+                      concat(cast(source AS varchar), '::', cast(victim_entity_id AS varchar)) AS __band_group
+                    FROM final_victim_entities_diffs
+                    ORDER BY
+                      entity_midpoint_day NULLS LAST,
+                      victim_entity_id,
+                      victim_entity_id
+                    """
+                    ),
+                    "final_victim_entities_diffs.xlsx",
+                    "EntitiesDiffs",
+                    band_by_group_col="__band_group",
+                    band_wrap=2,
+                )
+            )
+            ^ put_line(
+                "[U] Wrote final_victim_entities_diffs.xlsx (diffs by match_id)."
+            )
+            ^ pure(unit)
+        )
+
+    return (
+        _register_previous_final_victim_entities_if_exists()
+        >> (
+            lambda has_prev: (
+                sql_exec(
+                    SQL(
+                        f"""--sql
+                CREATE OR REPLACE TABLE final_victim_entities_current AS
+                {final_victim_entities_select}
+                """
+                    )
+                )
+                ^ _maybe_export_final_victim_entity_diffs(has_prev)
+            )
+        )
+        ^ sql_export(
+            final_victim_entities_select,
             "final_victim_entities.xlsx",
             "Entities",
             band_by_group_col="band_key",
             band_wrap=3,
         )
-        ^ put_line("[D] Wrote final_victim_entities.xlsx (final victim entities with color coding).")
+        ^ put_line(
+            "[D] Wrote final_victim_entities.xlsx (final victim entities with color coding)."
+        )
         ^ pure(unit)
     )
 

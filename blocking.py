@@ -29,6 +29,7 @@ class BlockComp(StrEnum):
         "AND floor((l.midpoint_day_block+30)/61) = "
         "floor((r.midpoint_day_block+30)/61)"
     )
+    GEO_SHORT = "l.geo_address_short = r.geo_address_short"
     YEAR_BLOCK_1 = "abs(l.year_block - r.year_block) <= 1"
     YEAR_DIFF_2 = "abs(l.year - r.year) <= 2"
     EXACT_YEAR_BLOCK = "l.year_block = r.year_block"
@@ -47,11 +48,13 @@ class BlockComp(StrEnum):
     SAME_OFFENDER_AGE_SEX = (
         "l.offender_age = r.offender_age AND l.offender_sex = r.offender_sex"
     )
+    OFFENDER_SEX = "l.offender_sex = r.offender_sex"
     AGE_DIFF2_SEX = (
         "abs(l.victim_age - r.victim_age) <= 2 "
         "AND l.victim_sex = r.victim_sex"
     )
     SAME_SEX = 'l.victim_sex = r.victim_sex'
+    SAME_AGE = "l.victim_age = r.victim_age"
     SAME_WEAPON = "l.weapon = r.weapon"
     SAME_CIRCUMSTANCE = "l.circumstance = r.circumstance"
     FIREARM_HANDGUN = "l.weapon = 'firearm' AND r.weapon = 'handgun'"
@@ -61,6 +64,10 @@ class BlockComp(StrEnum):
         "(l.date_precision = 'month' OR r.date_precision = 'month') "
         "AND (l.date_precision <> 'year' AND r.date_precision <> 'year')"
     )
+    YEAR_PRECISION = (
+        "(l.date_precision = 'year' OR r.date_precision = 'year')"
+    )
+    WITHIN_YEAR = "abs(l.midpoint_day - r.midpoint_day) <= 370"
     DIFFERENT_ARTICLE = "l.exclusion_id <> r.exclusion_id"
     LONG_LAT_EXISTS = (
         "l.lat IS NOT NULL AND r.lat IS NOT NULL "
@@ -98,7 +105,7 @@ def _block_from_comps(
     return _clause_from_comps(*comp_list)
 
 def _train_block_from_comps(
-    *components: BlockComp, add_article_exclusion: bool = False
+    *components: BlockComp, add_article_exclusion: bool = True
 ) -> str:
     return _block_from_comps(*components, add_article_exclusion=add_article_exclusion)
 
@@ -159,15 +166,58 @@ class TrainBlockRule(StrEnum):
     OFFENDER_AGE_SEX = _train_block_from_comps(
         BlockComp.SAME_OFFENDER_AGE_SEX
     )
+    OFFENDER_SEX_7MONTH = _train_block_from_comps(
+        BlockComp.OFFENDER_SEX,
+        BlockComp.MIDPOINT_7MONTH,
+    )
     YEAR_AGE_SEX = _train_block_from_comps(
         BlockComp.EXACT_YEAR,
         BlockComp.SAME_AGE_SEX
+    )
+    GEO_SHORT = _train_block_from_comps(
+        BlockComp.GEO_SHORT
+    )
+    AGE_GEO_SHORT = _train_block_from_comps(
+        BlockComp.GEO_SHORT,
+        BlockComp.SAME_AGE
+    )
+    SEX_GEO_SHORT = _train_block_from_comps(
+        BlockComp.GEO_SHORT,
+        BlockComp.SAME_SEX,
+    )
+    AGE_SEX_7MONTH = _train_block_from_comps(
+        BlockComp.SAME_AGE_SEX,
+        BlockComp.MIDPOINT_EXISTS,
+        BlockComp.MIDPOINT_7MONTH,
+        BlockComp.YEAR_PRECISION
+    )
+    SEX_7MONTH = _train_block_from_comps(
+        BlockComp.SAME_SEX,
+        BlockComp.MIDPOINT_EXISTS,
+        BlockComp.MIDPOINT_7MONTH,
+    )
+    SEX_WITHIN_YEAR = _train_block_from_comps(
+        BlockComp.SAME_SEX,
+        BlockComp.WITHIN_YEAR
+    )
+    AGE_SEX_WITHIN_YEAR = _train_block_from_comps(
+        BlockComp.SAME_AGE_SEX,
+        BlockComp.WITHIN_YEAR
+    )
+    OFFENDER_SEX_WITHIN_YEAR = _train_block_from_comps(
+        BlockComp.OFFENDER_SEX,
+        BlockComp.WITHIN_YEAR
+    )
+    OFFENDER_AGE_SEX_WITHIN_YEAR = _train_block_from_comps(
+        BlockComp.SAME_OFFENDER_AGE_SEX,
+        BlockComp.WITHIN_YEAR
     )
 
 class DedupBlockRule(StrEnum):
     """
     Predefined blocking rules for deduplication (with article exclusion)
     """
+    EVERYTHING = _block_from_comps()
     YEAR_MONTH = _block_from_comps(BlockComp.EXACT_YEAR_MONTH)
     YEAR_MONTH_DAY = _block_from_comps(BlockComp.EXACT_YEAR_MONTH_DAY)
     DATE_LOCATION = _block_from_comps(BlockComp.MIDPOINT_EXISTS,
@@ -240,10 +290,15 @@ NAMED_VICTIM_DETERMINISTIC_BLOCKS = [
     DedupBlockRule.DATE_LOCATION_AGE_SEX
 ]
 
+ORPHAN_WIDE_BLOCKS = [
+    DedupBlockRule.EVERYTHING
+]
+
 ORPHAN_VICTIM_BLOCKS = [
     DedupBlockRule.YEAR_MONTH,
     DedupBlockRule.DATE_LOCATION,
     DedupBlockRule.AGE_SEX,
+    DedupBlockRule.OFFENDER_AGE_SEX
 ]
 
 ORPHAN_DETERMINISTIC_BLOCKS = [
@@ -252,8 +307,9 @@ ORPHAN_DETERMINISTIC_BLOCKS = [
 
 ORPHAN_TRAINING_BLOCKS = [
     TrainBlockRule.YEAR_MONTH,
-    TrainBlockRule.AGE_SEX,
-    TrainBlockRule.OFFENDER_AGE_SEX
+    TrainBlockRule.AGE_SEX_WITHIN_YEAR,
+    TrainBlockRule.SEX_GEO_SHORT,
+    TrainBlockRule.OFFENDER_AGE_SEX_WITHIN_YEAR,
 ]
 
 SHR_OVERALL_BLOCKS = [
