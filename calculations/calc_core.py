@@ -3,6 +3,7 @@ Pure functions with no side effects
 """
 from __future__ import annotations
 
+import math
 import re
 from sqlite3 import Row
 from datetime import datetime
@@ -36,6 +37,38 @@ absolute_roots = (
     'homicide',
     'manslaughter',
 )
+
+
+def cosine_similarity(vec1: Iterable[float], vec2: Iterable[float]) -> float:
+    if not vec1 or not vec2:
+        return 0.0
+    dot = sum(a * b for a, b in zip(vec1, vec2))
+    norm1 = math.sqrt(sum(a * a for a in vec1))
+    norm2 = math.sqrt(sum(b * b for b in vec2))
+    if norm1 == 0.0 or norm2 == 0.0:
+        return 0.0
+    return dot / (norm1 * norm2)
+
+
+def distance_km(point1: tuple[float, float], point2: tuple[float, float]) -> float:
+    """
+    Compute great-circle distance in kilometers for two (lat, lon) points.
+    """
+    earth_radius_km = 6371.0088
+    lat1, lon1 = point1
+    lat2, lon2 = point2
+    lat1_rad = math.radians(lat1)
+    lon1_rad = math.radians(lon1)
+    lat2_rad = math.radians(lat2)
+    lon2_rad = math.radians(lon2)
+    delta_lat = lat2_rad - lat1_rad
+    delta_lon = lon2_rad - lon1_rad
+    a = (
+        math.sin(delta_lat / 2) ** 2
+        + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(delta_lon / 2) ** 2
+    )
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return earth_radius_km * c
 
 conditional_roots = (
     'shot',

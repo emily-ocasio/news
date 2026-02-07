@@ -3,11 +3,13 @@ Defines functions with side effects and maps them to intents
 """
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable
 import time
 
 from .geocode import GeocodeResult, MarGeocode, mar_geocode_handler
 
+from .monad import Unit, unit
 from .string import String
 
 
@@ -32,6 +34,19 @@ class GetLine:
     prompt: InputPrompt
 
 
+@dataclass(frozen=True)
+class FileExists:
+    """Effect: Check for existence of a file path."""
+
+    path: str
+
+
+@dataclass(frozen=True)
+class RenameFile:
+    """Effect: Rename (replace) a file path."""
+
+    src: str
+    dest: str
 
 
 @dataclass(frozen=True)
@@ -82,3 +97,14 @@ def _mar_geocode(x: MarGeocode) -> GeocodeResult:
 @intentdef(Sleep)
 def _sleep(x: Sleep) -> None:
     time.sleep(max(0, x.ms) / 1000.0)
+
+
+@intentdef(FileExists)
+def _file_exists(x: FileExists) -> bool:
+    return Path(x.path).exists()
+
+
+@intentdef(RenameFile)
+def _rename_file(x: RenameFile) -> Unit:
+    Path(x.src).replace(x.dest)
+    return unit

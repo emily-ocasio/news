@@ -280,13 +280,17 @@ def _apply_band_formatting_xlsx(
         return
     ws = wb[sheet]
 
+    def _hide_internal_cols() -> None:
+        header = [cell.value for cell in ws[1]]
+        for idx, name in enumerate(header, start=1):
+            if isinstance(name, str) and name.startswith("__"):
+                col_letter = cast(Cell, ws.cell(row=1, column=idx)).column_letter
+                ws.column_dimensions[col_letter].hidden = True
+
     # Read header row
     header = [cell.value for cell in ws[1]]
-    for idx, name in enumerate(header, start=1):
-        if isinstance(name, str) and name.startswith("__"):
-            col_letter = cast(Cell, ws.cell(row=1, column=idx)).column_letter
-            ws.column_dimensions[col_letter].hidden = True
     if group_col not in header:
+        _hide_internal_cols()
         wb.close()
         return
 
@@ -316,6 +320,7 @@ def _apply_band_formatting_xlsx(
         if seen_any and direct_ok:
             if ws.max_row < 2:
                 ws.freeze_panes = 'A2'
+                _hide_internal_cols()
                 wb.save(filename)
                 wb.close()
                 return
@@ -341,8 +346,7 @@ def _apply_band_formatting_xlsx(
                     data_range,
                     FormulaRule(formula=[formula], fill=fill_list[i]),
                 )
-            if group_col.startswith("__"):
-                ws.column_dimensions[grp_col_letter_direct].hidden = True
+            _hide_internal_cols()
             ws.freeze_panes = 'A2'
             wb.save(filename)
             wb.close()
@@ -385,8 +389,7 @@ def _apply_band_formatting_xlsx(
     last_col = ws.max_column
     last_col_letter = cast(Cell, ws.cell(row=1, column=last_col)).column_letter
     if ws.max_row < 2:
-        if group_col.startswith("__"):
-            ws.column_dimensions[grp_col_letter].hidden = True
+        _hide_internal_cols()
         ws.freeze_panes = 'A2'
         wb.save(filename)
         wb.close()
@@ -398,8 +401,7 @@ def _apply_band_formatting_xlsx(
             FormulaRule(formula=[formula], fill=fill_list[i]),
         )
 
-    if group_col.startswith("__"):
-        ws.column_dimensions[grp_col_letter].hidden = True
+    _hide_internal_cols()
     ws.freeze_panes = 'A2'
     wb.save(filename)
     wb.close()

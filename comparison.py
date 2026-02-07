@@ -10,7 +10,8 @@ import splink.internals.comparison_level_library as cll
 from splink import ColumnExpression
 import splink.internals.comparison_level_composition as cllc
 
-from blocking import _clause_from_comps
+def _clause_from_comps(*components: StrEnum) -> str:
+    return " AND ".join([component.value for component in components])
 
 def _specific_value_comp_builder(field: str, value: str) -> str:
     return f'("{field}_l" {value} AND "{field}_r" {value})'
@@ -328,13 +329,15 @@ AGE_COMP = cl.CustomComparison(
             "victim ages NULL",
             ComparisonComp.AGE_NULL.value
         ).to_dict(),
-        ComparisonLevel(
+        TFComparisonLevel(
             "exact match victim age",
-            ComparisonComp.EXACT_AGE.value
+            ComparisonComp.EXACT_AGE.value,
+            "victim_age"
         ).to_dict(),
-        ComparisonLevel(
+        TFComparisonLevel(
             "victim ages within 2 years",
-            ComparisonComp.AGE_2YEAR.value
+            ComparisonComp.AGE_2YEAR.value,
+            "victim_age"
         ).to_dict(),
         cll.ElseLevel()
     ]
@@ -362,12 +365,39 @@ SUMMARY_NULL_COMP = (
     )
 )
 
+SUMMARY_NULL_SINGLE_VICTIM_COMP = (
+    cllc.Or(
+        cllc.And(
+            cll.LiteralMatchLevel(
+                ColumnExpression(
+                    "ifnull(list_max(list_transform(summary_vec, x -> abs(x))), 0)"
+                ),
+                "0",
+                "float",
+                "left"
+            ),
+            cll.LiteralMatchLevel("victim_count", "1", "int", "left")
+        ),
+        cllc.And(
+            cll.LiteralMatchLevel(
+                ColumnExpression(
+                    "ifnull(list_max(list_transform(summary_vec, x -> abs(x))), 0)"
+                ),
+                "0",
+                "float",
+                "right"
+            ),
+            cll.LiteralMatchLevel("victim_count", "1", "int", "right")
+        ),
+    )
+)
+
 VICTIM_COUNT_COMP = cl.CustomComparison(
     output_column_name="victim_count",
     comparison_levels=[
         cllc.Or(
             cll.NullLevel("victim_count"),
-            SUMMARY_NULL_COMP
+            SUMMARY_NULL_SINGLE_VICTIM_COMP
         ).configure(
             label_for_charts="victim counts NULL or zero",
             is_null_level=True,
@@ -379,9 +409,7 @@ VICTIM_COUNT_COMP = cl.CustomComparison(
         TFComparisonLevel(
             "exact match victim count",
             _exact_comp_builder("victim_count"),
-            "victim_count",
-            0.8,
-            0.0001
+            "victim_count"
         ).to_dict(),
         # ComparisonLevel(
         #     "victim counts within 1 (counts > 1)",
@@ -457,9 +485,10 @@ VICTIM_SEX_COMP = cl.CustomComparison(
             "victim sex NULL",
             _null_comp_builder("victim_sex")
         ).to_dict(),
-        ComparisonLevel(
+        TFComparisonLevel(
             "exact match victim sex",
-            _exact_comp_builder("victim_sex")
+            _exact_comp_builder("victim_sex"),
+            "victim_sex"
         ).to_dict(),
         cll.ElseLevel()
     ]
@@ -501,6 +530,8 @@ DIST_STREET_TYPE = cllc.Or(
 DIST_PLACE_TYPE = cllc.Or(
     cll.LiteralMatchLevel("address_type", "NAMED_PLACE", "string", "left"),
     cll.LiteralMatchLevel("address_type", "NAMED_PLACE", "string", "right"),
+    cll.LiteralMatchLevel("address_type", "QUADRANT", "string", "left"),
+    cll.LiteralMatchLevel("address_type", "QUADRANT", "string", "right"),
     cll.LiteralMatchLevel("address_type", "NO_SUCCESS", "string", "left"),
     cll.LiteralMatchLevel("address_type", "NO_SUCCESS", "string", "right"),
     cll.LiteralMatchLevel("address_type", "UNRECOGNIZED_PLACE", "string", "left"),
@@ -523,7 +554,12 @@ DIST_COMP_NEW = cl.CustomComparison(
                     cll.LiteralMatchLevel("address_type", "INTERSECTION", "string"),
                     cll.LiteralMatchLevel("address_type", "BLOCK", "string"),
                     cll.LiteralMatchLevel("geo_score", "100", "float"),
-                    cll.ExactMatchLevel("geo_address_norm")
+                    cllc.And(
+                        cllc.Not(
+                            cll.LiteralMatchLevel("address_type", "QUADRANT", "string")
+                        ),
+                        cll.ExactMatchLevel("geo_address_norm"),
+                    ),
                 )
             ),
             cllc.And(
@@ -532,7 +568,7 @@ DIST_COMP_NEW = cl.CustomComparison(
             ),
         ).configure(label_for_charts="exact location match"),
         cllc.Or(
-            cll.DistanceInKMLevel("lat", "lon", 0.4),
+            cll.DistanceInKMLevel("lat", "lon", 0.3),
             cllc.And(
                 DIST_STREET_TYPE,
                 cll.JaroWinklerLevel(
@@ -581,7 +617,11 @@ DIST_COMP_NEW = cl.CustomComparison(
                 cll.JaroLevel(
                     "geo_address_norm", 0.5)
             ),
-        ).configure(label_for_charts="within 0.4 km or similar address"),
+        ).configure(label_for_charts="within 0.3 km or similar address"),
+        cllc.And(
+            cll.DistanceInKMLevel("lat", "lon", 1.5),
+            DIST_PLACE_TYPE
+        ).configure(label_for_charts="within 1.5 km and one place type"),
         cll.ElseLevel()
     ]
 )
@@ -752,3 +792,32 @@ SUMMARY_COMP = cl.CustomComparison(
         cll.ElseLevel()
     ]
 )
+
+INCIDENT_COMPARISONS = [
+    NAME_COMP,
+    DATE_COMP,
+    AGE_COMP,
+    VICTIM_COUNT_COMP,
+    DIST_COMP_NEW,
+    VICTIM_SEX_COMP,
+    OFFENDER_COMP,
+    OFFENDER_AGE_COMP,
+    OFFENDER_SEX_COMP,
+    TF_WEAPON_COMP,
+    CIRC_COMP,
+    SUMMARY_COMP,
+]
+
+ORPHAN_COMPARISONS = [
+    DATE_COMP_ORPHAN,
+    AGE_COMP_ORPHAN,
+    DIST_COMP,
+    VICTIM_SEX_COMP,
+    OFFENDER_COMP,
+    TF_WEAPON_COMP,
+    CIRC_COMP,
+    SUMMARY_COMP,
+    VICTIM_COUNT_COMP,
+    OFFENDER_AGE_COMP,
+    OFFENDER_SEX_COMP,
+]

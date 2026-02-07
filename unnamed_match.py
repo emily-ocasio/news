@@ -3,6 +3,9 @@ Match unnamed (orphan) victims to previously deduped victim clusters.
 """
 
 import hashlib
+import json
+from enum import Enum
+from pathlib import Path
 import networkx as nx
 
 from blocking import (
@@ -10,23 +13,12 @@ from blocking import (
     ORPHAN_DETERMINISTIC_BLOCKS,
     ORPHAN_TRAINING_BLOCKS,
     TrainBlockRule,
+    TRAINING_BLOCK_LEVEL_MAP,
 )
 
-from comparison import (
-    DATE_COMP_ORPHAN,
-    AGE_COMP_ORPHAN,
-    VICTIM_SEX_COMP,
-    VICTIM_COUNT_COMP,
-    DIST_COMP_NEW as DIST_COMP,
-    OFFENDER_COMP,
-    TF_WEAPON_COMP,
-    CIRC_COMP,
-    SUMMARY_COMP,
-    OFFENDER_AGE_COMP,
-    OFFENDER_SEX_COMP
-)
+from comparison import ORPHAN_COMPARISONS
 
-from menuprompts import NextStep
+from menuprompts import NextStep, MenuPrompts, MenuChoice, input_from_menu
 from splink_types import SplinkType
 from cluster_compare import ClusterCompareRequest, compare_cluster_tables
 from pymonad import (
@@ -36,9 +28,6 @@ from pymonad import (
     pure,
     PredictionInputTableNames,
     PairsTableName,
-    HashMap,
-    BlockingRuleLike,
-    comparison_level_keys,
     with_duckdb,
     splink_dedupe_job,
     sql_exec,
@@ -47,9 +36,36 @@ from pymonad import (
     SQL,
     sql_query,
     put_line,
+    ErrorPayload,
     Unit,
+    file_exists,
+    rename_file,
+    throw,
     unit
 )
+
+ORPHAN_LINK_PROMPTS = (
+    "Train orphan linkage model [T]",
+    "Reuse dedupe model [R]",
+    "Go back to [M]ain menu",
+)
+
+
+class OrphanLinkAction(Enum):
+    """
+    Possible actions for orphan linkage.
+    """
+    TRAIN = MenuChoice("T")
+    REUSE = MenuChoice("R")
+    MAIN_MENU = MenuChoice("M")
+    QUIT = MenuChoice("Q")
+
+
+def input_orphan_link_action() -> Run[OrphanLinkAction]:
+    """
+    Prompt the user for the orphan linkage action.
+    """
+    return OrphanLinkAction & input_from_menu(MenuPrompts(ORPHAN_LINK_PROMPTS))
 
 
 def _create_orphans_view() -> Run[Unit]:
@@ -126,7 +142,10 @@ def _create_linkage_input_tables() -> Run[Unit]:
                     canonical_sex AS victim_sex,
                     canonical_race AS victim_race,
                     canonical_ethnicity AS victim_ethnicity,
-                    canonical_fullname AS victim_fullname_norm,  -- Added: victim fullname from entities
+                    CAST(canonical_fullname AS VARCHAR) AS victim_fullname_norm,  -- Added: victim fullname from entities
+                    CAST(canonical_fullname AS VARCHAR) AS victim_fullname_concat,
+                    CAST(NULL AS VARCHAR) AS victim_forename_norm,
+                    CAST(NULL AS VARCHAR) AS victim_surname_norm,
                     canonical_offender_age AS offender_age,
                     canonical_offender_sex AS offender_sex,
                     canonical_offender_race AS offender_race,
@@ -142,7 +161,8 @@ def _create_linkage_input_tables() -> Run[Unit]:
                       WHEN offender_forename IS NOT NULL
                         THEN offender_forename
                     END AS offender_fullname_concat,
-                    cast(victim_entity_id AS varchar) AS exclusion_id
+                    cast(victim_entity_id AS varchar) AS exclusion_id,
+                    []::VARCHAR[] AS exclusion_ids
                 FROM victim_entity_reps;
     """
             )
@@ -174,7 +194,10 @@ def _create_linkage_input_tables() -> Run[Unit]:
                     victim_sex,
                     victim_race,
                     victim_ethnicity,
-                    NULL AS victim_fullname_norm,  -- Added: orphans have no victim fullname
+                    CAST(NULL AS VARCHAR) AS victim_fullname_norm,  -- Added: orphans have no victim fullname
+                    CAST(NULL AS VARCHAR) AS victim_fullname_concat,
+                    CAST(NULL AS VARCHAR) AS victim_forename_norm,
+                    CAST(NULL AS VARCHAR) AS victim_surname_norm,
                     weapon,
                     circumstance,
                     offender_forename_norm,
@@ -187,7 +210,8 @@ def _create_linkage_input_tables() -> Run[Unit]:
                     offender_count AS offender_count,
                     summary_vec,
                     CAST(article_id AS varchar) AS article_ids_csv,
-                    '' AS exclusion_id  
+                    '' AS exclusion_id,
+                    []::VARCHAR[] AS exclusion_ids
                 FROM victims_orphan;
     """
             )
@@ -356,91 +380,116 @@ def _debug_preview_orphans() -> Run[Unit]:
         ^ pure(unit)
     )
 
+def _dedupe_model_path() -> Path:
+    key_str = str(SplinkType.DEDUP).replace("/", "_")
+    return Path("splink_models") / f"splink_model_{key_str}.json"
 
-def _link_orphans_to_entities(_: Environment) -> Run[Unit]:
+
+def _load_dedupe_model_settings() -> Run[dict]:
     """
-    Link orphan victims to existing victim entities using Splink.
+    Load the trained dedupe model settings from disk.
     """
-    year_month_rule: BlockingRuleLike = TrainBlockRule.YEAR_MONTH
-    sex_within_year_rule: BlockingRuleLike = TrainBlockRule.SEX_WITHIN_YEAR
-    geo_short_rule: BlockingRuleLike = TrainBlockRule.GEO_SHORT
-    offender_sex_within_year_rule: BlockingRuleLike = (
-        TrainBlockRule.OFFENDER_SEX_WITHIN_YEAR
+    model_path = _dedupe_model_path()
+
+    def _load(_: bool) -> Run[dict]:
+        try:
+            with open(model_path, "r", encoding="utf-8") as handle:
+                settings = json.load(handle)
+        except Exception as exc:  # pylint: disable=W0718
+            return throw(
+                ErrorPayload(f"Failed to load dedupe model settings: {exc}")
+            )
+        if not isinstance(settings, dict) or "comparisons" not in settings:
+            return throw(
+                ErrorPayload(
+                    "Dedupe model settings missing comparisons. "
+                    "Re-run DEDUP first."
+                )
+            )
+        return pure(settings)
+
+    return file_exists(str(model_path)) >> (
+        lambda exists: _load(exists)
+        if exists
+        else throw(
+            ErrorPayload(
+                "Dedupe Splink model not found. Run DEDUP before reuse."
+            )
+        )
     )
-    training_block_level_map = HashMap.make({
-        year_month_rule: (
-            comparison_level_keys(
-                DATE_COMP_ORPHAN,
-                [
-                    "exact date or month precision match",
-                    "exact yr/mon or year precision match",
-                ],
-            )
-        ),
-        sex_within_year_rule: (
-            comparison_level_keys(
-                DATE_COMP_ORPHAN,
-                [
-                    "exact date or month precision match",
-                    "exact yr/mon or year precision match",
-                    "within a year",
-                ],
-            )
-        ),
-        geo_short_rule: (
-            comparison_level_keys(
-                DIST_COMP,
-                [
-                    "exact location match",
-                    "within 0.4 km or similar address",
-                ],
-            )
-        ),
-        offender_sex_within_year_rule: (
-            comparison_level_keys(
-                DATE_COMP_ORPHAN,
-                [
-                    "exact date or month precision match",
-                    "exact yr/mon or year precision match",
-                    "within a year",
-                ],
-            )
-        ),
-    })
-    return splink_dedupe_job(
-        input_table=PredictionInputTableNames(("entity_link_input", "orphan_link_input")),
-        settings={
+
+
+def _settings_for_orphan_linkage(comparisons: list) -> dict:
+    return {
+        "link_type": "link_only",
+        "unique_id_column_name": "unique_id",
+        "blocking_rules_to_generate_predictions": ORPHAN_VICTIM_BLOCKS,
+        "comparisons": comparisons,
+    }
+
+
+def _settings_for_orphan_reuse(dedupe_settings: dict) -> dict:
+    settings = dict(dedupe_settings)
+    settings.update(
+        {
             "link_type": "link_only",
             "unique_id_column_name": "unique_id",
             "blocking_rules_to_generate_predictions": ORPHAN_VICTIM_BLOCKS,
-            "comparisons": [
-                DATE_COMP_ORPHAN,
-                AGE_COMP_ORPHAN,
-                DIST_COMP,
-                VICTIM_SEX_COMP,
-                OFFENDER_COMP,
-                TF_WEAPON_COMP,
-                CIRC_COMP,
-                SUMMARY_COMP,
-                VICTIM_COUNT_COMP,
-                OFFENDER_AGE_COMP,
-                OFFENDER_SEX_COMP,
-            ],
-        },
-        predict_threshold=0.5,
-        cluster_threshold=0.0,
-        pairs_out=PairsTableName("orphan_entity_pairs"),
-        deterministic_rules=ORPHAN_DETERMINISTIC_BLOCKS,
-        deterministic_recall=0.1,
+        }
+    )
+    return settings
+
+
+def _link_orphans_to_entities(
+    _: Environment,
+    *,
+    reuse_model: bool,
+) -> Run[Unit]:
+    """
+    Link orphan victims to existing victim entities using Splink.
+    """
+    def _run_linkage(
+        settings: dict,
+        *,
+        train_first: bool,
+        skip_u_estimation: bool,
+    ) -> Run[Unit]:
+        return splink_dedupe_job(
+            input_table=PredictionInputTableNames(
+                ("entity_link_input", "orphan_link_input")
+            ),
+            settings=settings,
+            predict_threshold=0.25,
+            cluster_threshold=0.0,
+            pairs_out=PairsTableName("orphan_entity_pairs"),
+            deterministic_rules=ORPHAN_DETERMINISTIC_BLOCKS,
+            deterministic_recall=0.1,
+            train_first=train_first,
+            skip_u_estimation=skip_u_estimation,
+            training_blocking_rules=(
+                ORPHAN_TRAINING_BLOCKS if train_first else []
+            ),
+            training_block_level_map=TRAINING_BLOCK_LEVEL_MAP,
+            visualize=False,
+            em_max_runs=1,
+            splink_key=SplinkType.ORPHAN,
+        ) >> (
+            lambda outnames: put_line(f"[D] Wrote {outnames[1]} in DuckDB.")
+        ) ^ pure(unit)
+
+    if reuse_model:
+        return _load_dedupe_model_settings() >> (
+            lambda settings: _run_linkage(
+                _settings_for_orphan_reuse(settings),
+                train_first=False,
+                skip_u_estimation=True,
+            )
+        )
+    return _run_linkage(
+        _settings_for_orphan_linkage(ORPHAN_COMPARISONS),
         train_first=True,
-        training_blocking_rules=ORPHAN_TRAINING_BLOCKS,
-        training_block_level_map=training_block_level_map,
-        visualize=False,
-        em_max_runs=1,
-        splink_key=SplinkType.ORPHAN,
-    ) >> (
-        lambda outnames: put_line(f"[D] Wrote {outnames[1]} in DuckDB.")
-    ) ^ pure(unit)
+        skip_u_estimation=False,
+    )
 
 
 def _integrate_orphan_matches() -> Run[Unit]:
@@ -878,130 +927,227 @@ def _export_orphan_matches_debug_excel() -> Run[Unit]:
       - match_id = 'match_<entity_uid>' for matched groups, otherwise 'entity_<...>' or 'orphan_<...>'.
       - band_key = 0 (unmatched entity), 1 (unmatched orphan), 2 (matched group).
       - Ordering uses the entity midpoint for matched groups; otherwise row’s own midpoint.
+      - Output midpoint_day reflects each row's original midpoint (entity or orphan).
     """
-    return (
-        sql_export(
-            SQL(
-                """--sql
-            WITH orphan_choice AS (
-              SELECT
-                o.*,
-                fm.entity_uid,
-                fm.match_probability
-              FROM orphan_link_input o
-              LEFT JOIN final_orphan_matches fm
-                ON o.unique_id = fm.orphan_uid
-            ),
-            -- Compute match_id for entities: match_<entity_uid> if they have ≥1 orphans, else entity_<id>
-            entity_with_match AS (
-              SELECT
-                e.*,
-                CASE WHEN EXISTS (SELECT 1 FROM final_orphan_matches fm WHERE fm.entity_uid = e.unique_id)
-                    THEN CONCAT('match_', e.unique_id)
-                    ELSE CONCAT('entity_', e.unique_id)
-                END AS match_id
-              FROM entity_link_input e
-            ),
-            combined AS (
-              -- Entity rows
-              SELECT
-                'entity' AS rec_type,
-                e.unique_id AS uid,
-                e.match_id,
-                e.midpoint_day AS group_midpoint_day,
-                e.midpoint_day,
-                e.incident_date,
-                e.date_precision,
-                CAST(NULL AS BIGINT) AS article_id,
-                e.article_ids_csv,
-                e.city_id, e.year, e.month,
-                e.geo_address_norm,
-                e.geo_address_short,
-                e.geo_address_short_2,
-                e.geo_score,
-                e.address_type,
-                e.lat, e.lon,
-                e.victim_age, e.victim_sex, e.victim_race, e.victim_ethnicity,
-                e.victim_fullname_norm,  -- Added
-                e.weapon, e.circumstance,
-                e.offender_forename_norm, e.offender_surname_norm,
-                e.victim_count,
-                e.offender_count,
-                CAST(NULL AS DOUBLE) AS match_probability
-              FROM entity_with_match e
+    orphan_matches_final_select = SQL(
+        """--sql
+    WITH orphan_choice AS (
+      SELECT
+        o.*,
+        fm.entity_uid,
+        fm.match_probability
+      FROM orphan_link_input o
+      LEFT JOIN final_orphan_matches fm
+        ON o.unique_id = fm.orphan_uid
+    ),
+    -- Compute match_id for entities: match_<entity_uid> if they have ≥1 orphans, else entity_<id>
+    entity_with_match AS (
+      SELECT
+        e.*,
+        CASE WHEN EXISTS (SELECT 1 FROM final_orphan_matches fm WHERE fm.entity_uid = e.unique_id)
+            THEN CONCAT('match_', e.unique_id)
+            ELSE CONCAT('entity_', e.unique_id)
+        END AS match_id
+      FROM entity_link_input e
+    ),
+    combined AS (
+      -- Entity rows
+      SELECT
+        'entity' AS rec_type,
+        e.unique_id AS uid,
+        e.match_id,
+        e.midpoint_day AS group_midpoint_day,
+        e.midpoint_day,
+        e.incident_date,
+        e.date_precision,
+        CAST(NULL AS BIGINT) AS article_id,
+        e.article_ids_csv,
+        e.city_id, e.year, e.month,
+        e.geo_address_norm,
+        e.geo_address_short,
+        e.geo_address_short_2,
+        e.geo_score,
+        e.address_type,
+        e.lat, e.lon,
+        e.victim_age, e.victim_sex, e.victim_race, e.victim_ethnicity,
+        e.victim_fullname_norm,  -- Added
+        e.weapon, e.circumstance,
+        e.offender_forename_norm, e.offender_surname_norm,
+        e.victim_count,
+        e.offender_count,
+        CAST(NULL AS DOUBLE) AS match_probability
+      FROM entity_with_match e
 
-              UNION ALL
+      UNION ALL
 
-              -- Orphan rows (both matched and unmatched)
-              -- (inherit entity midpoint for ordering if matched)
-              SELECT
-                'orphan' AS rec_type,
-                o.unique_id AS uid,
-                CASE
-                  WHEN o.entity_uid IS NOT NULL THEN CONCAT('match_', o.entity_uid)
-                  ELSE CONCAT('orphan_', o.unique_id)
-                END AS match_id,
-                COALESCE(e.midpoint_day, o.midpoint_day) AS group_midpoint_day,
-                o.midpoint_day,
-                o.incident_date,
-                o.date_precision,
-                o.article_id,
-                o.article_ids_csv,
-                o.city_id, o.year, o.month,
-                o.geo_address_norm,
-                o.geo_address_short,
-                o.geo_address_short_2,
-                o.geo_score,
-                o.address_type,
-                o.lat, o.lon,
-                o.victim_age, o.victim_sex, o.victim_race, o.victim_ethnicity,
-                o.victim_fullname_norm,  -- Added
-                o.weapon, o.circumstance,
-                o.offender_forename_norm, o.offender_surname_norm,
-                o.victim_count,
-                o.offender_count,
-                o.match_probability
-              FROM orphan_choice o
-              LEFT JOIN entity_link_input e
-                ON e.unique_id = o.entity_uid
+      -- Orphan rows (both matched and unmatched)
+      -- (inherit entity midpoint for ordering if matched)
+      SELECT
+        'orphan' AS rec_type,
+        o.unique_id AS uid,
+        CASE
+          WHEN o.entity_uid IS NOT NULL THEN CONCAT('match_', o.entity_uid)
+          ELSE CONCAT('orphan_', o.unique_id)
+        END AS match_id,
+        COALESCE(e.midpoint_day, o.midpoint_day) AS group_midpoint_day,
+        o.midpoint_day,
+        o.incident_date,
+        o.date_precision,
+        o.article_id,
+        o.article_ids_csv,
+        o.city_id, o.year, o.month,
+        o.geo_address_norm,
+        o.geo_address_short,
+        o.geo_address_short_2,
+        o.geo_score,
+        o.address_type,
+        o.lat, o.lon,
+        o.victim_age, o.victim_sex, o.victim_race, o.victim_ethnicity,
+        o.victim_fullname_norm,  -- Added
+        o.weapon, o.circumstance,
+        o.offender_forename_norm, o.offender_surname_norm,
+        o.victim_count,
+        o.offender_count,
+        o.match_probability
+      FROM orphan_choice o
+      LEFT JOIN entity_link_input e
+        ON e.unique_id = o.entity_uid
+    )
+    SELECT
+      rec_type,
+      match_id,
+      CASE WHEN match_id LIKE 'match_%' THEN 2
+          WHEN rec_type = 'entity' THEN 0
+          ELSE 1
+      END AS band_key,
+      midpoint_day,
+      uid,
+      article_id,
+        city_id, year, month,
+      date_precision, incident_date,
+      geo_address_norm, geo_address_short, geo_address_short_2,
+      geo_score, address_type,
+      lat, lon,
+      victim_age, victim_sex, victim_race, victim_ethnicity,
+      victim_fullname_norm,  -- Added
+      weapon, circumstance,
+      offender_forename_norm, offender_surname_norm,
+      victim_count,
+      offender_count,
+      match_probability,
+      article_ids_csv
+    FROM combined
+    ORDER BY
+      group_midpoint_day NULLS LAST,
+      match_id,
+      CASE rec_type WHEN 'entity' THEN 0 ELSE 1 END,
+      uid
+    """
+    )
+
+    def _register_previous_orphan_matches_if_exists() -> Run[bool]:
+        base_path = "orphan_matches_final_base.xlsx"
+        current_path = "orphan_matches_final.xlsx"
+
+        def _load_base() -> Run[bool]:
+            return (
+                sql_import(base_path, "orphan_matches_final_prev")
+                ^ put_line(
+                    "[U] Loaded existing orphan_matches_final_base.xlsx into orphan_matches_final_prev."
+                )
+                ^ pure(True)
             )
-            SELECT
-              rec_type,
-              match_id,
-              CASE WHEN match_id LIKE 'match_%' THEN 2
-                  WHEN rec_type = 'entity' THEN 0
-                  ELSE 1
-              END AS band_key,
-              group_midpoint_day,
-              uid,
-              article_id,
-                city_id, year, month,
-              date_precision, incident_date, midpoint_day,
-              geo_address_norm, geo_address_short, geo_address_short_2,
-              geo_score, address_type,
-              lat, lon,
-              victim_age, victim_sex, victim_race, victim_ethnicity,
-              victim_fullname_norm,  -- Added
-              weapon, circumstance,
-              offender_forename_norm, offender_surname_norm,
-              victim_count,
-              offender_count,
-              match_probability,
-              article_ids_csv
-            FROM combined
-            ORDER BY
-              group_midpoint_day NULLS LAST,
-              match_id,
-              CASE rec_type WHEN 'entity' THEN 0 ELSE 1 END,
-              uid
-            """
-            ),
+
+        def _maybe_rename_and_load(has_current: bool) -> Run[bool]:
+            if not has_current:
+                return (
+                    put_line(
+                        "[U] No existing orphan_matches_final_base.xlsx or "
+                        "orphan_matches_final.xlsx found."
+                    )
+                    ^ pure(False)
+                )
+            return (
+                rename_file(current_path, base_path)
+                ^ put_line(
+                    "[U] Renamed orphan_matches_final.xlsx to orphan_matches_final_base.xlsx."
+                )
+                ^ _load_base()
+            )
+
+        return file_exists(base_path) >> (
+            lambda has_base: _load_base()
+            if has_base
+            else file_exists(current_path) >> _maybe_rename_and_load
+        )
+
+    def _maybe_export_orphan_matches_diffs(has_prev: bool) -> Run[Unit]:
+        if not has_prev:
+            return pure(unit)
+        return (
+            compare_cluster_tables(
+                ClusterCompareRequest(
+                    left_table="orphan_matches_final_prev",
+                    right_table="orphan_matches_final_current",
+                    cluster_id_col="match_id",
+                    member_id_col="uid",
+                    output_table="orphan_matches_final_diffs",
+                )
+            )
+            >> (
+                lambda _: sql_export(
+                    SQL(
+                        """--sql
+                    SELECT
+                      *,
+                      concat(cast(source AS varchar), '::', cast(match_id AS varchar)) AS __band_group
+                    FROM orphan_matches_final_diffs
+                    ORDER BY
+                      change_order,
+                      family_id,
+                      source,
+                      midpoint_day NULLS LAST,
+                      incident_date NULLS LAST,
+                      match_id,
+                      CASE rec_type WHEN 'entity' THEN 0 ELSE 1 END,
+                      uid
+                    """
+                    ),
+                    "orphan_matches_final_diffs.xlsx",
+                    "MatchesDiffs",
+                    band_by_group_col="__band_group",
+                    band_wrap=2,
+                )
+            )
+            ^ put_line("[U] Wrote orphan_matches_final_diffs.xlsx (diffs by match_id).")
+            ^ pure(unit)
+        )
+
+    return (
+        _register_previous_orphan_matches_if_exists()
+        >> (
+            lambda has_prev: (
+                sql_exec(
+                    SQL(
+                        f"""--sql
+                CREATE OR REPLACE TABLE orphan_matches_final_current AS
+                {orphan_matches_final_select}
+                """
+                    )
+                )
+                ^ _maybe_export_orphan_matches_diffs(has_prev)
+            )
+        )
+        ^ sql_export(
+            orphan_matches_final_select,
             "orphan_matches_final.xlsx",
             "Matches",
             band_by_group_col="band_key",
             band_wrap=3,
         )
-        ^ put_line("[D] Wrote orphan_matches_final.xlsx (final entities + orphans after integration).")
+        ^ put_line(
+            "[D] Wrote orphan_matches_final.xlsx (final entities + orphans after integration)."
+        )
         ^ pure(unit)
     )
 
@@ -1036,207 +1182,8 @@ def export_final_victim_entities_excel() -> Run[Unit]:
         """
     )
 
-    def _register_previous_final_victim_entities_if_exists() -> Run[bool]:
-        return sql_query(
-            SQL(
-                """--sql
-            SELECT CASE
-              WHEN COUNT(*) > 0 THEN TRUE
-              ELSE FALSE
-            END AS exists_flag
-            FROM glob('final_victim_entities.xlsx');
-            """
-            )
-        ) >> (
-            lambda rows: (
-                (
-                    sql_import("final_victim_entities.xlsx", "final_victim_entities_prev")
-                    ^ put_line(
-                        "[U] Loaded existing final_victim_entities.xlsx into final_victim_entities_prev."
-                    )
-                    ^ pure(True)
-                )
-                if rows and rows[0]["exists_flag"]
-                else (
-                    put_line("[U] No existing final_victim_entities.xlsx found.")
-                    ^ pure(False)
-                )
-            )
-        )
-
-    def _maybe_export_final_victim_entity_diffs(has_prev: bool) -> Run[Unit]:
-        if not has_prev:
-            return pure(unit)
-        return (
-            sql_exec(
-                SQL(
-                    """--sql
-                CREATE OR REPLACE VIEW final_victim_entities_prev_cmp AS
-                SELECT
-                  victim_entity_id,
-                  city_id,
-                  min_event_day,
-                  max_event_day,
-                  entity_date_precision,
-                  incident_date,
-                  entity_midpoint_day,
-                  canonical_fullname,
-                  canonical_sex,
-                  canonical_race,
-                  canonical_ethnicity,
-                  canonical_offender_age,
-                  canonical_offender_sex,
-                  canonical_offender_race,
-                  canonical_offender_ethnicity,
-                  canonical_offender_count,
-                  canonical_geo_address_norm,
-                  canonical_geo_address_short,
-                  canonical_geo_address_short_2,
-                  canonical_geo_score,
-                  canonical_address_type,
-                  canonical_lat,
-                  canonical_lon,
-                  canonical_age,
-                  canonical_victim_count,
-                  avg_age,
-                  min_age,
-                  max_age,
-                  mode_weapon,
-                  mode_circumstance,
-                  offender_fullname,
-                  offender_forename,
-                  offender_surname,
-                  cluster_size,
-                  article_ids_csv,
-                  category,
-                  band_key,
-                  CASE
-                    WHEN coalesce(trim(article_ids_csv), '') = '' THEN
-                      concat('empty::', cast(victim_entity_id AS varchar))
-                    ELSE array_to_string(
-                      list_sort(
-                        string_split(
-                          regexp_replace(coalesce(article_ids_csv, ''), '\\s+', '', 'g'),
-                          ','
-                        )
-                      ),
-                      '|'
-                    )
-                  END AS __member_norm
-                FROM final_victim_entities_prev;
-                """
-                )
-            )
-            ^ sql_exec(
-                SQL(
-                    """--sql
-                CREATE OR REPLACE VIEW final_victim_entities_current_cmp AS
-                SELECT
-                  victim_entity_id,
-                  city_id,
-                  min_event_day,
-                  max_event_day,
-                  entity_date_precision,
-                  incident_date,
-                  entity_midpoint_day,
-                  canonical_fullname,
-                  canonical_sex,
-                  canonical_race,
-                  canonical_ethnicity,
-                  canonical_offender_age,
-                  canonical_offender_sex,
-                  canonical_offender_race,
-                  canonical_offender_ethnicity,
-                  canonical_offender_count,
-                  canonical_geo_address_norm,
-                  canonical_geo_address_short,
-                  canonical_geo_address_short_2,
-                  canonical_geo_score,
-                  canonical_address_type,
-                  canonical_lat,
-                  canonical_lon,
-                  canonical_age,
-                  canonical_victim_count,
-                  avg_age,
-                  min_age,
-                  max_age,
-                  mode_weapon,
-                  mode_circumstance,
-                  offender_fullname,
-                  offender_forename,
-                  offender_surname,
-                  cluster_size,
-                  article_ids_csv,
-                  category,
-                  band_key,
-                  CASE
-                    WHEN coalesce(trim(article_ids_csv), '') = '' THEN
-                      concat('empty::', cast(victim_entity_id AS varchar))
-                    ELSE array_to_string(
-                      list_sort(
-                        string_split(
-                          regexp_replace(coalesce(article_ids_csv, ''), '\\s+', '', 'g'),
-                          ','
-                        )
-                      ),
-                      '|'
-                    )
-                  END AS __member_norm
-                FROM final_victim_entities_current;
-                """
-                )
-            )
-            ^ compare_cluster_tables(
-                ClusterCompareRequest(
-                    left_table="final_victim_entities_prev_cmp",
-                    right_table="final_victim_entities_current_cmp",
-                    cluster_id_col="victim_entity_id",
-                    member_id_col="__member_norm",
-                    output_table="final_victim_entities_diffs",
-                )
-            )
-            >> (
-                lambda _: sql_export(
-                    SQL(
-                        """--sql
-                    SELECT
-                      *,
-                      concat(cast(source AS varchar), '::', cast(victim_entity_id AS varchar)) AS __band_group
-                    FROM final_victim_entities_diffs
-                    ORDER BY
-                      entity_midpoint_day NULLS LAST,
-                      victim_entity_id,
-                      victim_entity_id
-                    """
-                    ),
-                    "final_victim_entities_diffs.xlsx",
-                    "EntitiesDiffs",
-                    band_by_group_col="__band_group",
-                    band_wrap=2,
-                )
-            )
-            ^ put_line(
-                "[U] Wrote final_victim_entities_diffs.xlsx (diffs by match_id)."
-            )
-            ^ pure(unit)
-        )
-
     return (
-        _register_previous_final_victim_entities_if_exists()
-        >> (
-            lambda has_prev: (
-                sql_exec(
-                    SQL(
-                        f"""--sql
-                CREATE OR REPLACE TABLE final_victim_entities_current AS
-                {final_victim_entities_select}
-                """
-                    )
-                )
-                ^ _maybe_export_final_victim_entity_diffs(has_prev)
-            )
-        )
-        ^ sql_export(
+        sql_export(
             final_victim_entities_select,
             "final_victim_entities.xlsx",
             "Entities",
@@ -1250,23 +1197,40 @@ def export_final_victim_entities_excel() -> Run[Unit]:
     )
 
 
-def match_orphans_with_splink(env: Environment) -> Run[NextStep]:
-    """
-    Match unnamed victims with existing victim clusters using SPLINK.
-    """
-    # Placeholder for the actual matching logic
-    # This would involve querying the database for orphan victims,
-    # applying the SPLINK algorithm, and updating the database with matches.
-
-    # For now, we just return a NextStep indicating completion.
+def _run_orphan_linkage(env: Environment, *, reuse_model: bool) -> Run[NextStep]:
     return (
         _create_orphans_view()
         ^ _create_linkage_input_tables()
-        ^ _link_orphans_to_entities(env)
+        ^ _link_orphans_to_entities(env, reuse_model=reuse_model)
         ^ _integrate_orphan_matches()
         ^ _export_orphan_matches_debug_excel()
         ^ export_final_victim_entities_excel()
         ^ pure(NextStep.CONTINUE)
+    )
+
+
+def _dispatch_orphan_link_action(
+    env: Environment,
+    action: OrphanLinkAction,
+) -> Run[NextStep]:
+    match action:
+        case OrphanLinkAction.TRAIN:
+            return _run_orphan_linkage(env, reuse_model=False)
+        case OrphanLinkAction.REUSE:
+            return _run_orphan_linkage(env, reuse_model=True)
+        case OrphanLinkAction.MAIN_MENU:
+            return pure(NextStep.CONTINUE)
+        case OrphanLinkAction.QUIT:
+            return pure(NextStep.QUIT)
+
+
+def match_orphans_with_splink(env: Environment) -> Run[NextStep]:
+    """
+    Match unnamed victims with existing victim clusters using SPLINK.
+    """
+    return (
+        input_orphan_link_action()
+        >> (lambda action: _dispatch_orphan_link_action(env, action))
     )
 
 

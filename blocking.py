@@ -4,6 +4,40 @@ Classes and helper functions for defining blocking rules in Splink
 
 from enum import StrEnum
 
+from splink import block_on
+from splink.internals.blocking_rule_library import (
+    And,
+    Not,
+    # Or,
+    # CustomRule,
+    # ExactMatchRule,
+)
+from splink.internals.blocking_rule_creator import BlockingRuleCreator
+
+from pymonad import (
+    Array,
+    HashMap,
+    TrainingBlockToComparisonLevelMap,
+    comparison_level_keys,
+)
+from comparison import (
+    _clause_from_comps,
+    DATE_COMP,
+    DATE_COMP_ORPHAN,
+    DIST_COMP,
+)
+
+SAME_CITY = block_on("city_id")
+def _and_city(cr: BlockingRuleCreator) -> BlockingRuleCreator:
+    return And(cr, SAME_CITY)
+
+
+DIFFERENT_ARTICLE = Not(block_on("exclusion_id"))
+YEAR_MONTH = block_on("year", "month")
+FULLNAME =  block_on("victim_fullname_concat")
+AGE_SEX =   block_on("victim_age", "victim_sex")
+OFFENDER_AGE_SEX = block_on("offender_age", "offender_sex")
+
 
 class BlockComp(StrEnum):
     """
@@ -76,25 +110,14 @@ class BlockComp(StrEnum):
     CLOSE_LONG_LAT = "abs(l.lat - r.lat) <= 0.0045 AND abs(l.lon - r.lon) <= 0.0055"
     CLOSE_SUMMARY = "array_cosine_similarity(l.summary_vec, r.summary_vec) >= 0.5"
 
-def _clause_from_comps(*components: StrEnum) -> str:
-    return " AND ".join([component.value for component in components])
 
-# def add_do_not_link_exclusion(
-#     rule: str,
-#     unique_id_column: str,
-#     do_not_link_table: str = "do_not_link",
-#     id_left_col: str = "id_l",
-#     id_right_col: str = "id_r",
-# ) -> str:
-#     return (
-#         f"({rule}) AND NOT EXISTS ("
-#         f"SELECT 1 FROM {do_not_link_table} d WHERE "
-#         f"(d.{id_left_col} = l.{unique_id_column} AND "
-#         f"d.{id_right_col} = r.{unique_id_column}) "
-#         f"OR (d.{id_left_col} = r.{unique_id_column} AND "
-#         f"d.{id_right_col} = l.{unique_id_column})"
-#         f")"
-#     )
+def _add_city(*creators: BlockingRuleCreator) -> list[BlockingRuleCreator]:
+    """
+    Adds city check to each creator and returns as a list
+        List is needed for settings
+    """
+    return list((_and_city & Array(creators)).a)
+
 
 def _block_from_comps(
     *components: BlockComp, add_article_exclusion: bool = True
@@ -262,11 +285,13 @@ class DedupBlockRule(StrEnum):
     OFFENDER_AGE_SEX = _block_from_comps(
         BlockComp.SAME_OFFENDER_AGE_SEX
     )
-
+    AGE_WEAPON = _block_from_comps(
+        BlockComp.SAME_AGE,
+        BlockComp.SAME_WEAPON
+    )
 
 
 # Backwards-compatible aliases for refactors still in flight.
-
 
 
 NAMED_VICTIM_BLOCKS = [
@@ -278,7 +303,14 @@ NAMED_VICTIM_BLOCKS = [
     DedupBlockRule.YEAR_AGE_SEX
 ]
 
-NAMED_VICTIM_BLOCKS_FOR_TRAINING = [
+NAMED_VICTIM_BLOCKS_FOR_TRAINING = _add_city(
+    YEAR_MONTH,
+    FULLNAME,
+    AGE_SEX,
+    OFFENDER_AGE_SEX
+)
+
+NAMED_VICTIM_BLOCKS_FOR_TRAINING_OLD = [
     DedupBlockRule.YEAR_MONTH,
     DedupBlockRule.SAME_FULLNAME,
     DedupBlockRule.AGE_SEX,
@@ -298,6 +330,7 @@ ORPHAN_VICTIM_BLOCKS = [
     DedupBlockRule.YEAR_MONTH,
     DedupBlockRule.DATE_LOCATION,
     DedupBlockRule.AGE_SEX,
+    DedupBlockRule.AGE_WEAPON,
     DedupBlockRule.OFFENDER_AGE_SEX
 ]
 
@@ -326,3 +359,49 @@ SHR_TRAINING_BLOCKS = [
     TrainBlockRule.AGE_SEX,
     TrainBlockRule.OFFENDER_AGE_SEX,
 ]
+
+YEAR_MONTH_COMPARISON = [
+    "exact date or month precision match",
+    "exact yr/mon or within 2 days"
+]
+
+TRAINING_BLOCK_LEVEL_MAP: TrainingBlockToComparisonLevelMap = HashMap.make({
+    DedupBlockRule.YEAR_MONTH: comparison_level_keys(
+        DATE_COMP,
+        YEAR_MONTH_COMPARISON,
+    ),
+    TrainBlockRule.YEAR_MONTH: comparison_level_keys(
+        DATE_COMP_ORPHAN,
+        [
+            "exact date or month precision match",
+            "exact yr/mon or year precision match",
+        ],
+    ),
+    YEAR_MONTH: comparison_level_keys(
+        DATE_COMP,
+        YEAR_MONTH_COMPARISON,
+    ),
+    TrainBlockRule.SEX_WITHIN_YEAR: comparison_level_keys(
+        DATE_COMP_ORPHAN,
+        [
+            "exact date or month precision match",
+            "exact yr/mon or year precision match",
+            "within a year",
+        ],
+    ),
+    TrainBlockRule.GEO_SHORT: comparison_level_keys(
+        DIST_COMP,
+        [
+            "exact location match",
+            "within 0.4 km or similar address",
+        ],
+    ),
+    TrainBlockRule.OFFENDER_SEX_WITHIN_YEAR: comparison_level_keys(
+        DATE_COMP_ORPHAN,
+        [
+            "exact date or month precision match",
+            "exact yr/mon or year precision match",
+            "within a year",
+        ],
+    ),
+})

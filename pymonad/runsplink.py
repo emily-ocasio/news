@@ -6,13 +6,17 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from enum import Enum, StrEnum
 import logging
+import html
 import json
 import math
 from pathlib import Path
+import webbrowser
 from typing import Any, Sequence, TypeVar, cast
 from collections.abc import Callable
 import uuid
+import re
 
+import numpy as np
 import altair as alt
 import duckdb
 import networkx as nx
@@ -20,10 +24,11 @@ import pandas as pd
 from pandas import DataFrame
 from splink import Linker, DuckDBAPI, blocking_analysis
 from splink.internals.blocking_rule_creator import BlockingRuleCreator
+from splink.internals.blocking_rule_library import And, CustomRule
 from splink.internals.blocking_rule_creator_utils import to_blocking_rule_creator
 from splink.internals.blocking import BlockingRule
 from splink.internals.cache_dict_with_logging import CacheDictWithLogging
-from splink.internals.charts import unlinkables_chart
+from splink.internals.charts import unlinkables_chart, save_offline_chart
 from splink.internals.comparison import Comparison as SplinkComparison
 from splink.internals.comparison_creator import ComparisonCreator
 from splink.internals.misc import bayes_factor_to_prob, prob_to_bayes_factor
@@ -32,6 +37,7 @@ from splink.internals.pipeline import CTEPipeline
 
 # pylint:disable=W0212
 
+from calculations import distance_km
 from .environment import DbBackend, Environment
 from .run import Run, ask, throw, ErrorPayload, pure, put_line, fold_run, \
     put_splink_linker, get_splink_linker, get_splink_context, put_splink_context, \
@@ -219,7 +225,8 @@ def _train_linker_setup(
         linker.training.estimate_probability_two_random_records_match(
             list(ctx.deterministic_rules), recall=ctx.deterministic_recall
         )
-        linker.training.estimate_u_using_random_sampling(1e8)
+        if not ctx.skip_u_estimation:
+            linker.training.estimate_u_using_random_sampling(1e8)
         return pure(unit)
     return _run()
 
@@ -231,11 +238,22 @@ def _maybe_adjust_lambda_for_training_rule(
 ) -> Run[Unit]:
     if len(ctx.training_block_level_map) == 0:
         return pure(unit)
+    def _normalize_rule_key(rule: BlockingRuleLike) -> str:
+        if isinstance(rule, BlockingRuleCreator):
+            sql_dialect = cast(str, linker._db_api.sql_dialect.sql_dialect_str)
+            return to_blocking_rule_creator(rule).get_blocking_rule(
+                sql_dialect
+            ).blocking_rule_sql
+        return str(rule)
+
     level_keys = ctx.training_block_level_map.get(training_rule)
     if level_keys is None:
-        training_rule_str = str(training_rule)
+        training_rule_str = _normalize_rule_key(training_rule)
         for rule_key, mapped_levels in ctx.training_block_level_map.items():
-            rule_key_str = str(rule_key)
+            rule_key_str = _normalize_rule_key(rule_key)
+            if rule_key_str == training_rule_str:
+                level_keys = mapped_levels
+                break
             if rule_key_str and rule_key_str in training_rule_str:
                 level_keys = mapped_levels
                 break
@@ -942,6 +960,7 @@ class SplinkContext:
     deterministic_rules: StringBlockingRules = field(default_factory=Array.empty)
     deterministic_recall: float = 0.5
     train_first: bool = False
+    skip_u_estimation: bool = False
     visualize: bool = False
     unique_matching: bool = False
     em_max_runs: int = 3
@@ -1027,7 +1046,8 @@ class SplinkDedupeJob:
     deterministic_recall: float
     clusters_out: ClustersTableName = ClustersTableName("")
     train_first: bool = False
-    training_blocking_rules: StringBlockingRules | None = None
+    skip_u_estimation: bool = False
+    training_blocking_rules: StringBlockingRules | BlockingRuleCreators| None = None
     training_block_level_map: TrainingBlockToComparisonLevelMap = field(
         default_factory=HashMap.empty
     )
@@ -2017,7 +2037,7 @@ def _append_clause_to_rules(
     updated: list[BlockingRuleLike] = []
     for rule in rules:
         if isinstance(rule, BlockingRuleCreator):
-            updated.append(rule)
+            updated.append(And(rule, CustomRule(clause)))
         else:
             updated.append(CustomStringBlockingRule(f"({rule}) AND {clause}"))
     return Array.make(tuple(updated))
@@ -2257,7 +2277,8 @@ def splink_dedupe_job(
     pairs_out: PairsTableName = PairsTableName("incidents_pairs"),
     clusters_out: ClustersTableName = ClustersTableName(""),
     train_first: bool = False,
-    training_blocking_rules: StringBlockingRules | Sequence[StringBlockingRule] | None = None,
+    skip_u_estimation: bool = False,
+    training_blocking_rules: StringBlockingRules | Sequence[StringBlockingRule] | Sequence[BlockingRuleCreator] | None = None,
     training_block_level_map: TrainingBlockToComparisonLevelMap = HashMap.empty(),
     deterministic_rules: StringBlockingRules | Sequence[StringBlockingRule] | None = None,
     deterministic_recall: float = 0.5,
@@ -2291,6 +2312,7 @@ def splink_dedupe_job(
                 deterministic_recall,
                 clusters_out,
                 train_first,
+                skip_u_estimation,
                 Array.make(tuple(training_blocking_rules or ())),
                 training_block_level_map,
                 visualize,
@@ -2344,6 +2366,18 @@ def _run_splink_visualize(linker: Linker, job: SplinkVisualizeJob) -> None:
     df_clustered = None
     clustered_df = None
     cluster_id_map: dict[Any, Any] = {}
+    _float_re = re.compile(r"""
+        ^\[\s*
+        [-+]?  # sign
+        (?:\d+\.\d*|\.\d+|\d+)  # int/float
+        (?:[eE][-+]?\d+)?       # exponent
+        (?:\s+
+            [-+]?
+            (?:\d+\.\d*|\.\d+|\d+)
+            (?:[eE][-+]?\d+)?
+        )*
+        \s*\]$
+        """, re.VERBOSE)
 
     def _midpoint_blocking_rule(
         left_midpoints: Sequence[int] | None,
@@ -2444,6 +2478,109 @@ def _run_splink_visualize(linker: Linker, job: SplinkVisualizeJob) -> None:
             return action(new_cache)
         finally:
             db_api._intermediate_table_cache = old_cache
+
+    def _truncate_long_chart_values(chart, max_length=500, disp=10) -> alt.Chart:
+        # get the Vega-Lite dict
+        spec = chart.to_dict()
+        spec.pop("$schema", None)
+        spec.pop("config", None)
+
+        def must_truncate(key, value) -> bool:
+            return (
+                key in ("value_l", "value_r")
+                and isinstance(value, str)
+                and len(value) > max_length
+            )
+
+        def truncate_value(value):
+            return value[:disp] + "..." + value[-disp:]
+
+        # find the dataset
+        for _, rows in spec.get("datasets", {}).items():
+            for row in rows:
+                if (
+                    "value_l" in row
+                    and "value_r" in row
+                    and isinstance(row["value_l"], str)
+                    and isinstance(row["value_r"], str)
+                ):
+                    row["value_l"], row["value_r"] = _vectors_to_similarity(
+                        row["value_l"], row["value_r"]
+                    )
+                    row["value_l"], row["value_r"] = _locations_to_distance(
+                        row["value_l"], row["value_r"]
+                    )
+                for key, value in row.items():
+                    if must_truncate(key, value):
+                        row[key] = truncate_value(value)
+
+        # return a new Altair chart from the modified spec
+        return alt.Chart.from_dict(spec)
+
+    def _vectors_to_similarity(left: str, right: str) -> tuple[str, str]:
+        def to_maybe_vec(s: str) -> Maybe[np.ndarray]:
+            return (
+                Just(np.fromstring(s.strip()[1:-1], sep=" "))
+                if _float_re.match(s.strip())
+                else Nothing
+            )
+
+        #print("Checking vectors for similarity...")
+        match to_maybe_vec(left), to_maybe_vec(right):
+            case Just(x), Just(y) if len(x) == len(y):
+                dot_product = np.dot(x, y)
+                norm_vec1 = np.linalg.norm(x)
+                norm_vec2 = np.linalg.norm(y)
+                similarity = (
+                    0
+                    if norm_vec1 == 0 or norm_vec2 == 0
+                    else dot_product / (norm_vec1 * norm_vec2)
+                )
+                return "cosine similarity:", f"{similarity:.6f}"
+            case _:
+                return left, right
+
+    def _locations_to_distance(left: str, right: str) -> tuple[str, str]:
+        min_lat, max_lat = 38.7, 39.0
+        min_lon, max_lon = -77.2, -76.9
+
+        def extract_lat_lon(parts: list[str]) -> tuple[float, float] | None:
+            if len(parts) < 4:
+                return None
+
+            lat: float | None = None
+            lon: float | None = None
+            for part in parts:
+                try:
+                    value = float(part)
+                except ValueError:
+                    continue
+                if lat is None and min_lat <= value <= max_lat:
+                    lat = value
+                elif lon is None and min_lon <= value <= max_lon:
+                    lon = value
+                if lat is not None and lon is not None:
+                    return lat, lon
+            return None
+
+        left_vals = left.split(",")
+        right_vals = right.split(",")
+        left_location = extract_lat_lon(left_vals)
+        right_location = extract_lat_lon(right_vals)
+
+        if left_location is None or right_location is None:
+            return left, right
+
+        left_lat, left_lon = left_location
+        right_lat, right_lon = right_location
+
+        return f"{left_vals[0]} dist (km):", f"{right_vals[0]} {distance_km((
+            left_lat,
+            left_lon
+        ), (
+            right_lat,
+            right_lon
+        )):.3f}"
 
     if job.chart_type == SplinkChartType.MODEL:
         chart = linker.visualisations.match_weights_chart()
@@ -2648,7 +2785,7 @@ def _run_splink_visualize(linker: Linker, job: SplinkVisualizeJob) -> None:
             if col and col in inspect_df.columns
         ]
         if display_cols:
-            print_df = inspect_df[display_cols].reset_index()
+            print_df = inspect_df[display_cols]
             with pd.option_context(
                 "display.max_rows",
                 None,
@@ -2672,8 +2809,184 @@ def _run_splink_visualize(linker: Linker, job: SplinkVisualizeJob) -> None:
     if job.chart_type == SplinkChartType.WATERFALL:
         if len(inspect_df) > 0:
             inspect_dict = cast(list[dict[str, Any]], inspect_df.to_dict(orient="records"))
-            waterfall = linker.visualisations.waterfall_chart(inspect_dict)
-            waterfall.show()  # type: ignore
+            waterfall = linker.visualisations.waterfall_chart(
+                inspect_dict, filter_nulls=False)
+            waterfall_no_summary = _truncate_long_chart_values(waterfall)
+
+            print_df = print_df.copy()
+            if "record_number" not in print_df.columns:
+                print_df = print_df.reset_index(drop=False).rename(
+                    columns={"index": "record_number"}
+                )
+            # List the columns you want in the table
+            fields_to_show = [
+                "record_number",
+                "cluster_id",
+                "match_probability",
+                left_id_col,
+                right_id_col,
+                "midpoint_day_l",
+                "midpoint_day_r",
+            ]
+
+            # Make sure these exist
+            fields_to_show = [c for c in fields_to_show if c in print_df.columns]
+
+            waterfall_spec = cast(dict[str, Any], waterfall_no_summary.to_dict())
+            chart_path = Path("waterfall_chart_with_table.html")
+            save_offline_chart(
+                waterfall_spec,
+                filename=str(chart_path),
+                overwrite=True,
+                print_msg=False,
+            )
+            display_columns = [
+                c
+                for c in [
+                    "record_number",
+                    "cluster_id",
+                    "match_probability",
+                    left_id_col,
+                    right_id_col,
+                    "midpoint_day_l",
+                    "midpoint_day_r",
+                ]
+                if c and c in print_df.columns
+            ]
+            display_df = print_df[display_columns].copy() if display_columns else print_df.copy()
+            if "match_probability" in display_df.columns:
+                display_df["match_probability"] = display_df["match_probability"].map(
+                    lambda x: f"{x:.6f}" if pd.notna(x) else ""
+                )
+
+            def _to_record_number(value: Any) -> int | None:
+                try:
+                    if pd.isna(value):
+                        return None
+                except Exception:  # pylint: disable=W0718
+                    pass
+                try:
+                    return int(value)
+                except Exception:  # pylint: disable=W0718
+                    try:
+                        return int(float(str(value)))
+                    except Exception:  # pylint: disable=W0718
+                        return None
+
+            header_cells = "".join(
+                f"<th>{html.escape(str(col))}</th>" for col in display_df.columns
+            )
+            table_rows = []
+            for _, row in display_df.iterrows():
+                record_number = _to_record_number(row.get("record_number"))
+                row_cells = "".join(
+                    f"<td>{html.escape('' if pd.isna(val) else str(val))}</td>"
+                    for val in row
+                )
+                if record_number is None:
+                    row_attrs = 'class="waterfall-row" data-record-number=""'
+                else:
+                    row_attrs = (
+                        f'class="waterfall-row" id="waterfall-row-{record_number}" '
+                        f'data-record-number="{record_number}"'
+                    )
+                table_rows.append(f"<tr {row_attrs}>{row_cells}</tr>")
+            table_html = (
+                "\n<section style=\"margin:24px 12px;\">"
+                "\n  <h3 style=\"margin:0 0 8px 0; font-family:sans-serif;\">Waterfall chart members</h3>"
+                "\n  <div style=\"overflow-x:auto;\">"
+                "\n    <table style=\"border-collapse:collapse; font-family:Menlo,Consolas,monospace; font-size:9px; min-width:720px; line-height:1.1;\">"
+                f"\n      <thead><tr>{header_cells}</tr></thead>"
+                f"\n      <tbody>{''.join(table_rows)}</tbody>"
+                "\n    </table>"
+                "\n  </div>"
+                "\n  <style>"
+                "\n    table th, table td { border:1px solid #ddd; padding:1px 4px; text-align:left; white-space:nowrap; }"
+                "\n    table thead th { background:#f4f4f4; font-weight:600; }"
+                "\n    table tbody tr:nth-child(even) { background:#fafafa; }"
+                "\n    .waterfall-row { cursor:pointer; }"
+                "\n    .waterfall-row:hover { background:#eef5ff !important; }"
+                "\n    .waterfall-row.is-active { background:#dfefff !important; }"
+                "\n  </style>"
+                "\n</section>\n"
+            )
+            html_text = chart_path.read_text(encoding="utf-8")
+            if "</body>" in html_text:
+                html_prefix, html_suffix = html_text.rsplit("</body>", 1)
+                html_text = f"{html_prefix}{table_html}</body>{html_suffix}"
+            else:
+                html_text += table_html
+
+            embed_prefix = "vegaEmbed('#mychart', "
+            embed_suffix = ").catch(console.error);"
+            embed_start = html_text.find(embed_prefix)
+            embed_end = html_text.find(embed_suffix, embed_start)
+            if embed_start != -1 and embed_end != -1:
+                spec_expr = html_text[
+                    embed_start + len(embed_prefix):embed_end
+                ]
+                bridge_script = (
+                    "const waterfallSpec = "
+                    + spec_expr
+                    + ";\n"
+                    "vegaEmbed('#mychart', waterfallSpec)\n"
+                    "  .then((result) => {\n"
+                    "    const view = result.view;\n"
+                    "    window.waterfallView = view;\n"
+                    "    const highlightRow = (recordNumber) => {\n"
+                    "      const target = String(recordNumber);\n"
+                    "      const rows = document.querySelectorAll('.waterfall-row');\n"
+                    "      rows.forEach((row) => {\n"
+                    "        row.classList.toggle('is-active', row.dataset.recordNumber === target);\n"
+                    "      });\n"
+                    "    };\n"
+                    "    if (!window.__waterfallRowClickBound) {\n"
+                    "      document.addEventListener('click', (event) => {\n"
+                    "        const target = event.target;\n"
+                    "        if (!(target instanceof Element)) {\n"
+                    "          return;\n"
+                    "        }\n"
+                    "        const row = target.closest('.waterfall-row');\n"
+                    "        if (!row) {\n"
+                    "          return;\n"
+                    "        }\n"
+                    "        const value = Number(row.getAttribute('data-record-number'));\n"
+                    "        if (!Number.isFinite(value)) {\n"
+                    "          console.warn('Invalid record_number in table row:', row.getAttribute('data-record-number'));\n"
+                    "          return;\n"
+                    "        }\n"
+                    "        view.signal('record_number', value).runAsync().catch((err) => {\n"
+                    "          console.warn('Unable to set record_number signal:', err);\n"
+                    "        });\n"
+                    "      });\n"
+                    "      window.__waterfallRowClickBound = true;\n"
+                    "    }\n"
+                    "    try {\n"
+                    "      view.addSignalListener('record_number', (_name, value) => {\n"
+                    "        highlightRow(value);\n"
+                    "      });\n"
+                    "      window.requestAnimationFrame(() => {\n"
+                    "        highlightRow(view.signal('record_number'));\n"
+                    "      });\n"
+                    "    } catch (err) {\n"
+                    "      console.warn('Signal synchronization unavailable:', err);\n"
+                    "    }\n"
+                    "  })\n"
+                    "  .catch(console.error);"
+                )
+                html_text = (
+                    html_text[:embed_start]
+                    + bridge_script
+                    + html_text[embed_end + len(embed_suffix):]
+                )
+            else:
+                print("Unable to locate vegaEmbed call for table-chart synchronization.")
+            chart_path.write_text(html_text, encoding="utf-8")
+            print(f"Waterfall chart written to {chart_path.resolve()}")
+            try:
+                webbrowser.open(chart_path.resolve().as_uri())
+            except Exception as exc:  # pylint: disable=W0718
+                print(f"Unable to auto-open chart in browser: {exc}")
         else:
             print("No records match the requested midpoint filters; skipping waterfall chart.")
         return
@@ -2796,6 +3109,7 @@ def _init_splink_dedupe_context(job: SplinkDedupeJob) -> Run[Unit]:
             deterministic_rules=job.deterministic_rules,
             deterministic_recall=job.deterministic_recall,
             train_first=job.train_first,
+            skip_u_estimation=job.skip_u_estimation,
             visualize=job.visualize,
             unique_matching=job.unique_matching,
             em_max_runs=job.em_max_runs,

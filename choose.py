@@ -36,6 +36,7 @@ initial_prompts = (
     "Assign articles to [H]omicides",
     "Determine humani[Z]ing coverage",
     "Candidate [V]ictim list",
+    "Compute vector similarity [X]",
     "Build [I]ncident views (DuckDB)",
     "Run [M]AR geocoding (addresses)",
     "Run [D]edup incidents (Splink)",

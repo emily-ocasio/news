@@ -266,7 +266,7 @@ class Incident(BaseModel):
     offender_race: Race | None
     offender_ethnicity: Ethnicity | None
     victim_count: int | None
-    summary: str
+    summary: str | None
     victim: list[Victim] = Field(min_length=1)
 
 class WashingtonPostArticleAnalysis(BaseModel):

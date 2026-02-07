@@ -37,6 +37,7 @@ class AddressResultType(Enum):
     NO_RESULT_INTERSECTION = "NO_RESULT_INTERSECTION"
     ADDRESS = "ADDRESS"
     APPROXIMATE_PLACE = "APPROXIMATE_PLACE"
+    QUADRANT = "QUADRANT"
     NAMED_PLACE = "NAMED_PLACE"
     UNRECOGNIZED_PLACE = "UNRECOGNIZED_PLACE"
     STREET_ONLY = "STREET_ONLY"
@@ -124,6 +125,12 @@ def mar_result_type_with_input(addr_key: str, j: dict) -> AddressResultType:
     )
     if (
         derived == AddressResultType.ADDRESS
+        and (addr_key or "").strip().upper()
+        in {"NORTHWEST", "NORTHEAST", "SOUTHWEST", "SOUTHEAST"}
+    ):
+        return AddressResultType.QUADRANT
+    if (
+        derived == AddressResultType.ADDRESS
         and addr_key_type(addr_key) == AddressResultType.UNRECOGNIZED_PLACE
     ):
         return AddressResultType.APPROXIMATE_PLACE
@@ -145,6 +152,7 @@ def mar_result_score(j: dict) -> float:
         case (
             AddressResultType.ADDRESS
             | AddressResultType.APPROXIMATE_PLACE
+            | AddressResultType.QUADRANT
             | AddressResultType.NAMED_PLACE
             | AddressResultType.STREET_ONLY
         ):
@@ -306,6 +314,16 @@ def mar_geocode_handler(x: MarGeocode) -> GeocodeResult:
                     raw_json=j,
                 )
             case AddressResultType.APPROXIMATE_PLACE:
+                c0 = addresses[0].get("address", {}).get("properties", {})
+                return GeocodeResult(
+                    ok=True,
+                    normalized_input=x.address,
+                    matched_address=x.address,
+                    x_lon=float(c0.get("Longitude", 0)),
+                    y_lat=float(c0.get("Latitude", 0)),
+                    raw_json=j,
+                )
+            case AddressResultType.QUADRANT:
                 c0 = addresses[0].get("address", {}).get("properties", {})
                 return GeocodeResult(
                     ok=True,

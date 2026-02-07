@@ -14,7 +14,7 @@ from typing import cast, Any, Generic, TypeVar
 from .applicative import Applicative
 from .array import Array
 from .dispatch import GetLine, PutLine, InputPrompt, MarGeocode, Sleep, \
-    GeocodeResult
+    GeocodeResult, FileExists, RenameFile
 from .either import Either, Left, Right
 from .environment import Environment, Namespace, PromptKey, AllPrompts, \
     all_prompts
@@ -306,6 +306,14 @@ def geocode_address(address: str, mar_key: str) -> Run[GeocodeResult]:
 def sleep_ms(ms: int) -> Run[None]:
     """Sleep for rate limiting or courtesy."""
     return Run(lambda self: self._perform(Sleep(ms), self), _unhandled)
+
+def file_exists(path: str) -> Run[bool]:
+    """Check whether a path exists (base effect)."""
+    return Run(lambda self: self._perform(FileExists(path), self), _unhandled)
+
+def rename_file(src: str, dest: str) -> Run[Unit]:
+    """Rename (replace) a file path (base effect)."""
+    return Run(lambda self: self._perform(RenameFile(src, dest), self), _unhandled)
 
 # ===== Eliminators =====
 

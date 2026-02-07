@@ -191,7 +191,9 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
         - accumulate failures but keep processing others
         """
         # Local normalizer: strip trailing DC city/state; MAR wants street only
-        dc_suffix_re = re.compile(r"(?i)\s*,?\s*(washington(,)?\s*d\.?c\.?|dc)\s*$")
+        dc_suffix_re = re.compile(
+            r"(?i)\s*,?\s*(washington(,)?\s*d\.?c\.?|dc|washington)\s*$"
+        )
 
         block_of_re = re.compile(r"\bBLOCK\b(?!\s+OF\b)")
 
@@ -249,6 +251,9 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
 
             normalized = re.sub(r"\b([0-9]+)\s+STREET\b", add_ordinal_suffix, normalized)
             normalized = re.sub(r"\bGOOD\s+HOPE\s+ROAD\b", "MARION BARRY AVENUE", normalized)
+            normalized = re.sub(
+                r"\bCAPIT[AO]L\s+HILTON\s+HOTEL\b", "CAPITAL HILTON", normalized
+            )
             return block_of_re.sub("BLOCK OF", normalized)
 
         def cache_result_type(

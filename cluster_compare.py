@@ -99,14 +99,71 @@ def _build_compare_sql(
     member_col = _qident(req.member_id_col)
     cluster_col = _qident(req.cluster_id_col)
 
-    order_expr = ", ".join([_qident("source")] + [_qident(c) for c in order_cols])
+    sort_cols = ["canonical_surname", "victim_surname_norm", "victim_forename_norm"]
+    order_expr = ", ".join(
+        [
+            _qident("change_order"),
+            _qident("family_canonical_surname") + " NULLS LAST",
+            _qident("family_victim_surname_norm") + " NULLS LAST",
+            _qident("family_victim_forename_norm") + " NULLS LAST",
+            _qident("family_id"),
+            _qident("source"),
+        ]
+        + [_qident(c) for c in order_cols]
+    )
     left_select = _select_list(merged_cols, left_cols, "l")
     right_select = _select_list(merged_cols, right_cols, "r")
+    left_sort_select = ", ".join(
+        [
+            (
+                f"min(l.{_qident(c)}) AS {_qident(c)}"
+                if c in left_cols
+                else f"NULL AS {_qident(c)}"
+            )
+            for c in sort_cols
+        ]
+    )
+    right_sort_select = ", ".join(
+        [
+            (
+                f"min(r.{_qident(c)}) AS {_qident(c)}"
+                if c in right_cols
+                else f"NULL AS {_qident(c)}"
+            )
+            for c in sort_cols
+        ]
+    )
 
     return SQL(
         f"""--sql
 CREATE OR REPLACE TABLE {out_table} AS
 WITH
+  left_members AS (
+    SELECT
+      {cluster_col} AS cluster_id,
+      {member_col} AS member_id
+    FROM {left_table}
+  ),
+  right_members AS (
+    SELECT
+      {cluster_col} AS cluster_id,
+      {member_col} AS member_id
+    FROM {right_table}
+  ),
+  left_sizes AS (
+    SELECT
+      cluster_id,
+      COUNT(DISTINCT member_id) AS size
+    FROM left_members
+    GROUP BY cluster_id
+  ),
+  right_sizes AS (
+    SELECT
+      cluster_id,
+      COUNT(DISTINCT member_id) AS size
+    FROM right_members
+    GROUP BY cluster_id
+  ),
   left_sig AS (
     SELECT
       {cluster_col} AS cluster_id,
@@ -136,16 +193,224 @@ WITH
     LEFT JOIN left_sig l
       ON r.signature = l.signature
     WHERE l.signature IS NULL
+  ),
+  left_unmatched_members AS (
+    SELECT lm.cluster_id, lm.member_id
+    FROM left_members lm
+    JOIN left_unmatched lu
+      ON lm.cluster_id = lu.cluster_id
+  ),
+  right_unmatched_members AS (
+    SELECT rm.cluster_id, rm.member_id
+    FROM right_members rm
+    JOIN right_unmatched ru
+      ON rm.cluster_id = ru.cluster_id
+  ),
+  left_right_intersection AS (
+    SELECT
+      l.cluster_id AS left_cluster_id,
+      r.cluster_id AS right_cluster_id,
+      COUNT(DISTINCT l.member_id) AS inter_cnt
+    FROM left_unmatched_members l
+    JOIN right_unmatched_members r
+      ON l.member_id = r.member_id
+    GROUP BY 1, 2
+  ),
+  left_change AS (
+    SELECT
+      lu.cluster_id,
+      CASE
+        WHEN EXISTS (
+          SELECT 1
+          FROM left_right_intersection i
+          JOIN right_sizes rs
+            ON rs.cluster_id = i.right_cluster_id
+          JOIN left_sizes ls
+            ON ls.cluster_id = lu.cluster_id
+          WHERE i.left_cluster_id = lu.cluster_id
+            AND i.inter_cnt = ls.size
+        ) THEN 'merged'
+        WHEN EXISTS (
+          SELECT 1
+          FROM left_right_intersection i
+          JOIN right_sizes rs
+            ON rs.cluster_id = i.right_cluster_id
+          WHERE i.left_cluster_id = lu.cluster_id
+            AND i.inter_cnt = rs.size
+        ) THEN 'split'
+        ELSE 'other'
+      END AS change
+    FROM left_unmatched lu
+  ),
+  right_change AS (
+    SELECT
+      ru.cluster_id,
+      CASE
+        WHEN EXISTS (
+          SELECT 1
+          FROM left_right_intersection i
+          JOIN left_sizes ls
+            ON ls.cluster_id = i.left_cluster_id
+          WHERE i.right_cluster_id = ru.cluster_id
+            AND i.inter_cnt = ls.size
+        ) THEN 'merged'
+        WHEN EXISTS (
+          SELECT 1
+          FROM left_right_intersection i
+          JOIN right_sizes rs
+            ON rs.cluster_id = ru.cluster_id
+          WHERE i.right_cluster_id = ru.cluster_id
+            AND i.inter_cnt = rs.size
+        ) THEN 'split'
+        ELSE 'other'
+      END AS change
+    FROM right_unmatched ru
+  ),
+  left_family AS (
+    SELECT
+      lu.cluster_id,
+      lc.change,
+      CASE
+        WHEN lc.change = 'split' THEN lu.cluster_id
+        WHEN lc.change = 'merged' THEN (
+          SELECT i.right_cluster_id
+          FROM left_right_intersection i
+          JOIN left_sizes ls
+            ON ls.cluster_id = lu.cluster_id
+          JOIN right_sizes rs
+            ON rs.cluster_id = i.right_cluster_id
+          WHERE i.left_cluster_id = lu.cluster_id
+            AND i.inter_cnt = ls.size
+          ORDER BY rs.size DESC, i.right_cluster_id
+          LIMIT 1
+        )
+        ELSE lu.cluster_id
+      END AS family_id
+    FROM left_unmatched lu
+    JOIN left_change lc
+      ON lc.cluster_id = lu.cluster_id
+  ),
+  right_family AS (
+    SELECT
+      ru.cluster_id,
+      rc.change,
+      CASE
+        WHEN rc.change = 'split' THEN (
+          SELECT i.left_cluster_id
+          FROM left_right_intersection i
+          JOIN right_sizes rs
+            ON rs.cluster_id = ru.cluster_id
+          JOIN left_sizes ls
+            ON ls.cluster_id = i.left_cluster_id
+          WHERE i.right_cluster_id = ru.cluster_id
+            AND i.inter_cnt = rs.size
+          ORDER BY ls.size DESC, i.left_cluster_id
+          LIMIT 1
+        )
+        WHEN rc.change = 'merged' THEN ru.cluster_id
+        ELSE ru.cluster_id
+      END AS family_id
+    FROM right_unmatched ru
+    JOIN right_change rc
+      ON rc.cluster_id = ru.cluster_id
+  ),
+  left_sort AS (
+    SELECT
+      l.{cluster_col} AS cluster_id,
+      {left_sort_select}
+    FROM {left_table} l
+    GROUP BY l.{cluster_col}
+  ),
+  right_sort AS (
+    SELECT
+      r.{cluster_col} AS cluster_id,
+      {right_sort_select}
+    FROM {right_table} r
+    GROUP BY r.{cluster_col}
+  ),
+  left_family_sort AS (
+    SELECT
+      lf.cluster_id,
+      lf.change,
+      lf.family_id,
+      CASE
+        WHEN lf.change = 'merged' THEN rs.canonical_surname
+        ELSE ls.canonical_surname
+      END AS family_canonical_surname,
+      CASE
+        WHEN lf.change = 'merged' THEN rs.victim_surname_norm
+        ELSE ls.victim_surname_norm
+      END AS family_victim_surname_norm,
+      CASE
+        WHEN lf.change = 'merged' THEN rs.victim_forename_norm
+        ELSE ls.victim_forename_norm
+      END AS family_victim_forename_norm
+    FROM left_family lf
+    LEFT JOIN left_sort ls
+      ON ls.cluster_id = lf.family_id
+    LEFT JOIN right_sort rs
+      ON rs.cluster_id = lf.family_id
+  ),
+  right_family_sort AS (
+    SELECT
+      rf.cluster_id,
+      rf.change,
+      rf.family_id,
+      CASE
+        WHEN rf.change = 'split' THEN ls.canonical_surname
+        ELSE rs.canonical_surname
+      END AS family_canonical_surname,
+      CASE
+        WHEN rf.change = 'split' THEN ls.victim_surname_norm
+        ELSE rs.victim_surname_norm
+      END AS family_victim_surname_norm,
+      CASE
+        WHEN rf.change = 'split' THEN ls.victim_forename_norm
+        ELSE rs.victim_forename_norm
+      END AS family_victim_forename_norm
+    FROM right_family rf
+    LEFT JOIN left_sort ls
+      ON ls.cluster_id = rf.family_id
+    LEFT JOIN right_sort rs
+      ON rs.cluster_id = rf.family_id
   )
-SELECT 1 AS source, {left_select}
+SELECT
+  1 AS source,
+  lfs.change AS change,
+  CASE
+    WHEN lfs.change = 'split' THEN 1
+    WHEN lfs.change = 'merged' THEN 2
+    ELSE 3
+  END AS change_order,
+  lfs.family_id AS family_id,
+  lfs.family_canonical_surname AS family_canonical_surname,
+  lfs.family_victim_surname_norm AS family_victim_surname_norm,
+  lfs.family_victim_forename_norm AS family_victim_forename_norm,
+  {left_select}
 FROM {left_table} l
 JOIN left_unmatched u
   ON l.{cluster_col} = u.cluster_id
+JOIN left_family_sort lfs
+  ON lfs.cluster_id = l.{cluster_col}
 UNION ALL
-SELECT 2 AS source, {right_select}
+SELECT
+  2 AS source,
+  rfs.change AS change,
+  CASE
+    WHEN rfs.change = 'split' THEN 1
+    WHEN rfs.change = 'merged' THEN 2
+    ELSE 3
+  END AS change_order,
+  rfs.family_id AS family_id,
+  rfs.family_canonical_surname AS family_canonical_surname,
+  rfs.family_victim_surname_norm AS family_victim_surname_norm,
+  rfs.family_victim_forename_norm AS family_victim_forename_norm,
+  {right_select}
 FROM {right_table} r
 JOIN right_unmatched u
   ON r.{cluster_col} = u.cluster_id
+JOIN right_family_sort rfs
+  ON rfs.cluster_id = r.{cluster_col}
 ORDER BY {order_expr};
 """
     )

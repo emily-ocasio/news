@@ -21,6 +21,7 @@ from geocode_incidents import geocode_incidents
 from shr_match import match_article_to_shr_victims
 from special_case_review import review_special_cases
 from special_add import add_special_articles
+from vector_similarity import vector_similarity
 
 
 class MainChoice(Enum):
@@ -37,6 +38,7 @@ class MainChoice(Enum):
     EXTRACTION = MenuChoice("G")
     HUMANIZE = MenuChoice("Z")
     VICTIM = MenuChoice("V")
+    VECTOR_SIM = MenuChoice("X")
     INCIDENTS = MenuChoice("I")
     GEOCODE = MenuChoice("M")
     DEDUP = MenuChoice("D")
@@ -87,6 +89,8 @@ def dispatch_from_main_menu(choice: MainChoice) -> Run[NextStep]:
             return gpt_incidents()
         case MainChoice.INCIDENTS:
             return build_incident_views()
+        case MainChoice.VECTOR_SIM:
+            return vector_similarity()
         case MainChoice.GEOCODE:  # <-- add
             return geocode_incidents()
         case MainChoice.DEDUP:

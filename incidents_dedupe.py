@@ -3,26 +3,16 @@ Dedupe incident records using Splink.
 """
 
 from itertools import groupby
-import splink.internals.comparison_library as cl
 
 from blocking import (
     DedupBlockRule,
     NAMED_VICTIM_BLOCKS,
     NAMED_VICTIM_DETERMINISTIC_BLOCKS,
     NAMED_VICTIM_BLOCKS_FOR_TRAINING,
+    TRAINING_BLOCK_LEVEL_MAP,
 )
 from comparison import (
-    NAME_COMP,
-    DATE_COMP,
-    AGE_COMP,
-    VICTIM_COUNT_COMP,
-    DIST_COMP_NEW as DIST_COMP,
-    OFFENDER_COMP,
-    OFFENDER_AGE_COMP,
-    OFFENDER_SEX_COMP,
-    TF_WEAPON_COMP,
-    CIRC_COMP,
-    SUMMARY_COMP
+    INCIDENT_COMPARISONS,
 )
 from menuprompts import NextStep
 from splink_types import SplinkType
@@ -38,9 +28,6 @@ from pymonad import (
     ClustersTableName,
     BlockedPairsTableName,
     DoNotLinkTableName,
-    HashMap,
-    BlockingRuleLike,
-    comparison_level_keys,
     splink_dedupe_job,
     sql_exec,
     sql_export,
@@ -48,6 +35,8 @@ from pymonad import (
     sql_import,
     unit,
     with_duckdb,
+    file_exists,
+    rename_file,
 )
 
 def _create_victims_named_table() -> Run[Unit]:
@@ -81,16 +70,6 @@ def _dedupe_named_victims(_: Unit) -> Run[Unit]:
     """
     Run initial pass of Splink deduplication on the victims_named table.
     """
-    training_rule: BlockingRuleLike = DedupBlockRule.YEAR_MONTH
-    training_block_level_map = HashMap.make({
-        training_rule: comparison_level_keys(
-            DATE_COMP,
-            [
-                "exact match incident date",
-                "exact yr/mon or within 2 days",
-            ],
-        ),
-    })
     return splink_dedupe_job(
         input_table=PredictionInputTableName("victims_named"),
         settings=_settings_for_victim_dedupe(),
@@ -100,7 +79,7 @@ def _dedupe_named_victims(_: Unit) -> Run[Unit]:
         clusters_out=ClustersTableName("victim_clusters"),
         train_first=True,
         training_blocking_rules=NAMED_VICTIM_BLOCKS_FOR_TRAINING,
-        training_block_level_map=training_block_level_map,
+        training_block_level_map=TRAINING_BLOCK_LEVEL_MAP,
         deterministic_rules=NAMED_VICTIM_DETERMINISTIC_BLOCKS,
         deterministic_recall=0.8,
         em_max_runs=1,
@@ -693,28 +672,39 @@ def _export_final_clusters_excel() -> Run[Unit]:
     )
 
     def _register_previous_final_clusters_if_exists() -> Run[bool]:
-        return sql_query(
-            SQL(
-                """--sql
-            SELECT CASE
-              WHEN COUNT(*) > 0 THEN TRUE
-              ELSE FALSE
-            END AS exists_flag
-            FROM glob('final_clusters.xlsx');
-            """
-            )
-        ) >> (
-            lambda rows: (
-                (
-                    sql_import("final_clusters.xlsx", "final_clusters_prev")
-                    ^ put_line(
-                        "[D] Loaded existing final_clusters.xlsx into final_clusters_prev."
-                    )
-                    ^ pure(True)
+        base_path = "final_clusters_base.xlsx"
+        current_path = "final_clusters.xlsx"
+
+        def _load_base() -> Run[bool]:
+            return (
+                sql_import(base_path, "final_clusters_prev")
+                ^ put_line(
+                    "[D] Loaded existing final_clusters_base.xlsx into final_clusters_prev."
                 )
-                if rows and rows[0]["exists_flag"]
-                else (put_line("[D] No existing final_clusters.xlsx found.") ^ pure(False))
+                ^ pure(True)
             )
+
+        def _maybe_rename_and_load(has_current: bool) -> Run[bool]:
+            if not has_current:
+                return (
+                    put_line(
+                        "[D] No existing final_clusters_base.xlsx or "
+                        "final_clusters.xlsx found."
+                    )
+                    ^ pure(False)
+                )
+            return (
+                rename_file(current_path, base_path)
+                ^ put_line(
+                    "[D] Renamed final_clusters.xlsx to final_clusters_base.xlsx."
+                )
+                ^ _load_base()
+            )
+
+        return file_exists(base_path) >> (
+            lambda has_base: _load_base()
+            if has_base
+            else file_exists(current_path) >> _maybe_rename_and_load
         )
 
     def _maybe_export_diffs(has_prev: bool) -> Run[Unit]:
@@ -734,10 +724,42 @@ def _export_final_clusters_excel() -> Run[Unit]:
                     SQL(
                         """--sql
                     SELECT
-                      *,
+                      source,
+                      change,
+                      cluster_id,
+                      member_count,
+                      canonical_surname,
+                      article_id,
+                      victim_row_id,
+                      city_id,
+                      incident_date,
+                      midpoint_day,
+                      date_precision,
+                      victim_name_raw,
+                      victim_fullname_concat,
+                      victim_forename_norm,
+                      victim_surname_norm,
+                      victim_age,
+                      victim_count,
+                      offender_count,
+                      victim_sex,
+                      lat,
+                      lon,
+                      address_type,
+                      geo_address_short,
+                      geo_address_short_2,
+                      geo_score,
+                      address,
+                      offender,
+                      weapon,
                       concat(cast(source AS varchar), '::', cast(cluster_id AS varchar)) AS __band_group
                     FROM cluster_diffs
                     ORDER BY
+                      change_order,
+                      family_canonical_surname NULLS LAST,
+                      family_victim_surname_norm NULLS LAST,
+                      family_victim_forename_norm NULLS LAST,
+                      family_id,
                       source,
                       canonical_surname NULLS LAST,
                       cluster_id,
@@ -820,28 +842,11 @@ def _cluster_blocks(rows):
 
 
 def _settings_for_victim_dedupe() -> dict:
-
-    comparisons = [
-        NAME_COMP,
-        DATE_COMP,
-        AGE_COMP,
-        VICTIM_COUNT_COMP,
-        DIST_COMP,
-        cl.ExactMatch("victim_sex"),
-        OFFENDER_COMP,
-        OFFENDER_AGE_COMP,
-        OFFENDER_SEX_COMP,
-        TF_WEAPON_COMP,
-        CIRC_COMP,
-        SUMMARY_COMP
-        # same_article_comp,  # Add the new comparison here
-    ]
-
     return {
         "link_type": "dedupe_only",
         "unique_id_column_name": "victim_row_id",
         "blocking_rules_to_generate_predictions": NAMED_VICTIM_BLOCKS,
-        "comparisons": comparisons,
+        "comparisons": INCIDENT_COMPARISONS,
     }
 
 
