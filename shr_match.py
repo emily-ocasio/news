@@ -1,8 +1,6 @@
 """
 Match article victim entities to SHR victims using Splink linkage.
 """
-import splink.internals.comparison_library as cl
-
 from splink_types import SplinkType
 from pymonad import (
     Run,
@@ -20,14 +18,7 @@ from pymonad import (
 )
 from menuprompts import NextStep
 from comparison import (
-    DATE_COMP_SHR,
-    AGE_COMP_SHR,
-    VICTIM_COUNT_COMP,
-    #DIST_COMP,
-    TF_WEAPON_COMP_SHR,
-    CIRC_COMP,
-    OFFENDER_AGE_COMP,
-    OFFENDER_SEX_COMP,
+    SHR_COMPARISONS,
 )
 from blocking import (
     SHR_OVERALL_BLOCKS,
@@ -39,19 +30,7 @@ from blocking import (
 # Define linkage settings for SHR matching
 shr_linkage_settings = {
     "link_type": "link_only",
-    "comparisons": [
-        DATE_COMP_SHR,
-        AGE_COMP_SHR,
-        VICTIM_COUNT_COMP,
-        OFFENDER_AGE_COMP,
-        OFFENDER_SEX_COMP,
-        #DIST_COMP,  - no location in SHR for DC
-        TF_WEAPON_COMP_SHR,
-        CIRC_COMP,
-        cl.ExactMatch("victim_sex").configure(term_frequency_adjustments=True),
-        cl.ExactMatch("victim_race"),
-        #cl.ExactMatch("victim_ethnicity"),
-    ],
+    "comparisons": SHR_COMPARISONS,
     "blocking_rules_to_generate_predictions": SHR_OVERALL_BLOCKS,
     "unique_id_column_name": "unique_id",  # for both tables
 }

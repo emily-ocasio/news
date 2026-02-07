@@ -821,3 +821,17 @@ ORPHAN_COMPARISONS = [
     OFFENDER_AGE_COMP,
     OFFENDER_SEX_COMP,
 ]
+
+SHR_COMPARISONS = [
+    DATE_COMP_SHR,
+    AGE_COMP_SHR,
+    VICTIM_COUNT_COMP,
+    OFFENDER_AGE_COMP,
+    OFFENDER_SEX_COMP,
+    # DIST_COMP,  # no location in SHR for DC
+    TF_WEAPON_COMP_SHR,
+    CIRC_COMP,
+    cl.ExactMatch("victim_sex").configure(term_frequency_adjustments=True),
+    cl.ExactMatch("victim_race"),
+    # cl.ExactMatch("victim_ethnicity"),
+]

@@ -5,7 +5,6 @@ Dedupe incident records using Splink.
 from itertools import groupby
 
 from blocking import (
-    DedupBlockRule,
     NAMED_VICTIM_BLOCKS,
     NAMED_VICTIM_DETERMINISTIC_BLOCKS,
     NAMED_VICTIM_BLOCKS_FOR_TRAINING,

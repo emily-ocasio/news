@@ -718,11 +718,11 @@ def _integrate_orphan_matches() -> Run[Unit]:
             lambda rows: (
                 put_line(f"[D] Checking for matched orphans: {rows[0]['n_affected']} affected entities.")
                 ^ (
-                    sql_exec(SQL("CREATE TEMP TABLE affected_entities AS SELECT DISTINCT entity_uid FROM final_orphan_matches;"))
+                    sql_exec(SQL("CREATE OR REPLACE TEMP TABLE affected_entities AS SELECT DISTINCT entity_uid FROM final_orphan_matches;"))
                     ^ sql_exec(
                         SQL(
                             """--sql
-                            CREATE TEMP TABLE all_members_temp AS
+                            CREATE OR REPLACE TEMP TABLE all_members_temp AS
                             SELECT
                                 m.victim_entity_id,
                                 m.date_precision,
@@ -760,7 +760,7 @@ def _integrate_orphan_matches() -> Run[Unit]:
                     ^ sql_exec(
                         SQL(
                             """--sql
-                            CREATE TEMP TABLE recomputed_agg AS
+                            CREATE OR REPLACE TEMP TABLE recomputed_agg AS
                             WITH agg AS (
                               SELECT
                                 victim_entity_id,

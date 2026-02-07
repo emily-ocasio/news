@@ -1,11 +1,13 @@
-"""Compatibility facade for Splink runtime exports."""
+"""Splink runtime package."""
 
-from .splink_runtime import (
+from .splink_api import (
     comparison_level_key,
     comparison_level_keys,
     splink_dedupe_job,
     splink_visualize_job,
-    run_splink,
+)
+from .splink_eliminator import run_splink
+from .splink_types import (
     BlockingRuleLike,
     TrainingBlockToComparisonLevelMap,
     SplinkChartType,

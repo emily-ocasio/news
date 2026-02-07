@@ -187,8 +187,9 @@ def run_openai(
                             text_format=text_format,
                             reasoning={
                                 "effort": effort,
-                                "summary": "auto",
+                                "summary": "auto"
                             },
+                            text={"verbosity": "low"},
                             timeout=300.0
                         ))
                     return client.responses.create(
