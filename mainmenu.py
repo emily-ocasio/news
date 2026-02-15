@@ -22,6 +22,9 @@ from shr_match import match_article_to_shr_victims
 from special_case_review import review_special_cases
 from special_add import add_special_articles
 from vector_similarity import vector_similarity
+from orphan_adjudication_apply import apply_orphan_adjudications
+
+MAIN_MENU_PROMPTS = mainmenu_prompts + ("Apply orphan adjudication [J]",)
 
 
 class MainChoice(Enum):
@@ -44,6 +47,7 @@ class MainChoice(Enum):
     DEDUP = MenuChoice("D")
     CHARTS = MenuChoice("C")
     UNNAMED = MenuChoice("U")
+    ADJUDICATION_APPLY = MenuChoice("J")
     LINK = MenuChoice("L")
     SPECIAL = MenuChoice("P")
     SPECIAL_ADD = MenuChoice("Y")
@@ -99,6 +103,8 @@ def dispatch_from_main_menu(choice: MainChoice) -> Run[NextStep]:
             return splink_charts()
         case MainChoice.UNNAMED:
             return match_unnamed_victims()
+        case MainChoice.ADJUDICATION_APPLY:
+            return apply_orphan_adjudications()
         case MainChoice.LINK:
             return match_article_to_shr_victims()
         case MainChoice.SPECIAL:
@@ -123,6 +129,6 @@ def main_menu_tick() -> Run[NextStep]:
     """
     Display and select from main menu
     """
-    return put_line("Main Menu:") ^ input_from_menu(MenuPrompts(mainmenu_prompts)) >> (
+    return put_line("Main Menu:") ^ input_from_menu(MenuPrompts(MAIN_MENU_PROMPTS)) >> (
         lambda choice: dispatch_from_main_menu(MainChoice(choice))
     )

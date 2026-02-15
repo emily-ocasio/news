@@ -187,6 +187,11 @@ Before a terminal label (`likely_missed_match`, `possible_but_weak`, `unlikely`)
   - If FTS coverage appears weak for the case wording, supplement with non-FTS retrieval and log rationale.
 - Use source anchors to find likely underlying incident article(s), then map those articles back to candidate entities.
 - Treat text-led hits as candidate-generation inputs (not terminal evidence by themselves); they must still pass Stage D narrative comparison.
+- Date-certainty policy for C2 recall windows:
+  - `high_certainty` (exact day, or month+year clearly established): use year window `orphan_year-1` to `orphan_year+1`.
+  - `medium_certainty` (year established but month/day missing; phrasing like "this year" or "last year"): use `orphan_year-2` to `orphan_year+2`.
+  - `low_certainty` (retrospective/range phrasing such as "since 1978", "over recent years", multi-year recap): use lower-bound-to-pub-year when available; otherwise default to `pub_year-5` to `pub_year`.
+  - Record chosen certainty level and window rationale in stage trace.
 
 4. Stage D: narrative anchor comparison (always required before terminal `unlikely`)
 - Compare source-article anchors against top fallback candidates using article text and extracted context.
@@ -208,6 +213,7 @@ Before a terminal label (`likely_missed_match`, `possible_but_weak`, `unlikely`)
   - do not persist as final adjudication.
 - A terminal `likely_missed_match` or `possible_but_weak` requires explicit fact-level correspondence, not score-only similarity.
 - A terminal `unlikely` requires explicit conflict analysis (date/location/weapon/circumstance) and narrative-anchor review.
+- For `low_certainty` date contexts, date mismatch alone is insufficient for terminal `unlikely`; require additional contradiction on anchors/circumstance/location/method.
 - If anchor evidence is missing because the source is inherently non-specific after required stages, assign `unlikely` with an explicit specificity-based reason code.
 - If anchor evidence is missing because analysis steps failed to run, assign `analysis_incomplete`.
 - Terminal decisions must satisfy the Multi-Victim Constraint.

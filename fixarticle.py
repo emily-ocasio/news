@@ -6,7 +6,8 @@ from calculations import single_article_sql, latest_gptresults_sql
 from pymonad import Run, Namespace, with_namespace, to_prompts, put_line, \
     pure, input_number, PromptKey, sql_query, SQL, SQLParams, throw, \
     ErrorPayload, set_, with_models, String, bind_first, Tuple, GPTUsage, \
-        GPTReasoning, Maybe, Just, _Nothing, gpt_usage_reasoning_from_rows
+        GPTReasoning, Maybe, Just, _Nothing, gpt_usage_reasoning_from_rows, \
+        run_except, Left
 from appstate import prompt_key
 from article import Article, Articles, ArticleAppError
 from gpt_filtering import GPT_PROMPTS, GPT_MODELS, \
@@ -15,6 +16,7 @@ from menuprompts import NextStep, MenuPrompts, MenuChoice, input_from_menu
 from incidents import process_all_articles as extract_process_all_articles, \
     GPT_PROMPTS as INCIDENTS_GPT_PROMPTS, PROMPT_KEY_STR as INCIDENTS_PROMPT_KEY_STR, \
     GPT_MODELS as INCIDENTS_GPT_MODELS
+from single_article_refresh import refresh_single_article_after_extract
 
 FIX_PROMPTS: dict[str, str | tuple[str,]] = {
     "record_id": "Please enter the record ID of the article you want to fix: ",
@@ -147,6 +149,16 @@ def _apply_action(article: Article, action: FixAction) -> Run[NextStep]:
     """
     Apply the desired action to the article and continue.
     """
+    def _post_extract_refresh() -> Run[None]:
+        record_id = article.record_id or 0
+        return run_except(refresh_single_article_after_extract(record_id)) >> (
+            lambda res: (
+                put_line(f"[F] Warning: post-[G] single-article refresh failed: {res.l}")
+                if isinstance(res, Left)
+                else pure(None)
+            )
+        )
+
     match action:
         case FixAction.SECOND_FILTER:
             return \
@@ -158,6 +170,7 @@ def _apply_action(article: Article, action: FixAction) -> Run[NextStep]:
             return (
                 set_(prompt_key, String(INCIDENTS_PROMPT_KEY_STR)) ^
                 extract_process_all_articles(Articles((article,)))
+                ^ _post_extract_refresh()
                 ^ pure(article)
                 >> _select_apply_action
             )

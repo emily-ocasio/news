@@ -37,3 +37,7 @@
 
 ## Mixed-Intent Rule
 - If one prompt requests both code changes and orphan batch adjudication, ask the user to choose one mode for the current turn before proceeding.
+
+## Skill Note
+- Adjudication reasoning can be explicitly invoked with `$orphan-adjudication-casewise`.
+- Post-adjudication apply/export is separate and should be run via application controller `[J]` (not via adjudication skill flow).

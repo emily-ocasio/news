@@ -87,7 +87,7 @@ def _create_orphans_view() -> Run[Unit]:
             )
         )
         ^ sql_query(SQL("SELECT COUNT(*) AS n FROM victims_orphan"))
-        >> (lambda rows: put_line(f"[D] victims_orphan rows: {rows[0]['n']}"))
+        >> (lambda rows: put_line(f"[U] victims_orphan rows: {rows[0]['n']}"))
         ^ pure(unit)
     )
 
@@ -285,7 +285,7 @@ def _create_linkage_input_tables() -> Run[Unit]:
         ^ sql_query(SQL("SELECT * FROM orphan_article_exclusion_report"))
         >> (
             lambda rows: put_line(
-                "[D] Orphan article exclusion report: "
+                "[U] Orphan article exclusion report: "
                 f"one_cluster={rows[0]['orphans_one_cluster_match']}, "
                 f"multi_cluster={rows[0]['orphans_multi_cluster_match']}, "
                 f"fell_through_pairs={rows[0]['fell_through_pairs']}"
@@ -302,9 +302,9 @@ def _create_linkage_input_tables() -> Run[Unit]:
         )
         >> (
             lambda rows: put_line(
-                f"[D] entity_link_input={rows[0]['n_entities']}, "
+                f"[U] entity_link_input={rows[0]['n_entities']}, "
                 f"orphan_link_input={rows[0]['n_orphans']}\n"
-                f"[D] Now run link_entities to link these two tables.\n"
+                f"[U] Now run link_entities to link these two tables.\n"
             )
         )
         ^ pure(unit)
@@ -332,7 +332,7 @@ def _debug_preview_orphans() -> Run[Unit]:
         )
         >> (
             lambda rows: put_line(
-                "[D] Orphan snapshot: "
+                "[U] Orphan snapshot: "
                 f"total={rows[0]['n_orphans']}, "
                 f"with_exclusion={rows[0]['n_with_exclusion']}, "
                 f"missing_year_or_month={rows[0]['n_missing_year_month']}, "
@@ -363,7 +363,7 @@ def _debug_preview_orphans() -> Run[Unit]:
         )
         >> (
             lambda rows: put_line(
-                "[D] Top 20 orphans (key blocking fields):\n"
+                "[U] Top 20 orphans (key blocking fields):\n"
                 + "\n".join(
                     "  "
                     f"id={r['unique_id']} city={r['city_id']} "
@@ -474,7 +474,7 @@ def _link_orphans_to_entities(
             em_max_runs=1,
             splink_key=SplinkType.ORPHAN,
         ) >> (
-            lambda outnames: put_line(f"[D] Wrote {outnames[1]} in DuckDB.")
+            lambda outnames: put_line(f"[U] Wrote {outnames[1]} in DuckDB.")
         ) ^ pure(unit)
 
     if reuse_model:
@@ -716,7 +716,7 @@ def _integrate_orphan_matches() -> Run[Unit]:
         ^ sql_query(SQL("SELECT COUNT(DISTINCT entity_uid) AS n_affected FROM final_orphan_matches"))
         >> (
             lambda rows: (
-                put_line(f"[D] Checking for matched orphans: {rows[0]['n_affected']} affected entities.")
+                put_line(f"[U] Checking for matched orphans: {rows[0]['n_affected']} affected entities.")
                 ^ (
                     sql_exec(SQL("CREATE OR REPLACE TEMP TABLE affected_entities AS SELECT DISTINCT entity_uid FROM final_orphan_matches;"))
                     ^ sql_exec(
@@ -904,10 +904,10 @@ def _integrate_orphan_matches() -> Run[Unit]:
                             """
                         )
                     )
-                    ^ put_line("[D] Recalculated and updated midpoints for affected entities.")
+                    ^ put_line("[U] Recalculated and updated midpoints for affected entities.")
                 )
                 if rows[0]['n_affected'] > 0
-                else put_line("[D] No matched orphans; skipping midpoint recalculation.")
+                else put_line("[U] No matched orphans; skipping midpoint recalculation.")
             )
         )
         ^ pure(unit)
@@ -1146,7 +1146,7 @@ def _export_orphan_matches_debug_excel() -> Run[Unit]:
             band_wrap=3,
         )
         ^ put_line(
-            "[D] Wrote orphan_matches_final.xlsx (final entities + orphans after integration)."
+            "[U] Wrote orphan_matches_final.xlsx (final entities + orphans after integration)."
         )
         ^ pure(unit)
     )
@@ -1191,7 +1191,7 @@ def export_final_victim_entities_excel() -> Run[Unit]:
             band_wrap=3,
         )
         ^ put_line(
-            "[D] Wrote final_victim_entities.xlsx (final victim entities with color coding)."
+            "[U] Wrote final_victim_entities.xlsx (final victim entities with color coding)."
         )
         ^ pure(unit)
     )

@@ -1,6 +1,7 @@
 """
 Set up DuckDB views for incident extraction from gptVictimJson (SQLite).
 """
+import re
 
 from pymonad import (
     Run,
@@ -314,6 +315,30 @@ PREVIEW_VICTIMS_SQL = SQL(
 FROM victims_cached_enh
 LIMIT 10;
 """
+)
+
+
+def _extract_create_table_select_sql(create_sql: SQL, table_name: str) -> SQL:
+    """
+    Extract the SELECT/WITH query body from:
+      CREATE OR REPLACE TABLE <table_name> AS <query>;
+    """
+    pattern = (
+        rf"CREATE\s+OR\s+REPLACE\s+TABLE\s+{re.escape(table_name)}\s+AS\s*(.*)\s*;\s*$"
+    )
+    m = re.search(pattern, str(create_sql), flags=re.IGNORECASE | re.DOTALL)
+    if m is None:
+        raise ValueError(f"Could not extract SELECT SQL for table: {table_name}")
+    return SQL(m.group(1))
+
+
+VICTIMS_CACHED_SELECT_SQL = _extract_create_table_select_sql(
+    CREATE_VICTIMS_CACHED_SQL,
+    "victims_cached",
+)
+VICTIMS_CACHED_ENH_SELECT_SQL = _extract_create_table_select_sql(
+    CREATE_VICTIMS_CACHED_ENH_SQL,
+    "victims_cached_enh",
 )
 # --- Incident-level extraction & feature engineering ---
 CREATE_STG_ARTICLE_INCIDENTS_SQL = SQL(
