@@ -1,4 +1,9 @@
 # copilot-instructions.md
+## Source Of Truth
+- This file is the canonical policy for general development and code-change work.
+- Routing and mode precedence are defined in `AGENTS.md`.
+- Orphan batch adjudication workflow details are defined in `docs/orphan_adjudication_playbook.md`.
+
 Start every chat response to questions about this program with the following text: "THANK YOU FOR THE QUESTION ABOUT THE NEWS ARTICLES ANALYSIS PROJECT."
 
 ## Mypy (dmypy) Type Checking

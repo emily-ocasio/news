@@ -34,3 +34,4 @@ splink_models/
 *.code-workspace
 .dmypy.*
 pyrightconfig.*
+out/*

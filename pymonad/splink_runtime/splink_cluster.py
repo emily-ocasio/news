@@ -440,4 +440,6 @@ def run_unique_matching_and_cluster_from_ctx(ctx: SplinkContext) -> Run[Unit]:
     )
 
 
-from .splink_types import PredictionInputTableNames  # placed late to avoid reorder noise
+from .splink_types import (
+    PredictionInputTableNames,
+)  # placed late to avoid reorder noise

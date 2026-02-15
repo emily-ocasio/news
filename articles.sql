@@ -241,6 +241,8 @@ CREATE TABLE gptResults (
     FOREIGN KEY (RecordId) REFERENCES articles(RecordId)
 );
 CREATE INDEX gptResults_recordid ON gptResults(RecordId);
+CREATE INDEX gptClass on articles(Dataset, gptClass, PubDate);
+CREATE INDEX Autoclass ON articles (Dataset, Autoclass, gptClass, PubDate);
 CREATE TABLE articles_wp_subset(
   RecordId INT,
   Publication INT,
@@ -251,3 +253,56 @@ CREATE TABLE articles_wp_subset(
   LastUpdated TEXT
 );
 CREATE INDEX idx_articles_wp_subset_pk ON articles_wp_subset(RecordId);
+
+-- Subset-scoped full-text index for ad hoc narrative searches.
+-- Scope: only records relevant to homicide analysis workflow.
+CREATE VIRTUAL TABLE IF NOT EXISTS articles_wp_m_fts USING fts5(
+    Title,
+    FullText,
+    content='articles',
+    content_rowid='RecordId',
+    tokenize='unicode61'
+);
+
+-- Keep the subset FTS index synchronized with source rows.
+DROP TRIGGER IF EXISTS articles_wp_m_fts_ai;
+CREATE TRIGGER articles_wp_m_fts_ai
+AFTER INSERT ON articles
+WHEN NEW.Dataset = 'CLASS_WP' AND NEW.gptClass = 'M'
+BEGIN
+    INSERT INTO articles_wp_m_fts(rowid, Title, FullText)
+    VALUES (NEW.RecordId, NEW.Title, NEW.FullText);
+END;
+
+DROP TRIGGER IF EXISTS articles_wp_m_fts_ad;
+CREATE TRIGGER articles_wp_m_fts_ad
+AFTER DELETE ON articles
+WHEN OLD.Dataset = 'CLASS_WP' AND OLD.gptClass = 'M'
+BEGIN
+    INSERT INTO articles_wp_m_fts(articles_wp_m_fts, rowid, Title, FullText)
+    VALUES ('delete', OLD.RecordId, OLD.Title, OLD.FullText);
+END;
+
+DROP TRIGGER IF EXISTS articles_wp_m_fts_au;
+CREATE TRIGGER articles_wp_m_fts_au
+AFTER UPDATE OF Title, FullText, Dataset, gptClass ON articles
+BEGIN
+    -- Remove old version if it used to be indexed.
+    INSERT INTO articles_wp_m_fts(articles_wp_m_fts, rowid, Title, FullText)
+    SELECT 'delete', OLD.RecordId, OLD.Title, OLD.FullText
+    WHERE OLD.Dataset = 'CLASS_WP' AND OLD.gptClass = 'M';
+
+    -- Insert new version if it should be indexed now.
+    INSERT INTO articles_wp_m_fts(rowid, Title, FullText)
+    SELECT NEW.RecordId, NEW.Title, NEW.FullText
+    WHERE NEW.Dataset = 'CLASS_WP' AND NEW.gptClass = 'M';
+END;
+
+-- One-time (and safely repeatable) backfill for existing rows in the subset.
+-- For external-content FTS tables, avoid joins against the FTS table itself.
+INSERT INTO articles_wp_m_fts(articles_wp_m_fts) VALUES ('delete-all');
+INSERT INTO articles_wp_m_fts(rowid, Title, FullText)
+SELECT a.RecordId, a.Title, a.FullText
+FROM articles AS a
+WHERE a.Dataset = 'CLASS_WP'
+  AND a.gptClass = 'M';
