@@ -194,11 +194,13 @@ Before a terminal label (`likely_missed_match`, `possible_but_weak`, `unlikely`)
   - Record chosen certainty level and window rationale in stage trace.
 
 4. Stage D: narrative anchor comparison (always required before terminal `unlikely`)
-- Compare source-article anchors against top fallback candidates using article text and extracted context.
+- Compare source-article anchors against top fallback candidates using article text as the primary evidence source.
+- In Stage D and beyond, treat structured fields as secondary aids:
+  - mainly for victim/incident indexing in multi-victim articles,
+  - and for secondary consistency checks.
+- Do not treat shared structured labels alone (for example same `circumstance`) as identity evidence when text context indicates different events.
 - Anchors include event-specific cues such as method details, location phrasing, offender cues, and rare incident descriptors.
-- Record concrete anchor evidence:
-  - at least 2 orphan-side anchors,
-  - at least 2 candidate-side supporting or contradicting anchors.
+- Record concrete anchor evidence that is sufficient for an independent reviewer to understand the same/not-same reasoning.
 
 5. Stage E: minimum candidate review
 - Review at least top 3 candidates from fallback/retrieval stages (or all if fewer than 3).
@@ -219,6 +221,7 @@ Before a terminal label (`likely_missed_match`, `possible_but_weak`, `unlikely`)
 - Terminal decisions must satisfy the Multi-Victim Constraint.
 - A terminal `unlikely` is invalid if Stage C2 trigger conditions were present but Stage C2 was not executed.
 - A terminal `unlikely` is invalid if Stage C2 lacked an auditable retrieval rationale (queries used, why chosen, and why alternatives were rejected).
+- Any terminal label (`likely_missed_match`, `possible_but_weak`, `unlikely`) is invalid if its explanation is generic/templated and does not cite case-specific facts.
 
 ## Persistence Contract
 Use DuckDB direct writes unless `dry_run=true`.
@@ -234,6 +237,24 @@ Use DuckDB direct writes unless `dry_run=true`.
   - `analyst_mode` (set to `interactive_agent`)
   - timestamps
 - Do not upsert rows with terminal status `analysis_incomplete`.
+- Do not upsert rows with boilerplate `reason_summary`.
+- `reason_summary` must be case-specific and text-based:
+  - keep it concise: 2-4 sentences maximum,
+  - prioritize Stage D text-level findings from article narrative,
+  - include the strongest orphan-side contextual facts from article text,
+  - include the strongest candidate-side supporting or contradicting facts from article text,
+  - explicitly explain why those facts indicate same-person plausibility or non-match,
+  - make the causal chain explicit (supports, contradictions/uncertainty, then decision).
+- These requirements apply to all terminal labels (`likely_missed_match`, `possible_but_weak`, `unlikely`).
+- Do not use templated headings/sections in `reason_summary` (for example: "Orphan facts:", "Candidate facts:", "Decision:").
+- Generic phrases such as "partial anchor agreement" are allowed only as lead-in language; they are insufficient unless followed by concrete facts.
+- Place detailed telemetry and long field dumps (for example day gaps, exhaustive alternates, bulk attribute lists) in `evidence_json`, not `reason_summary`.
+- Label-specific focus for `reason_summary`:
+  - `likely_missed_match`: emphasize the key text anchor(s) that link orphan and entity; mention only uncertainty that does not overturn linkage.
+  - `unlikely`: emphasize key text-level incompatibilities that reject linkage (for example different event setting, method narrative, or actor/victim context), not generic "insufficient specificity" language.
+  - `possible_but_weak`: explicitly balance what is textually close and what is textually different, then justify why evidence remains intermediate.
+- Before persistence, apply a reviewer-confidence check:
+  - If an independent reader could not understand and defend the decision from `reason_summary`, revise it before writing.
 
 ### History Table
 - Append to `orphan_adjudication_history` for each applied decision.
@@ -284,8 +305,8 @@ At end of run, return:
     - `sqlite_query_count`
     - `duckdb_query_count`
   - narrative evidence block:
-    - orphan anchors (min 2)
-    - candidate anchors (min 2)
+    - orphan anchors (strongest contextual cues used in reasoning)
+    - candidate anchors (supporting/contradicting cues used in reasoning)
     - conflict analysis (date/location/weapon/circumstance)
 3. Persistence status:
   - rows upserted
