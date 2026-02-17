@@ -23,6 +23,7 @@ from special_case_review import review_special_cases
 from special_add import add_special_articles
 from vector_similarity import vector_similarity
 from orphan_adjudication_apply import apply_orphan_adjudications
+from orphan_postadj_cluster import cluster_postadj_orphans
 
 MAIN_MENU_PROMPTS = mainmenu_prompts + ("Apply orphan adjudication [J]",)
 
@@ -47,6 +48,7 @@ class MainChoice(Enum):
     DEDUP = MenuChoice("D")
     CHARTS = MenuChoice("C")
     UNNAMED = MenuChoice("U")
+    POSTADJ_ORPHAN_CLUSTER = MenuChoice("O")
     ADJUDICATION_APPLY = MenuChoice("J")
     LINK = MenuChoice("L")
     SPECIAL = MenuChoice("P")
@@ -103,6 +105,8 @@ def dispatch_from_main_menu(choice: MainChoice) -> Run[NextStep]:
             return splink_charts()
         case MainChoice.UNNAMED:
             return match_unnamed_victims()
+        case MainChoice.POSTADJ_ORPHAN_CLUSTER:
+            return cluster_postadj_orphans()
         case MainChoice.ADJUDICATION_APPLY:
             return apply_orphan_adjudications()
         case MainChoice.LINK:

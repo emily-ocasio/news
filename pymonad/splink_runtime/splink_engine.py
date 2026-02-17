@@ -50,7 +50,10 @@ def _init_splink_dedupe_context(job: SplinkDedupeJob) -> Run[Unit]:
     prediction_rules = Array.make(tuple(job.settings.get("blocking_rules_to_generate_predictions", [])))
     training_rules = Array.make(tuple(job.training_blocking_rules if job.training_blocking_rules else prediction_rules))
     link_type = SplinkLinkType.from_settings(job.settings)
-    capture_blocked_edges = link_type == SplinkLinkType.DEDUPE_ONLY
+    capture_blocked_edges = (
+        link_type == SplinkLinkType.DEDUPE_ONLY
+        and job.capture_blocked_edges
+    )
 
     def _build_tables() -> SplinkTableNames:
         tables = add_all_tables(SplinkTableNames.empty(), job.pairs_out, job.input_table)

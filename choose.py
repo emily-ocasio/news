@@ -42,6 +42,7 @@ initial_prompts = (
     "Run [D]edup incidents (Splink)",
     "Splink [C]harts (latest dedupe/linkage)",
     "Match [U]nnamed victims (Splink)",
+    "Post-adjudication orphan clustering [O]",
     "[L]ink to SHR victims (Splink)",
     "Add special articles to entit[Y]",
 )

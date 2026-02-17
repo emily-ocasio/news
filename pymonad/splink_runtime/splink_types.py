@@ -572,4 +572,4 @@ class SplinkDedupeJob:
     do_not_link_left_col: BlockedIdLeftColumnName = BlockedIdLeftColumnName("id_l")
     do_not_link_right_col: BlockedIdRightColumnName = BlockedIdRightColumnName("id_r")
     blocked_pairs_out: BlockedPairsTableName = BlockedPairsTableName("")
-
+    capture_blocked_edges: bool = True

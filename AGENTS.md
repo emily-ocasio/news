@@ -6,11 +6,15 @@
 - Orphan adjudication policy lives in `docs/orphan_adjudication_playbook.md`.
 
 ## Global Rules
-- Start every chat response to questions about this program with the following text:
-  `"THANK YOU FOR THE QUESTION ABOUT THE NEWS ARTICLES ANALYSIS PROJECT."`
 - If DuckDB is locked or unavailable during orphan adjudication:
-  - Stop immediately.
-  - Notify the user so they can release the lock.
+  - Identify likely lock owner process first.
+  - If lock owner is a `python` process:
+    - Stop immediately.
+    - Notify the user to release the lock (likely the main Python app/session).
+  - Otherwise:
+    - Check whether lock was caused by parallel invocations of the adjudication skill itself.
+    - If yes, wait briefly for completion or stop the offending parallel process(es), then continue.
+    - If no or unclear, stop and notify the user.
   - Do not use snapshots, copies, or other lock workarounds.
 - When displaying orphan IDs, avoid editor line/column auto-link rendering by inserting a zero-width space after each colon.
   - Use display like `100168529:\u200b0:\u200b0`.
@@ -19,6 +23,8 @@
 ## Mode: General Development
 - Trigger: default mode when the prompt is not orphan-adjudication focused.
 - Behavior: follow `.github/copilot-instructions.md`.
+- Start every chat response to questions about this program with the following text:
+  `"THANK YOU FOR THE QUESTION ABOUT THE NEWS ARTICLES ANALYSIS PROJECT."`
 
 ## Mode: Orphan Adjudication Batch
 - Trigger keywords (case-insensitive, any match):
@@ -27,6 +33,7 @@
   - `limit=`
   - `batch`
 - Behavior: follow `docs/orphan_adjudication_playbook.md`.
+- Do not prepend the General Development greeting line while running orphan adjudication workflows.
 - Default batch behavior includes same-incident consecutive orphan grouping unless the user explicitly disables it (`group_same_incident=false`).
 - Enforce required analysis stages and terminal-decision gate from the playbook; zero pair rows alone cannot produce a terminal `unlikely`.
 - Default execution mode is `interactive_casewise`; do not use bulk scripted terminal labeling unless the user explicitly requests `batch_scoring`.

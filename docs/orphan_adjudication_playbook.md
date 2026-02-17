@@ -251,10 +251,16 @@ Stop the batch when any condition is met:
 
 ## Lock Handling
 - On lock detection:
-  - Stop immediately.
-  - Report lock condition to the user.
+  - Identify likely lock owner process first.
+  - If lock owner is a `python` process:
+    - Stop immediately.
+    - Report lock condition to the user and ask them to release it (likely main app/session).
+  - Otherwise:
+    - Check whether lock is likely caused by parallel adjudication skill invocations.
+    - If yes, wait briefly for completion or stop the offending parallel process(es), then continue.
+    - If no or unclear, stop and report lock condition to the user.
   - Do not use snapshots or file-copy workarounds.
-  - Resume only after user confirms lock is released.
+  - Resume only after lock is cleared.
 
 ## Output Contract
 At end of run, return:

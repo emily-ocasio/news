@@ -611,6 +611,46 @@ def _build_postadj_entities() -> Run[Unit]:
     )
 
 
+def _build_postadj_entity_origin() -> Run[Unit]:
+    return (
+        sql_exec(
+            SQL(
+                """--sql
+                CREATE OR REPLACE TABLE victim_entity_reps_postadj_origin AS
+                WITH applied_entities AS (
+                  SELECT DISTINCT entity_uid
+                  FROM _applied_adjudication_rows
+                ),
+                machine_entities AS (
+                  SELECT DISTINCT entity_uid
+                  FROM final_orphan_matches
+                )
+                SELECT
+                  vep.victim_entity_id,
+                  CASE
+                    WHEN vep.victim_entity_id IN (
+                      SELECT victim_entity_id
+                      FROM victim_entity_reps
+                    ) THEN
+                      CASE
+                        WHEN vep.victim_entity_id IN (
+                          SELECT entity_uid FROM applied_entities
+                        ) THEN 'adjudication_matched_entity'
+                        WHEN vep.victim_entity_id IN (
+                          SELECT entity_uid FROM machine_entities
+                        ) THEN 'machine_matched_entity'
+                        ELSE 'baseline_entity'
+                      END
+                    ELSE 'singleton_orphan_unresolved'
+                  END AS entity_origin_type
+                FROM victim_entity_reps_postadj vep;
+                """
+            )
+        )
+        ^ pure(unit)
+    )
+
+
 def _build_orphan_matches_postadj_current() -> Run[Unit]:
     orphan_matches_postadj_select = SQL(
         """--sql
@@ -970,6 +1010,7 @@ def _run_apply() -> Run[NextStep]:
         ^ _prune_stale_override_rows(run_id)
         ^ _build_postadj_matches()
         ^ _build_postadj_entities()
+        ^ _build_postadj_entity_origin()
         ^ _build_orphan_matches_postadj_current()
         ^ _export_final_victim_entities_postadj()
         ^ _append_apply_history(run_id)

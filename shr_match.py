@@ -3,6 +3,7 @@ Match article victim entities to SHR victims using Splink linkage.
 """
 from splink_types import SplinkType
 from pymonad import (
+    ErrorPayload,
     Run,
     SQL,
     put_line,
@@ -13,6 +14,8 @@ from pymonad import (
     splink_dedupe_job,
     sql_exec,
     sql_export,
+    sql_query,
+    throw,
     with_duckdb,
     Unit, unit,
 )
@@ -34,6 +37,30 @@ shr_linkage_settings = {
     "blocking_rules_to_generate_predictions": SHR_OVERALL_BLOCKS,
     "unique_id_column_name": "unique_id",  # for both tables
 }
+
+
+def _assert_postadj_orphancluster_canonical_exists() -> Run[Unit]:
+    return (
+        sql_query(
+            SQL(
+                """--sql
+                SELECT COUNT(*) AS n
+                FROM information_schema.tables
+                WHERE lower(table_name) = 'victim_entity_reps_postadj_orphancluster';
+                """
+            )
+        )
+        >> (
+            lambda rows: pure(unit)
+            if rows[0]["n"] > 0
+            else throw(
+                ErrorPayload(
+                    "[L] Missing victim_entity_reps_postadj_orphancluster. "
+                    "Run [O] post-adjudication orphan clustering first."
+                )
+            )
+        )
+    )
 
 
 def _export_shr_final_matches_excel() -> Run[Unit]:
@@ -107,7 +134,7 @@ def _export_shr_final_matches_excel() -> Run[Unit]:
                 sc.midpoint_day AS shr_midpoint_day
               FROM pairs_raw pr
               JOIN article_victims av ON pr.entity_uid = av.unique_id
-              LEFT JOIN victim_entity_reps_new ver ON av.unique_id = ver.victim_entity_id
+              LEFT JOIN victim_entity_reps_postadj_orphancluster ver ON av.unique_id = ver.victim_entity_id
               JOIN shr_cached sc ON pr.shr_uid = sc.unique_id
 
               UNION ALL
@@ -154,7 +181,7 @@ def _export_shr_final_matches_excel() -> Run[Unit]:
                 CAST(NULL AS VARCHAR) AS shr_date_precision,
                 CAST(NULL AS DOUBLE) AS shr_midpoint_day
               FROM article_victims av
-              LEFT JOIN victim_entity_reps_new ver ON av.unique_id = ver.victim_entity_id
+              LEFT JOIN victim_entity_reps_postadj_orphancluster ver ON av.unique_id = ver.victim_entity_id
               WHERE av.unique_id NOT IN (SELECT entity_uid FROM pairs_raw)
 
               UNION ALL
@@ -328,7 +355,7 @@ def _export_shr_debug_matches_excel() -> Run[Unit]:
                 sc.midpoint_day AS shr_midpoint_day
               FROM pairs_raw pr
               JOIN article_victims av ON pr.entity_uid = av.unique_id
-              LEFT JOIN victim_entity_reps_new ver ON av.unique_id = ver.victim_entity_id
+              LEFT JOIN victim_entity_reps_postadj_orphancluster ver ON av.unique_id = ver.victim_entity_id
               JOIN shr_cached sc ON pr.shr_uid = sc.unique_id
 
               UNION ALL
@@ -374,7 +401,7 @@ def _export_shr_debug_matches_excel() -> Run[Unit]:
                 CAST(NULL AS VARCHAR) AS shr_date_precision,
                 CAST(NULL AS DOUBLE) AS shr_midpoint_day
               FROM article_victims av
-              LEFT JOIN victim_entity_reps_new ver ON av.unique_id = ver.victim_entity_id
+              LEFT JOIN victim_entity_reps_postadj_orphancluster ver ON av.unique_id = ver.victim_entity_id
               WHERE av.unique_id NOT IN (SELECT entity_uid FROM pairs_raw)
 
               UNION ALL
@@ -576,6 +603,7 @@ def match_article_to_shr_victims() -> Run[NextStep]:
                 """
             )
         ) ^
+        _assert_postadj_orphancluster_canonical_exists() ^
         put_line("Exporting article victim entities to DuckDB...") ^
         sql_exec(
             SQL(
@@ -610,7 +638,7 @@ def match_article_to_shr_victims() -> Run[NextStep]:
                             ELSE mode_weapon
                         END AS weapon,
                         mode_circumstance AS circumstance
-                    FROM victim_entity_reps_new
+                    FROM victim_entity_reps_postadj_orphancluster
                 ) AS article_rows
                 """
             )

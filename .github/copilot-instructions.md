@@ -61,12 +61,13 @@ This project is a terminal-based tool for managing, analyzing, and interacting w
 ### 2.3.1 Menu Options and Controllers
 - The main menu in [mainmenu.py](../mainmenu.py) dispatches to specific controllers based on user choice:
   - GPT (S): `second_filter()` in [gpt_filtering.py](../gpt_filtering.py) - Uses GPT to classify articles as homicide-related or not, saving classifications. The classification is stored in the gptClass column of the articles table as a coded value. "M_PRELIM" means that the article is filtered as a potential homicide article after the second GPT filter. GPT classes starting with "SP_" mean that this is a special case where the validator found a term that means do not use GPT for classsification. This special case is often used for articles of specific homicides that are so notable that they resulti in a large number of articles, so we want to include them without GPT review.
-  - FIX (F): `fix_article()` in [fixarticle.py](../fixarticle.py) - Allows reviewing and re-processing a single article by ID.
+  - FIX (F): `fix_article()` in [fixarticle.py](../fixarticle.py) - Allows reviewing and re-processing a single article by ID. In addition to re-running second-filter GPT, this controller also supports re-running incident extraction GPT for one article (useful after prompt changes). After a [G] re-extract, it automatically runs `refresh_single_article_after_extract()` in [single_article_refresh.py](../single_article_refresh.py), which refreshes the single article's incident/geocode setup in DuckDB and selectively invalidates affected orphan adjudication overrides.
   - EXTRACTION (G): `gpt_incidents()` in [incidents.py](../incidents.py) - Extracts detailed incident info from articles using GPT, saving JSON.
   - INCIDENTS (I): `build_incident_views()` in [incidents_setup.py](../incidents_setup.py) - Builds SQLite/DuckDB views for incident data preparation for Splink.
   - GEOCODE (M): `geocode_incidents()` in [geocode_incidents.py](../geocode_incidents.py) - Geocodes DC homicide addresses via MAR API.
   - DEDUP (D): `dedupe_incidents()` in [incidents_dedupe.py](../incidents_dedupe.py) - Deduplicates incidents using Splink.
   - UNNAMED (U): `match_unnamed_victims()` in [unnamed_match.py](../unnamed_match.py) - Matches unnamed victims using Splink.
+  - ADJUDICATION APPLY (J): `apply_orphan_adjudications()` in [orphan_adjudication_apply.py](../orphan_adjudication_apply.py) - Replays persisted orphan adjudication overrides onto baseline orphan linkage output, writes apply/audit tables, creates post-adjudication match/entity tables, and updates entity projections with adjudicated orphan links.
   - LINK (L): `match_article_to_shr_victims()` in [shr_match.py](../shr_match.py) - Links articles to SHR victims using Splink.
   - SPECIAL (P): `review_special_cases()` in [special_case_review.py](../special_case_review.py) - Reviews special case articles.
   - SPECIAL_ADD (Y): `add_special_articles()` in [special_add.py](../special_add.py) - Adds special case articles to the entities.
@@ -79,6 +80,11 @@ This project is a terminal-based tool for managing, analyzing, and interacting w
   - Splink entity resolution and geocoding via `run_base_effect` in [pymonad/dispatch.py](../pymonad/dispatch.py).
   - IO (input/output) and state via core Run monad in [pymonad/run.py](../pymonad/run.py).
 - Effects are stacked in Run contexts, allowing pure functional composition with controlled side effects.
+
+### 2.3.3 Agent-Based Orphan Adjudication Layer
+- After the Splink orphan-linkage step, unmatched orphans can be adjudicated by an interactive agent workflow (see [docs/orphan_adjudication_playbook.md](../docs/orphan_adjudication_playbook.md) and routing policy in [AGENTS.md](../AGENTS.md)).
+- This adjudication step is intentionally post-linkage: it analyzes residual unmatched orphans, assigns evidence-based decisions, and persists them to `orphan_adjudication_overrides` with append-only history in `orphan_adjudication_history`.
+- Persisted adjudications are designed for replay through controller [J], so adjudication work survives rebuilds/reruns of incident setup, clustering, and linkage.
 
 ### 2.4 Applicative Validation
 - The program uses applicative validation to validate user input.  This is implemented in pymonad/validation.py for the definition of the V applicative and pymonad/validate_run.py for further helper functions to use within the run context.  The main idea is that multiple validation checks can be run in parallel, and all errors are collected and reported to the user at once, rather than failing fast on the first error.
@@ -118,7 +124,9 @@ The typical user workflow for analyzing news articles and crime data follows a s
 5. **Geocoding**: Select GEOCODE (M) to geocode DC homicide addresses via the MAR 2 API using `geocode_incidents()` in [geocode_incidents.py](../geocode_incidents.py).
 6. **Incident Deduplication**: Select DEDUP (D) to deduplicate incidents using Splink via `dedupe_incidents()` in [incidents_dedupe.py](../incidents_dedupe.py).
 7. **Unnamed Victim Matching**: Select UNNAMED (U) to match unnamed victims to existing deduped clusters using Splink via `match_unnamed_victims()` in [unnamed_match.py](../unnamed_match.py).
-8. **Linking to SHR Data**: Select LINK (L) to set up SHR data in DuckDB from the SQLite shr table and link article victims to SHR victims using Splink via `match_article_to_shr_victims()` in [shr_match.py](../shr_match.py).
-9. **Optional Fixes/Reviews**: Use FIX (F) for manual review/re-processing of individual articles, or placeholders like REVIEW/NEW for additional tasks.
+8. **Agent Adjudication of Residual Orphans**: Run the orphan adjudication workflow (interactive agent process) for unmatched post-Splink orphans; this stores durable decisions in adjudication override/history tables for later replay.
+9. **Apply Persisted Adjudications**: Select ADJUDICATION APPLY (J) to materialize persisted adjudication decisions on top of baseline orphan linkage outputs and regenerate post-adjudication match/entity tables.
+10. **Linking to SHR Data**: Select LINK (L) to set up SHR data in DuckDB from the SQLite shr table and link article victims to SHR victims using Splink via `match_article_to_shr_victims()` in [shr_match.py](../shr_match.py).
+11. **Optional Fixes/Reviews**: Use FIX (F) for manual review/re-processing of individual articles. In particular, [G] in FIX supports single-article GPT re-extraction (commonly after extraction prompt tuning), followed by automatic single-article incident/geocode refresh and selective inactivation of impacted orphan adjudications.
 
 This workflow ensures data integrity through monadic composition, with all operations logged and validated via applicative validation.

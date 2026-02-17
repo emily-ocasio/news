@@ -55,6 +55,7 @@ def splink_dedupe_job(
     do_not_link_left_col: BlockedIdLeftColumnName = BlockedIdLeftColumnName("id_l"),
     do_not_link_right_col: BlockedIdRightColumnName = BlockedIdRightColumnName("id_r"),
     blocked_pairs_out: BlockedPairsTableName = BlockedPairsTableName(""),
+    capture_blocked_edges: bool = True,
 ) -> Run[tuple[Any, str, str]]:
     return Run(
         lambda self: self._perform(
@@ -82,6 +83,7 @@ def splink_dedupe_job(
                 do_not_link_left_col,
                 do_not_link_right_col,
                 blocked_pairs_out,
+                capture_blocked_edges,
             ),
             self,
         ),

@@ -10,4 +10,5 @@ class SplinkType(str, Enum):
     """
     DEDUP = "dedup"
     ORPHAN = "orphan"
+    POSTADJ_ORPHAN_CLUSTER = "postadj_orphan_cluster"
     SHR = "shr"
