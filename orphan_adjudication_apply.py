@@ -897,29 +897,82 @@ def _export_final_victim_entities_postadj() -> Run[Unit]:
         machine_entities AS (
           SELECT DISTINCT entity_uid
           FROM final_orphan_matches
+        ),
+        categorized_entities AS (
+          SELECT
+            vep.*,
+            CASE
+              WHEN vep.victim_entity_id IN (SELECT victim_entity_id FROM victim_entity_reps) THEN
+                CASE
+                  WHEN vep.victim_entity_id IN (SELECT entity_uid FROM applied_entities) THEN 'adjudication_matched_entity'
+                  WHEN vep.victim_entity_id IN (SELECT entity_uid FROM machine_entities) THEN 'machine_matched_entity'
+                  ELSE 'baseline_entity'
+                END
+              ELSE 'remaining_singleton_orphan'
+            END AS display_category,
+            CASE
+              WHEN vep.victim_entity_id IN (SELECT victim_entity_id FROM victim_entity_reps) THEN
+                CASE
+                  WHEN vep.victim_entity_id IN (SELECT entity_uid FROM applied_entities) THEN 2
+                  WHEN vep.victim_entity_id IN (SELECT entity_uid FROM machine_entities) THEN 1
+                  ELSE 0
+                END
+              ELSE 3
+            END AS display_band_key
+          FROM victim_entity_reps_postadj vep
         )
         SELECT
-          vep.*,
+          'entity' AS rec_type,
+          CONCAT('entity_', c.victim_entity_id) AS match_id,
+          c.display_band_key AS band_key,
+          c.entity_midpoint_day AS midpoint_day,
+          c.victim_entity_id AS uid,
+          CAST(NULL AS BIGINT) AS article_id,
+          c.city_id,
+          EXTRACT(
+            YEAR FROM COALESCE(
+              c.incident_date,
+              date_add(DATE '1970-01-01', INTERVAL (CAST(c.entity_midpoint_day AS INTEGER)) DAY)
+            )
+          ) AS year,
+          EXTRACT(
+            MONTH FROM COALESCE(
+              c.incident_date,
+              date_add(DATE '1970-01-01', INTERVAL (CAST(c.entity_midpoint_day AS INTEGER)) DAY)
+            )
+          ) AS month,
+          c.entity_date_precision AS date_precision,
+          c.incident_date,
+          c.canonical_geo_address_norm AS geo_address_norm,
+          c.canonical_geo_address_short AS geo_address_short,
+          c.canonical_geo_address_short_2 AS geo_address_short_2,
+          c.canonical_geo_score AS geo_score,
+          c.canonical_address_type AS address_type,
+          c.canonical_lat AS lat,
+          c.canonical_lon AS lon,
+          c.canonical_age AS victim_age,
+          c.canonical_sex AS victim_sex,
+          c.canonical_race AS victim_race,
+          c.canonical_ethnicity AS victim_ethnicity,
+          CAST(c.canonical_fullname AS VARCHAR) AS victim_fullname_norm,
+          c.mode_weapon AS weapon,
+          c.mode_circumstance AS circumstance,
+          CAST(NULL AS VARCHAR) AS offender_forename_norm,
+          CAST(NULL AS VARCHAR) AS offender_surname_norm,
+          c.canonical_victim_count AS victim_count,
+          c.canonical_offender_count AS offender_count,
+          CAST(NULL AS DOUBLE) AS confidence,
+          c.article_ids_csv,
+          c.display_category,
+          c.display_band_key,
+          CAST(NULL AS VARCHAR) AS adjudication_label,
           CASE
-            WHEN vep.victim_entity_id IN (SELECT victim_entity_id FROM victim_entity_reps) THEN
-              CASE
-                WHEN vep.victim_entity_id IN (SELECT entity_uid FROM applied_entities) THEN 'adjudication_matched_entity'
-                WHEN vep.victim_entity_id IN (SELECT entity_uid FROM machine_entities) THEN 'machine_matched_entity'
-                ELSE 'baseline_entity'
-              END
-            ELSE 'remaining_singleton_orphan'
-          END AS category,
-          CASE
-            WHEN vep.victim_entity_id IN (SELECT victim_entity_id FROM victim_entity_reps) THEN
-              CASE
-                WHEN vep.victim_entity_id IN (SELECT entity_uid FROM applied_entities) THEN 2
-                WHEN vep.victim_entity_id IN (SELECT entity_uid FROM machine_entities) THEN 1
-                ELSE 0
-              END
-            ELSE 3
-          END AS band_key
-        FROM victim_entity_reps_postadj vep
-        ORDER BY entity_midpoint_day
+            WHEN c.display_category = 'adjudication_matched_entity' THEN 'adjudication_applied'
+            ELSE 'none'
+          END AS adjudication_flag,
+          CAST(NULL AS VARCHAR) AS reason_summary
+        FROM categorized_entities c
+        ORDER BY c.entity_midpoint_day
         """
     )
 
@@ -928,7 +981,7 @@ def _export_final_victim_entities_postadj() -> Run[Unit]:
             final_victim_entities_postadj_select,
             "final_victim_entities_postadj.xlsx",
             "Entities",
-            band_by_group_col="band_key",
+            band_by_group_col="display_band_key",
             band_wrap=4,
         )
         ^ put_line("[J] Wrote final_victim_entities_postadj.xlsx.")
