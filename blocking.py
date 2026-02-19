@@ -345,19 +345,49 @@ ORPHAN_TRAINING_BLOCKS = [
     TrainBlockRule.OFFENDER_AGE_SEX_WITHIN_YEAR,
 ]
 
+class ShrLinkRule(StrEnum):
+    """
+    SHR linkage blocking rules intentionally exclude article-level exclusion_id constraints.
+    """
+
+    MIDPOINT_7MONTH = _train_block_from_comps(
+        BlockComp.MIDPOINT_EXISTS,
+        BlockComp.MIDPOINT_7MONTH,
+        add_article_exclusion=False,
+    )
+    AGE_SEX = _train_block_from_comps(
+        BlockComp.SAME_AGE_SEX,
+        add_article_exclusion=False,
+    )
+    MONTH_AGE_SEX_WEAPON = _train_block_from_comps(
+        BlockComp.EXACT_YEAR_MONTH,
+        BlockComp.SAME_AGE_SEX,
+        BlockComp.SAME_WEAPON,
+        add_article_exclusion=False,
+    )
+    YEAR_MONTH = _train_block_from_comps(
+        BlockComp.EXACT_YEAR_MONTH,
+        add_article_exclusion=False,
+    )
+    OFFENDER_AGE_SEX = _train_block_from_comps(
+        BlockComp.SAME_OFFENDER_AGE_SEX,
+        add_article_exclusion=False,
+    )
+
+
 SHR_OVERALL_BLOCKS = [
-    TrainBlockRule.MIDPOINT_7MONTH,
-    TrainBlockRule.AGE_SEX,
+    ShrLinkRule.MIDPOINT_7MONTH,
+    ShrLinkRule.AGE_SEX,
 ]
 
 SHR_DETERMINISTIC_BLOCKS = [
-    TrainBlockRule.MONTH_AGE_SEX_WEAPON
+    ShrLinkRule.MONTH_AGE_SEX_WEAPON
 ]
 
 SHR_TRAINING_BLOCKS = [
-    TrainBlockRule.YEAR_MONTH,
-    TrainBlockRule.AGE_SEX,
-    TrainBlockRule.OFFENDER_AGE_SEX,
+    ShrLinkRule.YEAR_MONTH,
+    ShrLinkRule.AGE_SEX,
+    ShrLinkRule.OFFENDER_AGE_SEX,
 ]
 
 YEAR_MONTH_COMPARISON = [

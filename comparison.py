@@ -422,6 +422,22 @@ VICTIM_COUNT_COMP = cl.CustomComparison(
     ]
 )
 
+VICTIM_COUNT_COMP_SHR = cl.CustomComparison(
+    output_column_name="victim_count",
+    comparison_levels=[
+        NullComparisonLevel(
+            "victim counts NULL",
+            _null_comp_builder("victim_count")
+        ).to_dict(),
+        TFComparisonLevel(
+            "exact match victim count",
+            _exact_comp_builder("victim_count"),
+            "victim_count"
+        ).to_dict(),
+        cll.ElseLevel()
+    ]
+)
+
 AGE_COMP_SHR = cl.CustomComparison(
     output_column_name="victim_age",
     comparison_levels=[
@@ -825,7 +841,7 @@ ORPHAN_COMPARISONS = [
 SHR_COMPARISONS = [
     DATE_COMP_SHR,
     AGE_COMP_SHR,
-    VICTIM_COUNT_COMP,
+    VICTIM_COUNT_COMP_SHR,
     OFFENDER_AGE_COMP,
     OFFENDER_SEX_COMP,
     # DIST_COMP,  # no location in SHR for DC

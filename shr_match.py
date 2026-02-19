@@ -45,8 +45,7 @@ def _assert_postadj_orphancluster_canonical_exists() -> Run[Unit]:
             SQL(
                 """--sql
                 SELECT COUNT(*) AS n
-                FROM information_schema.tables
-                WHERE lower(table_name) = 'victim_entity_reps_postadj_orphancluster';
+                FROM pragma_table_info('victim_entity_reps_postadj_orphancluster');
                 """
             )
         )
@@ -532,6 +531,10 @@ def match_article_to_shr_victims() -> Run[NextStep]:
                         CASE OffAge WHEN 999 THEN NULL ELSE OffAge END as offender_age,
                         CASE OffRace WHEN 'Unknown' THEN NULL ELSE OffRace END as offender_race,
                         CASE OffEthnic WHEN 'Unknown' THEN NULL ELSE OffEthnic END as offender_ethnicity,
+                        CASE
+                            WHEN OffCount IS NULL THEN NULL
+                            ELSE OffCount + 1
+                        END AS offender_count,
                         -- Map SHR Weapon to GPT schema enums
                         CASE
                             WHEN LOWER(TRIM(Weapon)) LIKE '%knife%' THEN 'knife'
@@ -598,7 +601,7 @@ def match_article_to_shr_victims() -> Run[NextStep]:
                         2 AS city_id  -- Corresponds to DC (PublicationID of Washi Post)
                     FROM sqldb.shr
                     WHERE State = 'District of Columbia' -- Only DC for now
-                    AND Year >= 1977 AND Year <= 1980 -- Limit to 1977-78 for now
+                    AND Year >= 1977 AND Year <= 1984 -- Limit to 1977-84 for now
                 ) AS shr_rows
                 """
             )
