@@ -98,6 +98,7 @@ def _export_shr_final_matches_excel() -> Run[Unit]:
                 av.date_precision AS entity_date_precision,
                 av.year AS entity_year, av.month AS entity_month,
                 av.victim_age, av.victim_sex, av.victim_race, av.victim_ethnicity,
+                av.relationship,
                 av.victim_count,
                 av.weapon, av.circumstance,
                 av.offender_age, av.offender_sex, av.offender_race, av.offender_ethnicity,
@@ -121,6 +122,7 @@ def _export_shr_final_matches_excel() -> Run[Unit]:
                 sc.victim_sex AS shr_victim_sex,
                 sc.victim_race AS shr_victim_race,
                 sc.victim_ethnicity AS shr_victim_ethnicity,
+                sc.relationship AS shr_relationship,
                 sc.weapon AS shr_weapon,
                 sc.circumstance AS shr_circumstance,
                 sc.offender_age AS shr_offender_age,
@@ -146,6 +148,7 @@ def _export_shr_final_matches_excel() -> Run[Unit]:
                 av.date_precision AS entity_date_precision,
                 av.year AS entity_year, av.month AS entity_month,
                 av.victim_age, av.victim_sex, av.victim_race, av.victim_ethnicity,
+                av.relationship,
                 av.victim_count,
                 av.weapon, av.circumstance,
                 av.offender_age, av.offender_sex, av.offender_race, av.offender_ethnicity,
@@ -169,6 +172,7 @@ def _export_shr_final_matches_excel() -> Run[Unit]:
                 CAST(NULL AS VARCHAR) AS shr_victim_sex,
                 CAST(NULL AS VARCHAR) AS shr_victim_race,
                 CAST(NULL AS VARCHAR) AS shr_victim_ethnicity,
+                CAST(NULL AS VARCHAR) AS shr_relationship,
                 CAST(NULL AS VARCHAR) AS shr_weapon,
                 CAST(NULL AS VARCHAR) AS shr_circumstance,
                 CAST(NULL AS INTEGER) AS shr_offender_age,
@@ -192,6 +196,7 @@ def _export_shr_final_matches_excel() -> Run[Unit]:
                 CAST(NULL AS VARCHAR) AS entity_date_precision,
                 CAST(NULL AS INTEGER) AS entity_year, CAST(NULL AS INTEGER) AS entity_month,
                 sc.victim_age, sc.victim_sex, sc.victim_race, sc.victim_ethnicity,
+                CAST(NULL AS VARCHAR) AS relationship,
                 sc.victim_count,
                 sc.weapon, sc.circumstance,
                 sc.offender_age, sc.offender_sex, sc.offender_race, sc.offender_ethnicity,
@@ -215,6 +220,7 @@ def _export_shr_final_matches_excel() -> Run[Unit]:
                 sc.victim_sex AS shr_victim_sex,
                 sc.victim_race AS shr_victim_race,
                 sc.victim_ethnicity AS shr_victim_ethnicity,
+                sc.relationship AS shr_relationship,
                 sc.weapon AS shr_weapon,
                 sc.circumstance AS shr_circumstance,
                 sc.offender_age AS shr_offender_age,
@@ -251,6 +257,8 @@ def _export_shr_final_matches_excel() -> Run[Unit]:
               shr_victim_race AS s_vrac,
               entity_victim_ethnicity AS e_veth,
               shr_victim_ethnicity AS s_veth,
+              relationship AS e_rel,
+              shr_relationship AS s_rel,
               entity_weapon AS e_weap,
               shr_weapon AS s_weap,
               entity_circumstance AS e_circ,
@@ -319,6 +327,7 @@ def _export_shr_debug_matches_excel() -> Run[Unit]:
                 av.date_precision AS entity_date_precision,
                 av.year AS entity_year, av.month AS entity_month,
                 av.victim_age, av.victim_sex, av.victim_race, av.victim_ethnicity,
+                av.relationship,
                 av.victim_count,
                 av.weapon, av.circumstance,
                 av.offender_age, av.offender_sex, av.offender_race, av.offender_ethnicity,
@@ -342,6 +351,7 @@ def _export_shr_debug_matches_excel() -> Run[Unit]:
                 sc.victim_sex AS shr_victim_sex,
                 sc.victim_race AS shr_victim_race,
                 sc.victim_ethnicity AS shr_victim_ethnicity,
+                sc.relationship AS shr_relationship,
                 sc.weapon AS shr_weapon,
                 sc.circumstance AS shr_circumstance,
                 sc.offender_age AS shr_offender_age,
@@ -366,6 +376,7 @@ def _export_shr_debug_matches_excel() -> Run[Unit]:
                 av.date_precision AS entity_date_precision,
                 av.year AS entity_year, av.month AS entity_month,
                 av.victim_age, av.victim_sex, av.victim_race, av.victim_ethnicity,
+                av.relationship,
                 av.victim_count,
                 av.weapon, av.circumstance,
                 av.offender_age, av.offender_sex, av.offender_race, av.offender_ethnicity,
@@ -389,6 +400,7 @@ def _export_shr_debug_matches_excel() -> Run[Unit]:
                 CAST(NULL AS VARCHAR) AS shr_victim_sex,
                 CAST(NULL AS VARCHAR) AS shr_victim_race,
                 CAST(NULL AS VARCHAR) AS shr_victim_ethnicity,
+                CAST(NULL AS VARCHAR) AS shr_relationship,
                 CAST(NULL AS VARCHAR) AS shr_weapon,
                 CAST(NULL AS VARCHAR) AS shr_circumstance,
                 CAST(NULL AS INTEGER) AS shr_offender_age,
@@ -412,6 +424,7 @@ def _export_shr_debug_matches_excel() -> Run[Unit]:
                 CAST(NULL AS VARCHAR) AS entity_date_precision,
                 CAST(NULL AS INTEGER) AS entity_year, CAST(NULL AS INTEGER) AS entity_month,
                 sc.victim_age, sc.victim_sex, sc.victim_race, sc.victim_ethnicity,
+                CAST(NULL AS VARCHAR) AS relationship,
                 sc.victim_count,
                 sc.weapon, sc.circumstance,
                 sc.offender_age, sc.offender_sex, sc.offender_race, sc.offender_ethnicity,
@@ -435,6 +448,7 @@ def _export_shr_debug_matches_excel() -> Run[Unit]:
                 sc.victim_sex AS shr_victim_sex,
                 sc.victim_race AS shr_victim_race,
                 sc.victim_ethnicity AS shr_victim_ethnicity,
+                sc.relationship AS shr_relationship,
                 sc.weapon AS shr_weapon,
                 sc.circumstance AS shr_circumstance,
                 sc.offender_age AS shr_offender_age,
@@ -471,6 +485,8 @@ def _export_shr_debug_matches_excel() -> Run[Unit]:
               shr_victim_race AS s_vrac,
               entity_victim_ethnicity AS e_veth,
               shr_victim_ethnicity AS s_veth,
+              relationship AS e_rel,
+              shr_relationship AS s_rel,
               entity_weapon AS e_weap,
               shr_weapon AS s_weap,
               entity_circumstance AS e_circ,
@@ -535,6 +551,22 @@ def match_article_to_shr_victims() -> Run[NextStep]:
                             WHEN OffCount IS NULL THEN NULL
                             ELSE OffCount + 1
                         END AS offender_count,
+                        CASE
+                            WHEN lower(trim(coalesce(Relationship, ''))) IN (
+                                'acquaintance', 'son', 'daughter', 'husband', 'stranger', 'wife',
+                                'ex-wife', 'ex-husband', 'brother', 'sister', 'other family',
+                                'girlfriend', 'boyfriend', 'neighbor', 'stepfather', 'stepmother',
+                                'stepson', 'friend', 'other known to victim', 'mother', 'father',
+                                'in-law', 'employee', 'homosexual relationship'
+                            ) THEN lower(trim(Relationship))
+                            WHEN lower(trim(coalesce(Relationship, ''))) = 'other - known to victim'
+                                THEN 'other known to victim'
+                            WHEN lower(trim(coalesce(Relationship, ''))) = 'common-law wife'
+                                THEN 'wife'
+                            WHEN lower(trim(coalesce(Relationship, ''))) = 'common-law husband'
+                                THEN 'husband'
+                            ELSE NULL
+                        END AS relationship,
                         -- Map SHR Weapon to GPT schema enums
                         CASE
                             WHEN LOWER(TRIM(Weapon)) LIKE '%knife%' THEN 'knife'
@@ -631,6 +663,7 @@ def match_article_to_shr_victims() -> Run[NextStep]:
                         canonical_sex AS victim_sex,
                         canonical_race AS victim_race,
                         canonical_ethnicity AS victim_ethnicity,
+                        canonical_relationship AS relationship,
                         canonical_offender_age AS offender_age,
                         canonical_offender_sex AS offender_sex,
                         canonical_offender_race AS offender_race,

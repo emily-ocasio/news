@@ -395,6 +395,7 @@ def _build_postadj_entities() -> Run[Unit]:
                               m.incident_date,
                               m.midpoint_day,
                               m.offender_count,
+                              m.victim_relationship AS relationship,
                               m.geo_address_norm,
                               m.geo_address_short,
                               m.geo_address_short_2,
@@ -414,6 +415,7 @@ def _build_postadj_entities() -> Run[Unit]:
                               vce.incident_date,
                               vce.midpoint_day,
                               vce.offender_count,
+                              vce.victim_relationship AS relationship,
                               vce.geo_address_norm,
                               vce.geo_address_short,
                               vce.geo_address_short_2,
@@ -435,6 +437,7 @@ def _build_postadj_entities() -> Run[Unit]:
                               vce.incident_date,
                               vce.midpoint_day,
                               vce.offender_count,
+                              vce.victim_relationship AS relationship,
                               vce.geo_address_norm,
                               vce.geo_address_short,
                               vce.geo_address_short_2,
@@ -469,6 +472,44 @@ def _build_postadj_entities() -> Run[Unit]:
                                 MAX(offender_count) FILTER (WHERE offender_count IS NOT NULL) AS max_offender_count
                               FROM all_members_postadj_temp
                               GROUP BY victim_entity_id
+                            ),
+                            relationship_counts AS (
+                              SELECT
+                                victim_entity_id,
+                                relationship,
+                                COUNT(*) AS rel_cnt,
+                                CASE
+                                  WHEN relationship IS NULL OR trim(relationship) = '' THEN 0
+                                  WHEN lower(trim(relationship)) IN ('relationship not determined', 'unknown relationship') THEN 1
+                                  ELSE 2
+                                END AS specificity_rank
+                              FROM all_members_postadj_temp
+                              GROUP BY victim_entity_id, relationship
+                            ),
+                            relationship_ranked AS (
+                              SELECT
+                                victim_entity_id,
+                                relationship,
+                                specificity_rank,
+                                rel_cnt,
+                                ROW_NUMBER() OVER (
+                                  PARTITION BY victim_entity_id
+                                  ORDER BY
+                                    specificity_rank DESC,
+                                    rel_cnt DESC,
+                                    relationship ASC NULLS LAST
+                                ) AS rn
+                              FROM relationship_counts
+                            ),
+                            relationship_best AS (
+                              SELECT
+                                victim_entity_id,
+                                CASE
+                                  WHEN specificity_rank = 0 THEN NULL
+                                  ELSE relationship
+                                END AS canonical_relationship
+                              FROM relationship_ranked
+                              WHERE rn = 1
                             ),
                             location_base AS (
                               SELECT
@@ -560,6 +601,7 @@ def _build_postadj_entities() -> Run[Unit]:
                                 END AS INTEGER
                               ) AS entity_midpoint_day,
                               max_offender_count,
+                              rb.canonical_relationship,
                               lb.canonical_geo_address_norm,
                               lb.canonical_geo_address_short,
                               lb.canonical_geo_address_short_2,
@@ -568,6 +610,8 @@ def _build_postadj_entities() -> Run[Unit]:
                               lb.canonical_lat,
                               lb.canonical_lon
                             FROM agg
+                            LEFT JOIN relationship_best rb
+                              ON agg.victim_entity_id = rb.victim_entity_id
                             LEFT JOIN location_best lb
                               ON agg.victim_entity_id = lb.victim_entity_id;
                             """
@@ -581,6 +625,7 @@ def _build_postadj_entities() -> Run[Unit]:
                               entity_date_precision = ra.entity_date_precision,
                               incident_date = ra.incident_date,
                               entity_midpoint_day = ra.entity_midpoint_day,
+                              canonical_relationship = ra.canonical_relationship,
                               canonical_geo_address_norm = ra.canonical_geo_address_norm,
                               canonical_geo_address_short = ra.canonical_geo_address_short,
                               canonical_geo_address_short_2 = ra.canonical_geo_address_short_2,
@@ -747,6 +792,7 @@ def _build_orphan_matches_postadj_current() -> Run[Unit]:
             e.victim_sex,
             e.victim_race,
             e.victim_ethnicity,
+            e.relationship,
             e.victim_fullname_norm,
             e.weapon,
             e.circumstance,
@@ -791,6 +837,7 @@ def _build_orphan_matches_postadj_current() -> Run[Unit]:
             o.victim_sex,
             o.victim_race,
             o.victim_ethnicity,
+            o.relationship,
             o.victim_fullname_norm,
             o.weapon,
             o.circumstance,
@@ -843,6 +890,7 @@ def _build_orphan_matches_postadj_current() -> Run[Unit]:
           victim_sex,
           victim_race,
           victim_ethnicity,
+          relationship,
           victim_fullname_norm,
           weapon,
           circumstance,
@@ -954,6 +1002,7 @@ def _export_final_victim_entities_postadj() -> Run[Unit]:
           c.canonical_sex AS victim_sex,
           c.canonical_race AS victim_race,
           c.canonical_ethnicity AS victim_ethnicity,
+          c.canonical_relationship AS relationship,
           CAST(c.canonical_fullname AS VARCHAR) AS victim_fullname_norm,
           c.mode_weapon AS weapon,
           c.mode_circumstance AS circumstance,

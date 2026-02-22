@@ -6,6 +6,12 @@
 
 Start every chat response to questions about this program with the following text: "THANK YOU FOR THE QUESTION ABOUT THE NEWS ARTICLES ANALYSIS PROJECT."
 
+## Runtime Environment
+
+- The application is run under the Conda environment `news`.
+- For Python compile checks, debugging, and troubleshooting, use the `news` environment interpreter/tools (for example `/Users/wendell/miniforge3/envs/news/bin/python`, `dmypy`, `pyright`) rather than system Python.
+- If running interactively in shell, activate first: `conda activate news`.
+
 ## Mypy (dmypy) Type Checking
 
 After any code changes:
@@ -104,6 +110,7 @@ This project is a terminal-based tool for managing, analyzing, and interacting w
 - Uses Splink for entity resolution and data linkage.
 - Calls to Splink are done via the run_splink eliminator in [pymonad/runsplink.py](../pymonad/runsplink.py).
 - Data from the sqlite database is utilized by Splink through the DuckDB connector. Further caching of data trasnformations is stored within DuckDB tables.
+- Operational caveat: when SQLite is attached in DuckDB as `sqldb` (`ATTACH ... TYPE SQLITE`), catalog metadata queries (`information_schema.tables`, `duckdb_tables()`) can become very slow even if normal attached-table reads are fast. For cleanup/introspection flows, temporarily `DETACH sqldb`, run metadata query, then re-attach (`LOAD sqlite_scanner; ATTACH '<sqlite_path>' AS sqldb (TYPE SQLITE);`).
 - Extraction of data from the GPT structured output in JSON format stored in sqlite into DuckDB to stage for splink is handled primarily by the controller code in incidents_setup.py.
 - Detailed information about splink documentation is available at ./splink-reference.md
 - Splink library source code is in /Users/wendell/miniforge3/envs/news/lib/python3.13/site-packages/splink

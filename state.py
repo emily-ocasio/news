@@ -109,6 +109,7 @@ class Relationship(str, Enum):
     FATHER = "father"
     IN_LAW = "in-law"
     EMPLOYEE = "employee"
+    EMPLOYER = "employer"
     HOMOSEXUAL_RELATIONSHIP = "homosexual relationship"
 
 

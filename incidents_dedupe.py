@@ -390,6 +390,53 @@ def _build_representative_victims() -> Run[Unit]:
                   FROM weapon_choice
                   WHERE rn = 1
                 ),
+                relationship_values AS (
+                  SELECT
+                    victim_entity_id,
+                    CASE
+                      WHEN victim_relationship IS NULL OR trim(victim_relationship) = '' THEN NULL
+                      ELSE lower(trim(victim_relationship))
+                    END AS relationship
+                  FROM victim_entity_members
+                ),
+                relationship_counts AS (
+                  SELECT
+                    victim_entity_id,
+                    relationship,
+                    COUNT(*) AS rel_cnt,
+                    CASE
+                      WHEN relationship IS NULL THEN 0
+                      WHEN relationship IN ('relationship not determined', 'unknown relationship') THEN 1
+                      ELSE 2
+                    END AS specificity_rank
+                  FROM relationship_values
+                  GROUP BY victim_entity_id, relationship
+                ),
+                relationship_ranked AS (
+                  SELECT
+                    victim_entity_id,
+                    relationship,
+                    specificity_rank,
+                    rel_cnt,
+                    ROW_NUMBER() OVER (
+                      PARTITION BY victim_entity_id
+                      ORDER BY
+                        specificity_rank DESC,
+                        rel_cnt DESC,
+                        relationship ASC NULLS LAST
+                    ) AS rn
+                  FROM relationship_counts
+                ),
+                relationship_canonical AS (
+                  SELECT
+                    victim_entity_id,
+                    CASE
+                      WHEN specificity_rank = 0 THEN NULL
+                      ELSE relationship
+                    END AS canonical_relationship
+                  FROM relationship_ranked
+                  WHERE rn = 1
+                ),
                 -- -------- Canonical location: best-of --------
                 location_base AS (
                   SELECT
@@ -559,6 +606,7 @@ def _build_representative_victims() -> Run[Unit]:
                   a.canonical_sex,
                   a.canonical_race,
                   a.canonical_ethnicity,
+                  rc.canonical_relationship,
 
                   -- canonical offender attributes
                   onm.offender_age AS canonical_offender_age,
@@ -597,6 +645,8 @@ def _build_representative_victims() -> Run[Unit]:
                   ON wc.victim_entity_id = a.victim_entity_id
                 LEFT JOIN offender_names onm
                   ON onm.victim_entity_id = a.victim_entity_id
+                LEFT JOIN relationship_canonical rc
+                  ON rc.victim_entity_id = a.victim_entity_id
                 LEFT JOIN location_best lb
                   ON lb.victim_entity_id = a.victim_entity_id
                 LEFT JOIN entity_articles ea
@@ -644,6 +694,7 @@ def _export_final_clusters_excel() -> Run[Unit]:
       v.victim_count,
       v.offender_count,
       v.victim_sex,
+      v.victim_relationship,
       v.lat,
       v.lon,
       v.address_type,
@@ -742,6 +793,7 @@ def _export_final_clusters_excel() -> Run[Unit]:
                       victim_count,
                       offender_count,
                       victim_sex,
+                      victim_relationship,
                       lat,
                       lon,
                       address_type,

@@ -142,6 +142,7 @@ def _create_linkage_input_tables() -> Run[Unit]:
                     canonical_sex AS victim_sex,
                     canonical_race AS victim_race,
                     canonical_ethnicity AS victim_ethnicity,
+                    canonical_relationship AS relationship,
                     CAST(canonical_fullname AS VARCHAR) AS victim_fullname_norm,  -- Added: victim fullname from entities
                     CAST(canonical_fullname AS VARCHAR) AS victim_fullname_concat,
                     CAST(NULL AS VARCHAR) AS victim_forename_norm,
@@ -194,6 +195,7 @@ def _create_linkage_input_tables() -> Run[Unit]:
                     victim_sex,
                     victim_race,
                     victim_ethnicity,
+                    COALESCE(relationship, victim_relationship) AS relationship,
                     CAST(NULL AS VARCHAR) AS victim_fullname_norm,  -- Added: orphans have no victim fullname
                     CAST(NULL AS VARCHAR) AS victim_fullname_concat,
                     CAST(NULL AS VARCHAR) AS victim_forename_norm,
@@ -659,6 +661,7 @@ def _integrate_orphan_matches() -> Run[Unit]:
                   canonical_sex,
                   canonical_race,
                   canonical_ethnicity,
+                  canonical_relationship,
                   city_id,
                   canonical_age,
                   canonical_victim_count,
@@ -687,6 +690,7 @@ def _integrate_orphan_matches() -> Run[Unit]:
                   victim_sex AS canonical_sex,
                   victim_race AS canonical_race,
                   victim_ethnicity AS canonical_ethnicity,
+                  COALESCE(relationship, victim_relationship) AS canonical_relationship,
                   city_id AS city_id,
                   victim_age AS canonical_age,
                   victim_count AS canonical_victim_count,
@@ -729,6 +733,7 @@ def _integrate_orphan_matches() -> Run[Unit]:
                                 m.incident_date,
                                 m.midpoint_day,
                                 m.offender_count,
+                                m.victim_relationship AS relationship,
                                 m.geo_address_norm,
                                 m.geo_address_short,
                                 m.geo_address_short_2,
@@ -745,6 +750,7 @@ def _integrate_orphan_matches() -> Run[Unit]:
                                 vce.incident_date,
                                 vce.midpoint_day,
                                 vce.offender_count,
+                                vce.victim_relationship AS relationship,
                                 vce.geo_address_norm,
                                 vce.geo_address_short,
                                 vce.geo_address_short_2,
@@ -773,6 +779,44 @@ def _integrate_orphan_matches() -> Run[Unit]:
                                 MAX(offender_count) FILTER (WHERE offender_count IS NOT NULL) AS max_offender_count
                               FROM all_members_temp
                               GROUP BY victim_entity_id
+                            ),
+                            relationship_counts AS (
+                              SELECT
+                                victim_entity_id,
+                                relationship,
+                                COUNT(*) AS rel_cnt,
+                                CASE
+                                  WHEN relationship IS NULL OR trim(relationship) = '' THEN 0
+                                  WHEN lower(trim(relationship)) IN ('relationship not determined', 'unknown relationship') THEN 1
+                                  ELSE 2
+                                END AS specificity_rank
+                              FROM all_members_temp
+                              GROUP BY victim_entity_id, relationship
+                            ),
+                            relationship_ranked AS (
+                              SELECT
+                                victim_entity_id,
+                                relationship,
+                                specificity_rank,
+                                rel_cnt,
+                                ROW_NUMBER() OVER (
+                                  PARTITION BY victim_entity_id
+                                  ORDER BY
+                                    specificity_rank DESC,
+                                    rel_cnt DESC,
+                                    relationship ASC NULLS LAST
+                                ) AS rn
+                              FROM relationship_counts
+                            ),
+                            relationship_best AS (
+                              SELECT
+                                victim_entity_id,
+                                CASE
+                                  WHEN specificity_rank = 0 THEN NULL
+                                  ELSE relationship
+                                END AS canonical_relationship
+                              FROM relationship_ranked
+                              WHERE rn = 1
                             ),
                             location_base AS (
                               SELECT
@@ -864,6 +908,7 @@ def _integrate_orphan_matches() -> Run[Unit]:
                                 END AS INTEGER
                               ) AS entity_midpoint_day,
                               max_offender_count,
+                              rb.canonical_relationship,
                               lb.canonical_geo_address_norm,
                               lb.canonical_geo_address_short,
                               lb.canonical_geo_address_short_2,
@@ -872,6 +917,8 @@ def _integrate_orphan_matches() -> Run[Unit]:
                               lb.canonical_lat,
                               lb.canonical_lon
                             FROM agg
+                            LEFT JOIN relationship_best rb
+                              ON agg.victim_entity_id = rb.victim_entity_id
                             LEFT JOIN location_best lb
                               ON agg.victim_entity_id = lb.victim_entity_id;
                             """
@@ -885,6 +932,7 @@ def _integrate_orphan_matches() -> Run[Unit]:
                               entity_date_precision = ra.entity_date_precision,
                               incident_date = ra.incident_date,
                               entity_midpoint_day = ra.entity_midpoint_day,
+                              canonical_relationship = ra.canonical_relationship,
                               canonical_geo_address_norm = ra.canonical_geo_address_norm,
                               canonical_geo_address_short = ra.canonical_geo_address_short,
                               canonical_geo_address_short_2 = ra.canonical_geo_address_short_2,
@@ -970,6 +1018,7 @@ def _export_orphan_matches_debug_excel() -> Run[Unit]:
         e.address_type,
         e.lat, e.lon,
         e.victim_age, e.victim_sex, e.victim_race, e.victim_ethnicity,
+        e.relationship,
         e.victim_fullname_norm,  -- Added
         e.weapon, e.circumstance,
         e.offender_forename_norm, e.offender_surname_norm,
@@ -1003,6 +1052,7 @@ def _export_orphan_matches_debug_excel() -> Run[Unit]:
         o.address_type,
         o.lat, o.lon,
         o.victim_age, o.victim_sex, o.victim_race, o.victim_ethnicity,
+        o.relationship,
         o.victim_fullname_norm,  -- Added
         o.weapon, o.circumstance,
         o.offender_forename_norm, o.offender_surname_norm,
@@ -1029,6 +1079,7 @@ def _export_orphan_matches_debug_excel() -> Run[Unit]:
       geo_score, address_type,
       lat, lon,
       victim_age, victim_sex, victim_race, victim_ethnicity,
+      relationship,
       victim_fullname_norm,  -- Added
       weapon, circumstance,
       offender_forename_norm, offender_surname_norm,

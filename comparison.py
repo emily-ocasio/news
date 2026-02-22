@@ -109,6 +109,33 @@ class ComparisonComp(StrEnum):
     OFFENDER_RACE_NULL = _null_comp_builder("offender_race")
     EXACT_OFFENDER_ETHNICITY = _exact_comp_builder("offender_ethnicity")
     OFFENDER_ETHNICITY_NULL = _null_comp_builder("offender_ethnicity")
+    EXACT_RELATIONSHIP = _exact_comp_builder("relationship")
+    RELATIONSHIP_NULL = _null_comp_builder("relationship") + ' OR ' + \
+            _null_comp_builder("relationship", "= 'other known to victim'")
+    RELATIONSHIP_SAME_GROUP = (
+        """
+        CASE
+          WHEN "relationship_l" IN ('husband','wife','ex-wife','ex-husband','boyfriend','girlfriend','homosexual relationship')
+            THEN 'intimate'
+          WHEN "relationship_l" IN ('son','daughter','brother','sister','other family','stepfather','stepmother','stepson','mother','father','in-law')
+            THEN 'family'
+          WHEN "relationship_l" IN ('acquaintance','friend','neighbor','employee','employer')
+            THEN 'known_nonfamily'
+          ELSE NULL
+        END
+        =
+        CASE
+          WHEN "relationship_r" IN ('husband','wife','ex-wife','ex-husband','boyfriend','girlfriend','homosexual relationship')
+            THEN 'intimate'
+          WHEN "relationship_r" IN ('son','daughter','brother','sister','other family','stepfather','stepmother','stepson','mother','father','in-law')
+            THEN 'family'
+          WHEN "relationship_r" IN ('acquaintance','friend','neighbor','employee','employer')
+            THEN 'known_nonfamily'
+          ELSE NULL
+        END
+        AND "relationship_l" <> "relationship_r"
+        """
+    )
 
 @dataclass(frozen=True)
 class ComparisonLevel:
@@ -720,6 +747,46 @@ CIRC_COMP = cl.CustomComparison(
     ]
 )
 
+RELATIONSHIP_COMP = cl.CustomComparison(
+    output_column_name="relationship",
+    comparison_levels=[
+        NullComparisonLevel(
+            "relationship NULL",
+            ComparisonComp.RELATIONSHIP_NULL.value
+        ).to_dict(),
+        TFComparisonLevel(
+            "exact match relationship",
+            ComparisonComp.EXACT_RELATIONSHIP.value,
+            "relationship"
+        ).to_dict(),
+        ComparisonLevel(
+            "same relationship family group",
+            ComparisonComp.RELATIONSHIP_SAME_GROUP.value
+        ).to_dict(),
+        cll.ElseLevel()
+    ]
+)
+
+RELATIONSHIP_COMP_SHR = cl.CustomComparison(
+    output_column_name="relationship",
+    comparison_levels=[
+        NullComparisonLevel(
+            "relationship NULL",
+            ComparisonComp.RELATIONSHIP_NULL.value
+        ).to_dict(),
+        TFComparisonLevel(
+            "exact match relationship",
+            ComparisonComp.EXACT_RELATIONSHIP.value,
+            "relationship"
+        ).to_dict(),
+        ComparisonLevel(
+            "same relationship family group",
+            ComparisonComp.RELATIONSHIP_SAME_GROUP.value
+        ).to_dict(),
+        cll.ElseLevel()
+    ]
+)
+
 OFFENDER_AGE_COMP = cl.CustomComparison(
     output_column_name="offender_age",
     comparison_levels=[
@@ -819,6 +886,7 @@ INCIDENT_COMPARISONS = [
     OFFENDER_COMP,
     OFFENDER_AGE_COMP,
     OFFENDER_SEX_COMP,
+    RELATIONSHIP_COMP,
     TF_WEAPON_COMP,
     CIRC_COMP,
     SUMMARY_COMP,
@@ -832,6 +900,7 @@ ORPHAN_COMPARISONS = [
     OFFENDER_COMP,
     TF_WEAPON_COMP,
     CIRC_COMP,
+    RELATIONSHIP_COMP,
     SUMMARY_COMP,
     VICTIM_COUNT_COMP,
     OFFENDER_AGE_COMP,
@@ -844,6 +913,7 @@ SHR_COMPARISONS = [
     VICTIM_COUNT_COMP_SHR,
     OFFENDER_AGE_COMP,
     OFFENDER_SEX_COMP,
+    RELATIONSHIP_COMP_SHR,
     # DIST_COMP,  # no location in SHR for DC
     TF_WEAPON_COMP_SHR,
     CIRC_COMP,

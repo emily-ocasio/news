@@ -6,6 +6,9 @@
 - Orphan adjudication policy lives in `docs/orphan_adjudication_playbook.md`.
 
 ## Global Rules
+- Runtime environment:
+  - The application runs under the Conda environment `news`.
+  - For Python compilation, type checking, and troubleshooting commands, prefer binaries from `/Users/wendell/miniforge3/envs/news/bin/` (or run after `conda activate news`).
 - If DuckDB is locked or unavailable during orphan adjudication:
   - Identify likely lock owner process first.
   - If lock owner is a `python` process:
@@ -16,6 +19,10 @@
     - If yes, wait briefly for completion or stop the offending parallel process(es), then continue.
     - If no or unclear, stop and notify the user.
   - Do not use snapshots, copies, or other lock workarounds.
+- When running DuckDB metadata scans (`information_schema.tables` or `duckdb_tables()`) while SQLite is attached as `sqldb`:
+  - Temporarily `DETACH sqldb` before the metadata query.
+  - Re-attach after query completion using `LOAD sqlite_scanner; ATTACH '<sqlite_path>' AS sqldb (TYPE SQLITE);`.
+  - Reason: attached SQLite can cause severe catalog-query stalls even when normal attached data reads are fast.
 - When displaying orphan IDs, avoid editor line/column auto-link rendering by inserting a zero-width space after each colon.
   - Use display like `100168529:\u200b0:\u200b0`.
   - Do not render these as line/column references (for example, avoid phrasing like `line 0, column 0`).

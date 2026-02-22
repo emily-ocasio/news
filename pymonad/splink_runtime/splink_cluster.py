@@ -204,6 +204,12 @@ def _constrained_greedy_clusters(
             if ok:
                 union(uid_l, uid_r)
             elif capture_blocked and not same_component and shared:
+                print(
+                    "Blocked union: "
+                    f"{uid_l} vs {uid_r} "
+                    f"shared_exclusion_ids={sorted(shared)} "
+                    f"match_probability={prob}"
+                )
                 blocked_rows.append({
                     id_left_col: uid_l,
                     id_right_col: uid_r,
@@ -354,11 +360,45 @@ def _drop_all_splink_tables_step() -> Run[Unit]:
     )
 
 
+def _drop_all_splink_tables_detach_sqldb_step() -> Run[Unit]:
+    """
+    Drop Splink temp tables while temporarily detaching sqldb.
+
+    DuckDB metadata queries (information_schema/duckdb_tables) can stall when
+    a SQLite attachment is present. We only detach around the metadata scan.
+    """
+    def _escape_sql_literal(value: str) -> str:
+        return value.replace("'", "''")
+
+    def _reattach_sqldb(file_path: str) -> Run[Unit]:
+        escaped = _escape_sql_literal(file_path)
+        return (
+            sql_exec(SQL("LOAD sqlite_scanner"))
+            ^ sql_exec(SQL(f"ATTACH '{escaped}' AS sqldb (TYPE SQLITE)"))
+        )
+
+    def _with_database_list(rows: Array) -> Run[Unit]:
+        sqldb_file = None
+        for row in rows:
+            if str(row.get("name", "")) == "sqldb":
+                sqldb_file = str(row.get("file", ""))
+                break
+        if not sqldb_file:
+            return _drop_all_splink_tables_step()
+        return (
+            sql_exec(SQL("DETACH sqldb"))
+            ^ _drop_all_splink_tables_step()
+            ^ _reattach_sqldb(sqldb_file)
+        )
+
+    return sql_query(SQL("PRAGMA database_list")) >> _with_database_list
+
+
 def _invalidate_and_drop_splink_tables(ctx: SplinkContext, linker: Any) -> Run[Unit]:
     _ = ctx
     try:
         linker.table_management.invalidate_cache()
-        return _drop_all_splink_tables_step()
+        return _drop_all_splink_tables_detach_sqldb_step()
     except Exception:  # pylint: disable=W0718
         return pure(unit)
 

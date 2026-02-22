@@ -128,6 +128,8 @@ SELECT
   json_extract_string(v.value, '$.victim_sex')       AS victim_sex,
   json_extract_string(v.value, '$.victim_race')      AS victim_race,
   json_extract_string(v.value, '$.victim_ethnicity') AS victim_ethnicity,
+  json_extract_string(v.value, '$.relationship') AS victim_relationship,
+  json_extract_string(v.value, '$.relationship') AS relationship,
 
   a.incident_date, a.event_start_day, a.event_end_day,
   a.weapon, a.circumstance,
@@ -311,7 +313,8 @@ LEFT JOIN incidents_cached i
 COUNT_VICTIMS_SQL = SQL("SELECT COUNT(*) AS n FROM victims_cached_enh;")
 PREVIEW_VICTIMS_SQL = SQL(
     """SELECT article_id, incident_idx, victim_idx, victim_row_id,
-       victim_name_raw, victim_age, victim_sex, victim_race, victim_ethnicity
+       victim_name_raw, victim_age, victim_sex, victim_race, victim_ethnicity,
+       victim_relationship
 FROM victims_cached_enh
 LIMIT 10;
 """

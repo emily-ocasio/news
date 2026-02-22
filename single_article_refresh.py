@@ -325,6 +325,22 @@ def _refresh_duckdb_victims_for_article(record_id: int) -> Run[Unit]:
         ^ sql_exec(
             SQL(
                 """
+                ALTER TABLE victims_cached
+                ADD COLUMN IF NOT EXISTS victim_relationship VARCHAR;
+                """
+            )
+        )
+        ^ sql_exec(
+            SQL(
+                """
+                ALTER TABLE victims_cached
+                ADD COLUMN IF NOT EXISTS relationship VARCHAR;
+                """
+            )
+        )
+        ^ sql_exec(
+            SQL(
+                """
                 CREATE INDEX IF NOT EXISTS idx_victims_cached_article_id
                 ON victims_cached(article_id);
                 """
@@ -343,6 +359,7 @@ def _refresh_duckdb_victims_for_article(record_id: int) -> Run[Unit]:
                   article_id, city_id, publish_date, year, month, day,
                   incident_idx, summary_vec, victim_idx,
                   victim_name_raw, victim_age_raw, victim_sex, victim_race, victim_ethnicity,
+                  victim_relationship, relationship,
                   incident_date, event_start_day, event_end_day,
                   weapon, circumstance,
                   offender_name, offender_count,
@@ -497,6 +514,22 @@ def _refresh_duckdb_victims_enh_for_article(record_id: int) -> Run[Unit]:
     return (
         put_line(f"[F] victims_enh refresh entry for article {record_id}.")
         ^ put_line(f"[F] victims_enh refresh step: ensure index on victims_cached_enh.article_id ({record_id})")
+        ^ sql_exec(
+            SQL(
+                """
+                ALTER TABLE victims_cached_enh
+                ADD COLUMN IF NOT EXISTS victim_relationship VARCHAR;
+                """
+            )
+        )
+        ^ sql_exec(
+            SQL(
+                """
+                ALTER TABLE victims_cached_enh
+                ADD COLUMN IF NOT EXISTS relationship VARCHAR;
+                """
+            )
+        )
         ^ sql_exec(
             SQL(
                 """

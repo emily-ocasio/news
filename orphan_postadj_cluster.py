@@ -157,6 +157,7 @@ def _build_postadj_orphan_cluster_input() -> Run[Unit]:
                   vep.canonical_sex AS victim_sex,
                   vep.canonical_race AS victim_race,
                   vep.canonical_ethnicity AS victim_ethnicity,
+                  vep.canonical_relationship AS relationship,
                   CAST(NULL AS VARCHAR) AS victim_fullname_norm,
                   CAST(NULL AS VARCHAR) AS victim_fullname_concat,
                   CAST(NULL AS VARCHAR) AS victim_forename_norm,
@@ -423,6 +424,44 @@ def _build_postadj_orphancluster_canonical() -> Run[Unit]:
                     MAX(victim_age) FILTER (WHERE victim_age IS NOT NULL) AS max_age
                   FROM members
                   GROUP BY cluster_id
+                ),
+                relationship_counts AS (
+                  SELECT
+                    cluster_id,
+                    relationship,
+                    COUNT(*) AS rel_cnt,
+                    CASE
+                      WHEN relationship IS NULL OR trim(relationship) = '' THEN 0
+                      WHEN lower(trim(relationship)) IN ('relationship not determined', 'unknown relationship') THEN 1
+                      ELSE 2
+                    END AS specificity_rank
+                  FROM members
+                  GROUP BY cluster_id, relationship
+                ),
+                relationship_ranked AS (
+                  SELECT
+                    cluster_id,
+                    relationship,
+                    specificity_rank,
+                    rel_cnt,
+                    ROW_NUMBER() OVER (
+                      PARTITION BY cluster_id
+                      ORDER BY
+                        specificity_rank DESC,
+                        rel_cnt DESC,
+                        relationship ASC NULLS LAST
+                    ) AS rn
+                  FROM relationship_counts
+                ),
+                relationship_best AS (
+                  SELECT
+                    cluster_id,
+                    CASE
+                      WHEN specificity_rank = 0 THEN NULL
+                      ELSE relationship
+                    END AS canonical_relationship
+                  FROM relationship_ranked
+                  WHERE rn = 1
                 )
                 SELECT
                   MIN(unique_id) AS victim_entity_id,
@@ -450,6 +489,7 @@ def _build_postadj_orphancluster_canonical() -> Run[Unit]:
                   mode(victim_sex) FILTER (WHERE victim_sex IS NOT NULL) AS canonical_sex,
                   mode(victim_race) FILTER (WHERE victim_race IS NOT NULL) AS canonical_race,
                   mode(victim_ethnicity) FILTER (WHERE victim_ethnicity IS NOT NULL) AS canonical_ethnicity,
+                  rb.canonical_relationship,
                   mode(offender_age) FILTER (WHERE offender_age IS NOT NULL) AS canonical_offender_age,
                   mode(offender_sex) FILTER (WHERE offender_sex IS NOT NULL) AS canonical_offender_sex,
                   mode(offender_race) FILTER (WHERE offender_race IS NOT NULL) AS canonical_offender_race,
@@ -490,9 +530,11 @@ def _build_postadj_orphancluster_canonical() -> Run[Unit]:
                   ON lb.cluster_id = m.cluster_id
                 LEFT JOIN age_agg aa
                   ON aa.cluster_id = m.cluster_id
+                LEFT JOIN relationship_best rb
+                  ON rb.cluster_id = m.cluster_id
                 GROUP BY m.cluster_id, da.n_day, da.n_month, da.mode_day_date, da.mode_month_mid, da.mode_year_mid,
                          lb.canonical_geo_address_norm, lb.canonical_geo_address_short, lb.canonical_geo_address_short_2,
-                         lb.canonical_geo_score, lb.canonical_address_type, lb.canonical_lat, lb.canonical_lon,
+                         lb.canonical_geo_score, lb.canonical_address_type, lb.canonical_lat, lb.canonical_lon, rb.canonical_relationship,
                          aa.avg_age, aa.min_age, aa.max_age;
                 """
             )
@@ -514,6 +556,7 @@ def _build_postadj_orphancluster_canonical() -> Run[Unit]:
                   canonical_sex,
                   canonical_race,
                   canonical_ethnicity,
+                  canonical_relationship,
                   canonical_offender_age,
                   canonical_offender_sex,
                   canonical_offender_race,
@@ -556,6 +599,7 @@ def _build_postadj_orphancluster_canonical() -> Run[Unit]:
                   canonical_sex,
                   canonical_race,
                   canonical_ethnicity,
+                  canonical_relationship,
                   canonical_offender_age,
                   canonical_offender_sex,
                   canonical_offender_race,
@@ -634,6 +678,7 @@ def _export_postadj_orphan_clusters_excel() -> Run[Unit]:
             v.canonical_sex,
             v.canonical_race,
             v.canonical_ethnicity,
+            v.canonical_relationship AS relationship,
             v.canonical_age,
             v.canonical_victim_count AS victim_count,
             v.canonical_offender_count AS offender_count,
@@ -687,6 +732,7 @@ def _export_postadj_orphan_clusters_excel() -> Run[Unit]:
             m.victim_sex AS canonical_sex,
             m.victim_race AS canonical_race,
             m.victim_ethnicity AS canonical_ethnicity,
+            m.relationship,
             m.victim_age AS canonical_age,
             m.victim_count,
             m.offender_count,
@@ -727,6 +773,7 @@ def _export_postadj_orphan_clusters_excel() -> Run[Unit]:
             i.victim_sex AS canonical_sex,
             i.victim_race AS canonical_race,
             i.victim_ethnicity AS canonical_ethnicity,
+            i.relationship,
             i.victim_age AS canonical_age,
             i.victim_count,
             i.offender_count,
@@ -765,6 +812,7 @@ def _export_postadj_orphan_clusters_excel() -> Run[Unit]:
           canonical_sex,
           canonical_race,
           canonical_ethnicity,
+          relationship,
           canonical_age,
           victim_count,
           offender_count,
