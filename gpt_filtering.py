@@ -10,12 +10,12 @@ import re
 from appstate import user_name
 from pymonad import Run, with_namespace, to_prompts, Namespace, EnvKey, \
     PromptKey, pure, put_line, sql_query, SQL, SQLParams, Right, \
-    Left, Either, StopProcessing, GPTModel, with_models, response_with_gpt_prompt, \
+    Left, Either, StopRun, GPTModel, with_models, response_with_gpt_prompt, \
     to_gpt_tuple, response_message, to_json, rethrow, from_either, sql_exec, \
     GPTResponseTuple, GPTFullResponse, String, input_number, throw, \
     ErrorPayload, Tuple, resolve_prompt_template, GPTPromptTemplate, wal, ask, \
-    view, bind_first, process_all, Array, Unit, unit, V, FailureDetail, \
-    ItemsFailures, FailureDetails, Valid, Invalid, Validator
+    view, bind_first, validate_all_pure, process_items, ProcessAcc, \
+    Array, Unit, unit, V, FailureDetail, FailureDetails, array_sequence
 from menuprompts import NextStep
 from article import Article, Articles, ArticleAppError, from_rows
 from calculations import articles_to_filter_sql, \
@@ -116,8 +116,7 @@ def special_case_validators() -> Array[ArticleValidator]:
     """
     terms = SpecialCaseTerm & Array(SPECIAL_CASE_TERMS)
     def validator_from_term(term: SpecialCaseTerm) -> ArticleValidator:
-        def validator(article: Article) \
-            -> Run[V[Array[FailureDetail], Unit]]:
+        def validator(article: Article) -> V[Array[FailureDetail], Unit]:
             text: str = (article.title or '') + ' ' + (article.full_text or '')
             pattern = fr"\b{re.escape(term)}"
             if re.search(pattern, text, re.IGNORECASE):
@@ -125,11 +124,8 @@ def special_case_validators() -> Array[ArticleValidator]:
                     type=ArticleFailureType.CONTAINS_SPECIAL_CASE,
                     s=ArticleErrInfo(term)
                 )
-                return \
-                    put_line(f"Special case article:\n{article}") ^ \
-                    put_line(f"Article is a special case: {term}\n") ^ \
-                    pure(V.invalid(Array((detail,))))
-            return pure(V.pure(unit))
+                return V.invalid(Array((detail,)))
+            return V.pure(unit)
         return validator
     return validator_from_term & terms
 
@@ -265,15 +261,31 @@ def is_special_case_detail(detail: FailureDetail) -> bool:
     """
     return detail.type == ArticleFailureType.CONTAINS_SPECIAL_CASE
 
+def display_special_case_failures(special_failures: Array[ArticleFailures]) \
+    -> Run[Unit]:
+    """
+    Display special-case findings during pure-validation phase.
+    """
+    if special_failures.length == 0:
+        return pure(unit)
+    def display_failure(af: ArticleFailures) -> Run[None]:
+        special_case_details = af.details.filter(is_special_case_detail)
+        special_case_terms = (lambda d: d.s) & special_case_details
+        terms_text = ", ".join(str(s) for s in special_case_terms)
+        return \
+            put_line(f"Special case article:\n{af.item}") ^ \
+            put_line(f"Article is a special case: {terms_text}\n") ^ \
+            pure(None)
+    return array_sequence(display_failure & special_failures) ^ pure(unit)
+
 def process_special_cases(special_failures: Array[ArticleFailures]) \
     -> Run[Unit]:
     """
     Process special case article failures.
     """
     def process_all_special_cases() \
-        -> Run[Either[StopProcessing[ArticleFailures, Unit],
-                      V[ItemsFailures[ArticleFailures], Array[Unit]]]]:
-        validators: Array[Validator[ArticleFailures]] = Array(())
+        -> Run[Either[StopRun[ArticleFailures, Unit],
+                      ProcessAcc[ArticleFailures, Unit]]]:
         def happy_path(af: ArticleFailures) -> Run[Unit]:
             special_case_details = af.details.filter(is_special_case_detail)
             special_case_terms = (lambda d: d.s) & special_case_details
@@ -292,8 +304,7 @@ def process_special_cases(special_failures: Array[ArticleFailures]) \
                 type=ArticleFailureType.UNCAUGHT_EXCEPTION,
                 s=ArticleErrInfo(f"Exception: {err}")
             ),))
-        return process_all(
-            validators=validators,  # No validators needed
+        return process_items(
             render=render,
             happy=happy_path,
             items=special_failures
@@ -310,7 +321,7 @@ def process_special_cases(special_failures: Array[ArticleFailures]) \
         ) ^ \
         pure(unit)
 
-def after_processing(v_process: V[Array[ArticleFailures], Array[Article]]) \
+def after_processing(failures: Array[ArticleFailures]) \
     -> Run[NextStep]:
     """
     Handle the result after processing all articles.
@@ -322,22 +333,21 @@ def after_processing(v_process: V[Array[ArticleFailures], Array[Article]]) \
     def is_special_case(article_failures: ArticleFailures) -> bool:
         return \
             article_failures.details.filter(is_special_case_detail).length > 0
-    match v_process.validity:
-        case Invalid(articles_failures):
-            run_failures = articles_failures.filter(is_run_error)
-            special_case_failures = articles_failures.filter(is_special_case)
-            return \
-                put_line("Processing completed with " \
-                f"{articles_failures.length} articles " \
-                "failing validation.\n") ^ \
-                process_special_cases(special_case_failures) ^ \
-                put_line(f"{run_failures.length} articles " \
-                "failed due to uncaught exceptions.\n") ^ \
-                pure(NextStep.CONTINUE)
-        case Valid(_):
-            return \
-                put_line("All articles processed:\n") ^ \
-                pure(NextStep.CONTINUE)
+    if failures.length > 0:
+        run_failures = failures.filter(is_run_error)
+        special_case_failures = failures.filter(is_special_case)
+        return \
+            put_line("Processing completed with " \
+            f"{failures.length} articles " \
+            "failing validation.\n") ^ \
+            display_special_case_failures(special_case_failures) ^ \
+            process_special_cases(special_case_failures) ^ \
+            put_line(f"{run_failures.length} articles " \
+            "failed due to uncaught exceptions.\n") ^ \
+            pure(NextStep.CONTINUE)
+    return \
+        put_line("All articles processed:\n") ^ \
+        pure(NextStep.CONTINUE)
 
 def render_as_failure(err: ErrorPayload) -> FailureDetails:
     """
@@ -350,9 +360,10 @@ def render_as_failure(err: ErrorPayload) -> FailureDetails:
 
 def after_processing_either(
         articles: Articles,
+        validation_failures: Array[ArticleFailures],
         result: Either[
-            StopProcessing[Article, Article],
-            V[Array[ArticleFailures], Array[Article]]
+            StopRun[Article, Article],
+            ProcessAcc[Article, Article]
         ]) -> Run[NextStep]:
     """
     Handle the result after processing all articles, including stop processing.
@@ -371,19 +382,24 @@ def after_processing_either(
                     f"{failures} article(s) recorded failures before stop.\n"
                 ) ^ \
                 pure(NextStep.CONTINUE)
-        case Right(v_process):
-            return after_processing(v_process)
+        case Right(process_acc):
+            return after_processing(validation_failures.append(process_acc.failures))
 
 def process_all_articles(articles: Articles) -> Run[NextStep]:
     """
-    Process all articles to be filtered using applicative validation.
+    Process all articles to be filtered using pure validation
+    followed by monadic processing.
     """
-    return process_all(
-        validators=special_case_validators(),
+    validation_acc = validate_all_pure(special_case_validators(), articles)
+    return process_items(
         render=render_as_failure,
         happy=filter_single_article,
-        items=articles
-    ) >> (lambda result: after_processing_either(articles, result))
+        items=validation_acc.valid_items
+    ) >> (lambda result: after_processing_either(
+        articles,
+        validation_acc.failures,
+        result
+    ))
 
 def second_filter() -> Run[NextStep]:
     """

@@ -47,7 +47,19 @@ type ItemsFailures[S] = Array[ItemFailures[S]] # All failures for many items
 # Each validator produces an Array[FailureDetail] in a Run[V] context
 # Even if only one failure, it is in an array to allow accumulation
 # If no failures, validator returns Valid(Unit) in Run context
+# DEPRECATED: use PureValidator with validate_item_pure/validate_all_pure.
 type Validator[S] = Callable[[S], Run[V[FailureDetails[S], Unit]]]
+type PureValidator[S] = Callable[[S], V[FailureDetails[S], Unit]]
+type PureValidators[S] = Array[PureValidator[S]]
+
+@dataclass(frozen=True)
+class ValidationAcc[S]:
+    """
+    Pure-validation accumulator across all items.
+    """
+    valid_items: Array[S]
+    failures: ItemsFailures[S]
+    processed: int
 
 @dataclass(frozen=True)
 class ProcessAllAcc[S, T]:
@@ -66,15 +78,128 @@ class StopProcessing[S, T]:
     acc: ProcessAllAcc[S, T]
     reason: ErrorPayload
 
+@dataclass(frozen=True)
+class ProcessAcc[S, T]:
+    """
+    Processing accumulator for monadic happy-path execution.
+    """
+    results: Array[T]
+    failures: ItemsFailures[S]
+    processed: int
+
+@dataclass(frozen=True)
+class StopRun[S, T]:
+    """
+    Marker for short-circuiting process_items.
+    """
+    acc: ProcessAcc[S, T]
+    reason: ErrorPayload
+
 def no_op(_: ErrorPayload) -> Run[Unit]:
     """
     No-op error handler
     """
     return Run.pure(unit)
 
+def validate_item_pure(validators: PureValidators[S], item: S) \
+    -> V[ItemsFailures[S], S]:
+    """
+    Apply pure validators to an item and accumulate errors applicatively.
+    """
+    if validators.length == 0:
+        return V.pure(item)
+
+    validations = (lambda v: v(item)) & validators
+    combined: V[FailureDetails[S], Unit] = validations.foldl(
+        lambda a, b: a ^ b,
+        V.pure(unit)
+    )
+    match combined.validity:
+        case Invalid(details):
+            return V.invalid(Array((ItemFailures(item, details),)))
+        case Valid(_):
+            return V.pure(item)
+
+def validate_all_pure(validators: PureValidators[S], items: Array[S]) \
+    -> ValidationAcc[S]:
+    """
+    Validate all items using pure applicative validation only.
+    """
+    def step(acc: ValidationAcc[S], item: S) -> ValidationAcc[S]:
+        v_item = validate_item_pure(validators, item)
+        match v_item.validity:
+            case Invalid(failures):
+                return ValidationAcc(
+                    acc.valid_items,
+                    acc.failures.append(failures),
+                    acc.processed + 1
+                )
+            case Valid(valid_item):
+                return ValidationAcc(
+                    Array.snoc(acc.valid_items, valid_item),
+                    acc.failures,
+                    acc.processed + 1
+                )
+    init = ValidationAcc(Array.mempty(), Array.mempty(), 0)
+    return items.foldl(step, init)
+
+def process_items(
+    happy: Callable[[S], Run[T]],
+    items: Array[S],
+    render: Callable[[ErrorPayload], FailureDetails[S]],
+    unhappy: Callable[[ErrorPayload], Run[Unit]] = no_op
+) -> Run[Either[StopRun[S, T], ProcessAcc[S, T]]]:
+    """
+    Process items monadically without running validation.
+    """
+    def acc_init() -> ProcessAcc[S, T]:
+        return ProcessAcc(Array.mempty(), Array.mempty(), 0)
+
+    def acc_with_result(acc: ProcessAcc[S, T], result: T) -> ProcessAcc[S, T]:
+        return ProcessAcc(
+            Array.snoc(acc.results, result),
+            acc.failures,
+            acc.processed + 1
+        )
+
+    def acc_with_run_failure(acc: ProcessAcc[S, T],
+                             item: S,
+                             err: ErrorPayload) -> ProcessAcc[S, T]:
+        return ProcessAcc(
+            acc.results,
+            Array.snoc(acc.failures, ItemFailures(item, render(err))),
+            acc.processed + 1
+        )
+
+    def handle_run_result(
+        acc: ProcessAcc[S, T],
+        item: S,
+        result: Either[ErrorPayload, T]
+    ) -> Run[Either[StopRun[S, T], ProcessAcc[S, T]]]:
+        match result:
+            case Right(r):
+                return Run.pure(Right.pure(acc_with_result(acc, r)))
+            case Left(err):
+                if isinstance(err.app, UserAbort):
+                    return Run.pure(Left(StopRun(acc, err)))
+                return unhappy(err) ^ Run.pure(
+                    Right.pure(acc_with_run_failure(acc, item, err))
+                )
+
+    def process_one(acc: ProcessAcc[S, T], item: S) \
+        -> Run[Either[StopRun[S, T], ProcessAcc[S, T]]]:
+        return run_except(happy(item)) >> \
+            (lambda ei: handle_run_result(acc, item, ei))
+
+    if items.length == 0:
+        return Run.pure(Right.pure(acc_init()))
+
+    return foldm_either_loop_bind(items, acc_init(), process_one)
+
 def validate_item(validators: Array[Validator[S]], item: S) \
     -> Run[V[ItemsFailures[S], S]]:
     """
+    DEPRECATED: use validate_item_pure for pure validation concerns.
     Apply a list of effectul validators to an item, accumulating errors.
     """
     def traverse_validators() -> Run[Array[V[FailureDetails, Unit]]]:
@@ -121,6 +246,9 @@ def process_all(validators: Array[Validator[S]],
                 -> Run[Either[StopProcessing[S, T],
                               V[ItemsFailures[S], Array[T]]]]:
     """
+    DEPRECATED: legacy hybrid API that interleaves validation and processing.
+    Prefer validate_all_pure + process_items.
+
     Given array of items, perform effectful validation on each,
     and if validations pass, perform a happy path action.
     Keep trying each subsequent item even if some fail validation or 

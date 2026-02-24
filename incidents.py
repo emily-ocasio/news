@@ -9,8 +9,8 @@ from pymonad import Run, with_namespace, to_prompts, Namespace, EnvKey, \
     to_gpt_tuple, rethrow, from_either, sql_exec, \
     GPTResponseTuple, GPTFullResponse, String, input_number, throw, \
     ErrorPayload, Tuple, array_sequence, Unit, unit, \
-    bind_first, process_all, Array, V, Valid, Invalid, Validator, \
-    Left, Right, Either, StopProcessing
+    bind_first, process_items, ProcessAcc, Array, \
+    Left, Right, Either, StopRun
 from menuprompts import NextStep
 from article import Article, Articles, ArticleAppError, from_rows
 from calculations import articles_to_extract_sql, \
@@ -179,7 +179,7 @@ def display_uncaught_exceptions(failures: Array[ArticleFailures]) -> Run[Unit]:
     displays = display_article_failure & failures
     return array_sequence(displays) ^ pure(unit)
 
-def after_processing(v_process: V[Array[ArticleFailures], Array[Article]]) \
+def after_processing(process_acc: ProcessAcc[Article, Article]) \
     -> Run[NextStep]:
     """
     Handle the result after processing all articles.
@@ -188,26 +188,24 @@ def after_processing(v_process: V[Array[ArticleFailures], Array[Article]]) \
         return article_failures.details.length > 0 and \
             article_failures.details[0].type \
                 == ArticleFailureType.UNCAUGHT_EXCEPTION
-    match v_process.validity:
-        case Invalid(articles_failures):
-            run_failures = articles_failures.filter(is_run_error)
-            return \
-                put_line("Processing completed with " \
-                f"{articles_failures.length} articles " \
-                "failing validation.\n") ^ \
-                put_line(f"{run_failures.length} articles " \
-                "failed due to uncaught exceptions.\n") ^ \
-                display_uncaught_exceptions(run_failures) ^ \
-                pure(NextStep.CONTINUE)
-        case Valid(_):
-            return \
-                put_line("All articles processed:\n") ^ \
-                pure(NextStep.CONTINUE)
+    run_failures = process_acc.failures.filter(is_run_error)
+    if run_failures.length > 0:
+        return \
+            put_line("Processing completed with " \
+            f"{process_acc.failures.length} articles " \
+            "failing validation.\n") ^ \
+            put_line(f"{run_failures.length} articles " \
+            "failed due to uncaught exceptions.\n") ^ \
+            display_uncaught_exceptions(run_failures) ^ \
+            pure(NextStep.CONTINUE)
+    return \
+        put_line("All articles processed:\n") ^ \
+        pure(NextStep.CONTINUE)
 
 def after_processing_either(articles: Articles,
                             result: Either[
-                                StopProcessing[Article, Article],
-                                V[Array[ArticleFailures], Array[Article]]
+                                StopRun[Article, Article],
+                                ProcessAcc[Article, Article]
                             ]) -> Run[NextStep]:
     match result:
         case Left(stop):
@@ -225,15 +223,14 @@ def after_processing_either(articles: Articles,
                 pure(NextStep.CONTINUE)
         case Right(v_process):
             return after_processing(v_process)
+    raise RuntimeError("Unreachable Either branch")
 
 def process_all_articles(articles: Articles) -> Run[NextStep]:
     """
     Process all articles for which to extract incident information
     using applicative validation.
     """
-    validators: Array[Validator[Article]] = Array(())
-    return process_all(
-        validators=validators,  # No validators needed
+    return process_items(
         render=render_as_failure,
         happy=extract_single_article,
         items=articles

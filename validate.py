@@ -4,7 +4,7 @@ Classes and functions for validating articles before processing with GPT
 from dataclasses import dataclass
 
 from pymonad import String, FailureDetail, ItemFailures, \
-    Validator, Array, FailureType
+    PureValidator, Array, FailureType
 from article import Article
 
 class SpecialCaseTerm(String):
@@ -35,4 +35,4 @@ class ArticleFailureDetail(FailureDetail[Article]):
 type ArticleFailures = ItemFailures[Article]
 type ArticlesFailures = Array[ArticleFailures]
 
-type ArticleValidator = Validator[Article]
+type ArticleValidator = PureValidator[Article]

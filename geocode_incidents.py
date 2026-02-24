@@ -18,15 +18,13 @@ from pymonad import (
     geocode_address,
     GeocodeResult,
     String,
-    process_all,
+    process_items,
     FailureDetail,
     FailureDetails,
     AddressResultType,
     addr_key_type,
     mar_result_type_with_input,
     mar_result_score,
-    Invalid,
-    Validator,
     FailureType,
     throw,
     ErrorPayload,
@@ -318,8 +316,6 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
             )
         ) & rows
 
-        # --- Validation wiring (empty validators) ---
-
         # Optional, descriptive failure enum (type annotation only)
         class GeoFailureType(FailureType):
             """Enum of failure types for geocoding"""
@@ -327,10 +323,8 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
             GEOCODE_FAILED = "GEOCODE_FAILED"
             UNCAUGHT_EXCEPTION = "UNCAUGHT_EXCEPTION"
 
-        validators: Array[Validator] = Array(())  # no validators for now
-
         # Render a thrown ErrorPayload (from happy path) into FailureDetails
-        def render(err: ErrorPayload) -> FailureDetails[str]:
+        def render(err: ErrorPayload) -> FailureDetails[tuple[str, str, str]]:
             return Array(
                 (
                     FailureDetail(
@@ -668,9 +662,8 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
                     >> handle_cache
                 )
 
-        # Process all with applicative accumulation (keeps going after failures)
-        return process_all(
-            validators=validators,
+        # Process addresses monadically, accumulating runtime failures.
+        return process_items(
             render=render,
             happy=happy,
             items=addr_items,
@@ -685,10 +678,10 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
             if isinstance(result, Left)
             else (
                 put_line(
-                    f"[GEO] {result.r.validity.l.length} address failures accumulated."
+                    f"[GEO] {result.r.failures.length} address failures accumulated."
                 )
                 ^ pure(None)
-                if isinstance(result.r.validity, Invalid)
+                if result.r.failures.length > 0
                 else pure(None)
             )
         )
