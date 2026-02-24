@@ -4,7 +4,7 @@ First filtering of articles using automatic regex classification
 from pymonad import Run, with_namespace, to_prompts, Namespace, PromptKey, \
     pure, put_line, sql_query, SQL, SQLParams, sql_exec, input_number, throw, \
     ErrorPayload, process_items, ProcessAcc, Array, \
-    String, FailureDetail, Left, Right, Either, StopRun, \
+    String, FailureDetail, Left, Right, Either, StopRun, Tuple, \
     HashMap
 from menuprompts import NextStep
 from article import Article, Articles, ArticleAppError, from_rows
@@ -20,6 +20,7 @@ CLASS_CODE_N = String("N")
 CLASS_CODE_O = String("O")
 CLASS_CODE_UNKNOWN = String("UNKNOWN")
 CLASS_CODES = Array((CLASS_CODE_M, CLASS_CODE_N, CLASS_CODE_O, CLASS_CODE_UNKNOWN))
+type AutoClassResult = Tuple[int, String]
 
 def increment_count(counts: HashMap[String, int], code: String) -> HashMap[String, int]:
     """
@@ -43,15 +44,15 @@ def normalize_class_code(code: str) -> String:
     class_code = String(code)
     return class_code if class_code in CLASS_CODES else CLASS_CODE_UNKNOWN
 
-def count_classes(articles: Array[Article]) -> HashMap[String, int]:
+def count_auto_classes(results: Array[AutoClassResult]) -> HashMap[String, int]:
     """
-    Count class codes for successfully processed articles using a pure fold.
+    Count class codes from processed class DTO results.
     """
-    def step(counts: HashMap[String, int], article: Article) -> HashMap[String, int]:
-        code = normalize_class_code(classify(article.row))
+    def step(counts: HashMap[String, int], result: AutoClassResult) -> HashMap[String, int]:
+        code = normalize_class_code(str(result.snd))
         return increment_count(counts, code)
     empty_counts: HashMap[String, int] = HashMap.empty()
-    return articles.foldl(step, empty_counts)
+    return results.foldl(step, empty_counts)
 
 def render_summary(counts: HashMap[String, int],
                    processed: int,
@@ -104,19 +105,20 @@ def retrieve_articles(num_days: int) -> Run[Articles]:
             sql_query(SQL(articles_to_classify_sql()),
                       SQLParams((num_days,)))
 
-def classify_single_article(article: Article) -> Run[Article]:
+def classify_single_article(article: Article) -> Run[AutoClassResult]:
     """
-    Classify a single article using regex, returning the article on success.
+    Classify a single article using regex and return a class DTO on success.
     """
     # Classify using the pure function from calc_core
     auto_class = String(classify(article.row))
+    record_id = article.record_id or 0
     return \
         put_line(f"\n{article}\n" if auto_class == String("M") else "") ^ \
-        put_line(f"Classifying article {article.record_id} as {auto_class}...") ^ \
+        put_line(f"Classifying article {record_id} as {auto_class}...") ^ \
         sql_exec(SQL(classify_sql()),
-            SQLParams((auto_class, article.record_id))) ^ \
+            SQLParams((auto_class, record_id))) ^ \
         put_line(f"Saved auto-classification: {auto_class}\n") ^ \
-        pure(article)
+        pure(Tuple(record_id, auto_class))
 
 def render_as_failure(err: ErrorPayload) -> Array[FailureDetail]:
     """
@@ -127,14 +129,14 @@ def render_as_failure(err: ErrorPayload) -> Array[FailureDetail]:
         s=String(f"Exception: {err}")
     ),))
 
-def after_processing(process_acc: ProcessAcc[Article, Article]) \
+def after_processing(process_acc: ProcessAcc[Article, AutoClassResult]) \
     -> Run[NextStep]:
     """
     Handle the result after processing all articles.
     """
     failures = process_acc.failures.length
     summary = render_summary(
-        count_classes(process_acc.results),
+        count_auto_classes(process_acc.results),
         process_acc.processed,
         failures,
         stopped=False
@@ -155,8 +157,8 @@ def after_processing(process_acc: ProcessAcc[Article, Article]) \
 
 def after_processing_either(articles: Articles,
                             result: Either[
-                                StopRun[Article, Article],
-                                ProcessAcc[Article, Article]
+                                StopRun[Article, AutoClassResult],
+                                ProcessAcc[Article, AutoClassResult]
                             ]) -> Run[NextStep]:
     match result:
         case Left(stop):
@@ -164,7 +166,7 @@ def after_processing_either(articles: Articles,
             total = len(articles)
             failures = stop.acc.failures.length
             summary = render_summary(
-                count_classes(stop.acc.results),
+                count_auto_classes(stop.acc.results),
                 processed,
                 failures,
                 stopped=True

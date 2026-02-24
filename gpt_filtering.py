@@ -14,8 +14,9 @@ from pymonad import Run, with_namespace, to_prompts, Namespace, EnvKey, \
     to_gpt_tuple, response_message, to_json, rethrow, from_either, sql_exec, \
     GPTResponseTuple, GPTFullResponse, String, input_number, throw, \
     ErrorPayload, Tuple, resolve_prompt_template, GPTPromptTemplate, wal, ask, \
-    view, bind_first, validate_all_pure, process_items, ProcessAcc, \
+    view, bind_first, validate_all_pure, ValidationAcc, process_items, ProcessAcc, \
     Array, Unit, unit, V, FailureDetail, FailureDetails, array_sequence
+from pymonad.hashmap import HashMap
 from menuprompts import NextStep
 from article import Article, Articles, ArticleAppError, from_rows
 from calculations import articles_to_filter_sql, \
@@ -45,6 +46,8 @@ FormatType = WashingtonPostArticleHomicideClassification
 PROMPT_KEY_STR = "classify_only_filter_dc"
 MODEL_KEY_STR = "filter"
 SPECIAL_CASE_TERMS = ('Hanafi','Urgo')
+CLASS_CODE_UNKNOWN = String("UNKNOWN")
+CLASS_CODE_NULL = String("NULL")
 
 print_gpt_response = bind_first(response_message, \
         lambda parsed_output: cast(FormatType, parsed_output).result_str)
@@ -146,6 +149,7 @@ def filter_article(article: Article) -> Run[GPTFullResponse]:
 
 type NewGptClass = String | None
 type ArticleClassTuple = Tuple[Article, NewGptClass]
+type ClassResult = Tuple[int, String]
 def save_article_class(article_class_t: ArticleClassTuple) \
     -> Run[Unit]:
     """
@@ -240,26 +244,100 @@ def save_gpt_fn(article: Article, prompt_key: PromptKey) -> GPTFullKreisli:
 
     return bind_first(from_either, save_gpt_result)
 
-def filter_single_article(article: Article) -> Run[Article]:
+def filter_single_article(article: Article) -> Run[ClassResult]:
     """
-    Filter a single article, returning the article on success.
+    Filter a single article and return (record_id, gptClass) on success.
     """
-    save_article= save_article_fn(article)
     save_gpt = save_gpt_fn(article, PromptKey(PROMPT_KEY_STR))
+    record_id = article.record_id or 0
+    def _on_response(gpt_full: GPTFullResponse) -> Run[ClassResult]:
+        match gpt_full:
+            case Left():
+                return rethrow(gpt_full)
+            case Right(resp_t):
+                gpt_class = Article.new_gpt_class(resp_t.parsed.output)
+                class_code = CLASS_CODE_NULL if gpt_class is None else gpt_class
+                return \
+                    save_article_class(Tuple(article, gpt_class)) ^ \
+                    save_gpt(gpt_full) ^ \
+                    pure(Tuple(record_id, class_code))
     return \
         put_line(f"Processing article {article}...\n") ^ \
         filter_article(article) >> \
         print_gpt_response >> \
-        save_article >> \
-        save_gpt >> \
-        rethrow ^ \
-        pure(article)
+        _on_response
 
 def is_special_case_detail(detail: FailureDetail) -> bool:
     """
     Predicate a failure detail is a special case.
     """
     return detail.type == ArticleFailureType.CONTAINS_SPECIAL_CASE
+
+def count_classes(results: Array[ClassResult]) -> HashMap[String, int]:
+    """
+    Count class codes from DTO results.
+    """
+    def step(counts: HashMap[String, int], result: ClassResult) -> HashMap[String, int]:
+        code = result.snd if len(str(result.snd)) > 0 else CLASS_CODE_UNKNOWN
+        current = counts.get(code)
+        current_value = current if current is not None else 0
+        return counts.set(code, current_value + 1)
+    return results.foldl(step, HashMap.empty())
+
+def get_count(counts: HashMap[String, int], code: String) -> int:
+    """
+    Read a class count from an immutable HashMap, defaulting to zero.
+    """
+    current = counts.get(code)
+    return current if current is not None else 0
+
+def special_case_class_code(af: ArticleFailures) -> String:
+    """
+    Derive SP_* class from detected special-case failure details.
+    """
+    special_case_details = af.details.filter(is_special_case_detail)
+    special_case_terms = (lambda d: d.s) & special_case_details
+    def to_upper(s: String) -> String:
+        return String(s.upper())
+    terms = to_upper & special_case_terms
+    return String("SP_" + "_".join(terms))
+
+def render_class_counts(counts: HashMap[String, int]) -> String:
+    """
+    Render class count map as sorted lines.
+    """
+    if len(counts) == 0:
+        return String("  (none)")
+    lines = tuple(f"  {k}: {v}" for k, v in sorted(counts.items(), key=lambda kv: str(kv[0])))
+    return String("\n".join(lines))
+
+def render_filter_summary(
+    *,
+    stopped: bool,
+    special_counts: HashMap[String, int],
+    special_total: int,
+    gpt_counts: HashMap[String, int],
+    gpt_processed_total: int,
+    uncaught_failures_total: int,
+    not_processed_due_to_stop: int,
+) -> String:
+    """
+    Render final summary for GPT filtering run.
+    """
+    header = "Filter run summary (stopped early)" if stopped else "Filter run summary"
+    return String(
+        f"{header}\n"
+        "Special-case detected (validation):\n"
+        f"  Total: {special_total}\n"
+        f"{render_class_counts(special_counts)}\n"
+        "GPT-processed class counts:\n"
+        f"  Total processed: {gpt_processed_total}\n"
+        f"{render_class_counts(gpt_counts)}\n"
+        "Failures:\n"
+        f"  Uncaught exceptions: {uncaught_failures_total}\n"
+        "Not processed due to stop (GPT-eligible queue):\n"
+        f"  {not_processed_due_to_stop}"
+    )
 
 def display_special_case_failures(special_failures: Array[ArticleFailures]) \
     -> Run[Unit]:
@@ -279,26 +357,24 @@ def display_special_case_failures(special_failures: Array[ArticleFailures]) \
     return array_sequence(display_failure & special_failures) ^ pure(unit)
 
 def process_special_cases(special_failures: Array[ArticleFailures]) \
-    -> Run[Unit]:
+    -> Run[Either[StopRun[ArticleFailures, ClassResult],
+                  ProcessAcc[ArticleFailures, ClassResult]]]:
     """
     Process special case article failures.
     """
     def process_all_special_cases() \
-        -> Run[Either[StopRun[ArticleFailures, Unit],
-                      ProcessAcc[ArticleFailures, Unit]]]:
-        def happy_path(af: ArticleFailures) -> Run[Unit]:
-            special_case_details = af.details.filter(is_special_case_detail)
-            special_case_terms = (lambda d: d.s) & special_case_details
-            def to_upper(s: String) -> String:
-                return String(s.upper())
-            gpt_class = \
-                String("SP_" + "_".join(to_upper & special_case_terms))
+        -> Run[Either[StopRun[ArticleFailures, ClassResult],
+                      ProcessAcc[ArticleFailures, ClassResult]]]:
+        def happy_path(af: ArticleFailures) -> Run[ClassResult]:
+            gpt_class = special_case_class_code(af)
+            record_id = af.item.record_id or 0
             return \
-                put_line(f"Special case article id {af.item.record_id} "\
+                put_line(f"Special case article id {record_id} "\
                     f"title: {af.item.title}\n") ^ \
                 put_line("Special case article assigned class "\
                     f"{gpt_class}\n") ^ \
-                save_article_class(Tuple(af.item, gpt_class))
+                save_article_class(Tuple(af.item, gpt_class)) ^ \
+                pure(Tuple(record_id, gpt_class))
         def render(err: ErrorPayload) -> FailureDetails:
             return Array((FailureDetail(
                 type=ArticleFailureType.UNCAUGHT_EXCEPTION,
@@ -310,18 +386,14 @@ def process_special_cases(special_failures: Array[ArticleFailures]) \
             items=special_failures
         )
     if special_failures.length == 0:
-        return pure(unit)
+        return pure(Right.pure(ProcessAcc(Array(()), Array(()), 0)))
     return \
         put_line(f"{special_failures.length} " \
                 "special case article(s) skipped GPT filtering.\n") ^ \
-        process_all_special_cases() >> (lambda result:
-            put_line("Special case processing stopped by user.\n") ^ pure(unit)
-            if isinstance(result, Left)
-            else pure(unit)
-        ) ^ \
-        pure(unit)
+        process_all_special_cases()
 
-def after_processing(failures: Array[ArticleFailures]) \
+def after_processing(validation_acc: ValidationAcc[Article],
+                     process_acc: ProcessAcc[Article, ClassResult]) \
     -> Run[NextStep]:
     """
     Handle the result after processing all articles.
@@ -333,21 +405,65 @@ def after_processing(failures: Array[ArticleFailures]) \
     def is_special_case(article_failures: ArticleFailures) -> bool:
         return \
             article_failures.details.filter(is_special_case_detail).length > 0
-    if failures.length > 0:
-        run_failures = failures.filter(is_run_error)
-        special_case_failures = failures.filter(is_special_case)
+    failures = validation_acc.failures.append(process_acc.failures)
+    run_failures = process_acc.failures.filter(is_run_error)
+    special_case_failures = validation_acc.failures.filter(is_special_case)
+    gpt_counts = count_classes(process_acc.results)
+    special_counts_detected = count_classes(
+        special_case_failures.map(
+            lambda af: Tuple(af.item.record_id or 0, special_case_class_code(af))
+        )
+    )
+    summary = render_filter_summary(
+        stopped=False,
+        special_counts=special_counts_detected,
+        special_total=special_case_failures.length,
+        gpt_counts=gpt_counts,
+        gpt_processed_total=process_acc.results.length,
+        uncaught_failures_total=run_failures.length,
+        not_processed_due_to_stop=0
+    )
+
+    def _after_special(
+        special_result: Either[StopRun[ArticleFailures, ClassResult],
+                               ProcessAcc[ArticleFailures, ClassResult]]
+    ) -> Run[NextStep]:
+        def is_special_run_error(failure_item) -> bool:
+            return failure_item.details.length > 0 and \
+                failure_item.details[0].type == ArticleFailureType.UNCAUGHT_EXCEPTION
+        special_run_failures = 0
+        if isinstance(special_result, Left):
+            return \
+                put_line("Special case processing stopped by user.\n") ^ \
+                put_line(summary) ^ \
+                pure(NextStep.CONTINUE)
+        special_run_failures = special_result.r.failures.filter(is_special_run_error).length
+        total_uncaught = run_failures.length + special_run_failures
+        summary2 = render_filter_summary(
+            stopped=False,
+            special_counts=special_counts_detected,
+            special_total=special_case_failures.length,
+            gpt_counts=gpt_counts,
+            gpt_processed_total=process_acc.results.length,
+            uncaught_failures_total=total_uncaught,
+            not_processed_due_to_stop=0
+        )
+        if failures.length > 0:
+            return \
+                put_line("Processing completed with " \
+                f"{failures.length} articles " \
+                "failing validation.\n") ^ \
+                display_special_case_failures(special_case_failures) ^ \
+                put_line(f"{total_uncaught} articles " \
+                "failed due to uncaught exceptions.\n") ^ \
+                put_line(summary2) ^ \
+                pure(NextStep.CONTINUE)
         return \
-            put_line("Processing completed with " \
-            f"{failures.length} articles " \
-            "failing validation.\n") ^ \
-            display_special_case_failures(special_case_failures) ^ \
-            process_special_cases(special_case_failures) ^ \
-            put_line(f"{run_failures.length} articles " \
-            "failed due to uncaught exceptions.\n") ^ \
+            put_line("All articles processed:\n") ^ \
+            put_line(summary2) ^ \
             pure(NextStep.CONTINUE)
-    return \
-        put_line("All articles processed:\n") ^ \
-        pure(NextStep.CONTINUE)
+
+    return process_special_cases(special_case_failures) >> _after_special
 
 def render_as_failure(err: ErrorPayload) -> FailureDetails:
     """
@@ -360,10 +476,10 @@ def render_as_failure(err: ErrorPayload) -> FailureDetails:
 
 def after_processing_either(
         articles: Articles,
-        validation_failures: Array[ArticleFailures],
+        validation_acc: ValidationAcc[Article],
         result: Either[
-            StopRun[Article, Article],
-            ProcessAcc[Article, Article]
+            StopRun[Article, ClassResult],
+            ProcessAcc[Article, ClassResult]
         ]) -> Run[NextStep]:
     """
     Handle the result after processing all articles, including stop processing.
@@ -373,6 +489,26 @@ def after_processing_either(
             processed = stop.acc.processed
             total = len(articles)
             failures = stop.acc.failures.length
+            special_case_failures = validation_acc.failures.filter(
+                lambda af: af.details.filter(is_special_case_detail).length > 0
+            )
+            summary = render_filter_summary(
+                stopped=True,
+                special_counts=count_classes(
+                    special_case_failures.map(
+                        lambda af: Tuple(af.item.record_id or 0,
+                                         special_case_class_code(af))
+                    )
+                ),
+                special_total=special_case_failures.length,
+                gpt_counts=count_classes(stop.acc.results),
+                gpt_processed_total=stop.acc.results.length,
+                uncaught_failures_total=failures,
+                not_processed_due_to_stop=max(
+                    0,
+                    validation_acc.valid_items.length - processed
+                )
+            )
             return \
                 put_line(
                     "Processing stopped by user after "
@@ -381,23 +517,28 @@ def after_processing_either(
                 put_line(
                     f"{failures} article(s) recorded failures before stop.\n"
                 ) ^ \
+                put_line(summary) ^ \
                 pure(NextStep.CONTINUE)
         case Right(process_acc):
-            return after_processing(validation_failures.append(process_acc.failures))
+            return after_processing(validation_acc, process_acc)
+    raise RuntimeError("Unreachable Either branch")
 
 def process_all_articles(articles: Articles) -> Run[NextStep]:
     """
     Process all articles to be filtered using pure validation
     followed by monadic processing.
     """
-    validation_acc = validate_all_pure(special_case_validators(), articles)
+    validation_acc: ValidationAcc[Article] = validate_all_pure(
+        special_case_validators(),
+        articles
+    )
     return process_items(
         render=render_as_failure,
         happy=filter_single_article,
         items=validation_acc.valid_items
     ) >> (lambda result: after_processing_either(
         articles,
-        validation_acc.failures,
+        validation_acc,
         result
     ))
 
