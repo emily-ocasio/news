@@ -227,7 +227,7 @@ DATE_COMP = cl.CustomComparison(
                 cll.LiteralMatchLevel("date_precision", "month", "string", "left"),
                 cll.LiteralMatchLevel("date_precision", "month", "string", "right")
             ),
-        ).configure(label_for_charts="exact date or month precision match"),
+        ).configure(label_for_charts="exact date / month precision match"),
         cllc.Or(
             cllc.And(
                 cll.ExactMatchLevel("year"),
@@ -237,7 +237,16 @@ DATE_COMP = cl.CustomComparison(
                 cll.AbsoluteDifferenceLevel("midpoint_day", 2),
                 cll.LiteralMatchLevel("date_precision", "day", "string")
             ),
-        ).configure(label_for_charts="exact yr/mon or within 2 days"),
+            cllc.And(
+                cllc.Or(
+                    cll.LiteralMatchLevel("date_precision", "year", "string", "left"),
+                    cll.LiteralMatchLevel("date_precision", "year", "string", "right")
+                ),
+                cll.ExactMatchLevel("year")
+            )
+        ).configure(
+            label_for_charts="exact yr/mon or within 2 days or year precision match"
+            ),
         ComparisonLevel(
             "midpoint within 7 months",
             _clause_from_comps(

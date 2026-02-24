@@ -462,6 +462,32 @@ def _build_postadj_orphancluster_canonical() -> Run[Unit]:
                     END AS canonical_relationship
                   FROM relationship_ranked
                   WHERE rn = 1
+                ),
+                offender_age_counts AS (
+                  SELECT
+                    cluster_id,
+                    offender_age,
+                    COUNT(*) AS age_cnt
+                  FROM members
+                  WHERE offender_age IS NOT NULL
+                  GROUP BY cluster_id, offender_age
+                ),
+                offender_age_max AS (
+                  SELECT
+                    cluster_id,
+                    MAX(age_cnt) AS max_age_cnt
+                  FROM offender_age_counts
+                  GROUP BY cluster_id
+                ),
+                offender_age_best AS (
+                  SELECT
+                    c.cluster_id,
+                    AVG(c.offender_age) AS canonical_offender_age
+                  FROM offender_age_counts c
+                  JOIN offender_age_max m
+                    ON m.cluster_id = c.cluster_id
+                   AND m.max_age_cnt = c.age_cnt
+                  GROUP BY c.cluster_id
                 )
                 SELECT
                   MIN(unique_id) AS victim_entity_id,
@@ -490,7 +516,7 @@ def _build_postadj_orphancluster_canonical() -> Run[Unit]:
                   mode(victim_race) FILTER (WHERE victim_race IS NOT NULL) AS canonical_race,
                   mode(victim_ethnicity) FILTER (WHERE victim_ethnicity IS NOT NULL) AS canonical_ethnicity,
                   rb.canonical_relationship,
-                  mode(offender_age) FILTER (WHERE offender_age IS NOT NULL) AS canonical_offender_age,
+                  oab.canonical_offender_age,
                   mode(offender_sex) FILTER (WHERE offender_sex IS NOT NULL) AS canonical_offender_sex,
                   mode(offender_race) FILTER (WHERE offender_race IS NOT NULL) AS canonical_offender_race,
                   mode(offender_ethnicity) FILTER (WHERE offender_ethnicity IS NOT NULL) AS canonical_offender_ethnicity,
@@ -532,10 +558,12 @@ def _build_postadj_orphancluster_canonical() -> Run[Unit]:
                   ON aa.cluster_id = m.cluster_id
                 LEFT JOIN relationship_best rb
                   ON rb.cluster_id = m.cluster_id
+                LEFT JOIN offender_age_best oab
+                  ON oab.cluster_id = m.cluster_id
                 GROUP BY m.cluster_id, da.n_day, da.n_month, da.mode_day_date, da.mode_month_mid, da.mode_year_mid,
                          lb.canonical_geo_address_norm, lb.canonical_geo_address_short, lb.canonical_geo_address_short_2,
                          lb.canonical_geo_score, lb.canonical_address_type, lb.canonical_lat, lb.canonical_lon, rb.canonical_relationship,
-                         aa.avg_age, aa.min_age, aa.max_age;
+                         aa.avg_age, aa.min_age, aa.max_age, oab.canonical_offender_age;
                 """
             )
         )

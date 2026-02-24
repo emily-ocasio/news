@@ -545,9 +545,29 @@ def _build_representative_victims() -> Run[Unit]:
                       WHERE m.offender_fullname_concat = ot.offender_fullname
                         AND m.offender_surname_norm IS NOT NULL
                     ) AS offender_surname,
-                    mode(m.offender_age) FILTER (
-                      WHERE m.offender_fullname_concat = ot.offender_fullname
-                        AND m.offender_age IS NOT NULL
+                    (
+                      SELECT AVG(t.offender_age)
+                      FROM (
+                        SELECT
+                          offender_age,
+                          COUNT(*) AS age_cnt
+                        FROM victim_entity_members
+                        WHERE victim_entity_id = ot.victim_entity_id
+                          AND offender_fullname_concat = ot.offender_fullname
+                          AND offender_age IS NOT NULL
+                        GROUP BY offender_age
+                      ) t
+                      WHERE t.age_cnt = (
+                        SELECT MAX(age_cnt)
+                        FROM (
+                          SELECT COUNT(*) AS age_cnt
+                          FROM victim_entity_members
+                          WHERE victim_entity_id = ot.victim_entity_id
+                            AND offender_fullname_concat = ot.offender_fullname
+                            AND offender_age IS NOT NULL
+                          GROUP BY offender_age
+                        ) mx
+                      )
                     ) AS offender_age,
                     mode(m.offender_sex) FILTER (
                       WHERE m.offender_fullname_concat = ot.offender_fullname
