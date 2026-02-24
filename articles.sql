@@ -30,6 +30,7 @@ CREATE TABLE dates (
     Priority INTEGER NOT NULL DEFAULT 0,
     Complete INTEGER NOT NULL DEFAULT 0
 );
+CREATE UNIQUE INDEX uq_dates_pubdate ON dates(PubDate);
 CREATE INDEX PubDate ON articles(PubDate);
 CREATE INDEX ArticleType on articletypes(RecordId);
 CREATE INDEX Status ON articles(Status);
