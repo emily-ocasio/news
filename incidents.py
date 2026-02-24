@@ -11,6 +11,7 @@ from pymonad import Run, with_namespace, to_prompts, Namespace, EnvKey, \
     ErrorPayload, Tuple, array_sequence, Unit, unit, \
     bind_first, process_items, ProcessAcc, Array, \
     Left, Right, Either, StopRun
+from pymonad.hashmap import HashMap
 from menuprompts import NextStep
 from article import Article, Articles, ArticleAppError, from_rows
 from calculations import articles_to_extract_sql, \
@@ -33,6 +34,9 @@ GPT_MODELS = {
 FormatType = WashingtonPostArticleIncidentExtraction
 PROMPT_KEY_STR = "extract_incidents_dc"
 MODEL_KEY_STR = "extract"
+CLASS_CODE_UNKNOWN = String("UNKNOWN")
+CLASS_CODE_NULL = String("NULL")
+type ExtractClassResult = Tuple[int, String]
 
 def input_number_to_extract() -> Run[int]:
     """
@@ -150,21 +154,80 @@ def save_article_fn(article: Article) -> GPTFullKreisli:
     # from_either lifts it to (GPTFullResponse) -> Run[GPTFullResponse]
     return bind_first(from_either, bind_extracted)
 
-def extract_single_article(article: Article) -> Run[Article]:
+def extract_single_article(article: Article) -> Run[ExtractClassResult]:
     """
     Extract incident info from a single article,
-    returning the article on success.
+    returning (record_id, gptClass) on success.
     """
-    save_article= save_article_fn(article)
     save_gpt = save_gpt_fn(article, PromptKey(PROMPT_KEY_STR))
+    record_id = article.record_id or 0
+    def _on_response(gpt_full: GPTFullResponse) -> Run[ExtractClassResult]:
+        match gpt_full:
+            case Left():
+                return rethrow(gpt_full)
+            case Right(resp_t):
+                gpt_class = Article.extracted_gpt_class(resp_t.parsed.output)
+                class_code = CLASS_CODE_NULL if gpt_class is None else gpt_class
+                save_new_json = bind_first(save_json, Tuple(article, gpt_class))
+                return \
+                    save_article_class(Tuple(article, gpt_class)) ^ \
+                    pure(resp_t) >> \
+                    save_new_json >> \
+                    _to_full >> \
+                    save_gpt >> \
+                    rethrow ^ \
+                    pure(Tuple(record_id, class_code))
     return \
         put_line(f"Extracting incident data from article {article}...\n") ^ \
         extract_article(article) >> \
         print_gpt_response >> \
-        save_article >> \
-        save_gpt >> \
-        rethrow ^ \
-        pure(article)
+        _on_response
+
+def count_classes(results: Array[ExtractClassResult]) -> HashMap[String, int]:
+    """
+    Count class codes from DTO results.
+    """
+    def step(counts: HashMap[String, int],
+             result: ExtractClassResult) -> HashMap[String, int]:
+        code = result.snd if len(str(result.snd)) > 0 else CLASS_CODE_UNKNOWN
+        current = counts.get(code)
+        current_value = current if current is not None else 0
+        return counts.set(code, current_value + 1)
+    return results.foldl(step, HashMap.empty())
+
+def render_class_counts(counts: HashMap[String, int]) -> String:
+    """
+    Render class count map as sorted lines.
+    """
+    if len(counts) == 0:
+        return String("  (none)")
+    lines = tuple(
+        f"  {k}: {v}" for k, v in sorted(counts.items(), key=lambda kv: str(kv[0]))
+    )
+    return String("\n".join(lines))
+
+def render_extract_summary(
+    *,
+    stopped: bool,
+    gpt_counts: HashMap[String, int],
+    gpt_processed_total: int,
+    uncaught_failures_total: int,
+    not_processed_due_to_stop: int,
+) -> String:
+    """
+    Render final summary for extraction run.
+    """
+    header = "Extract run summary (stopped early)" if stopped else "Extract run summary"
+    return String(
+        f"{header}\n"
+        "GPT-processed class counts:\n"
+        f"  Total processed: {gpt_processed_total}\n"
+        f"{render_class_counts(gpt_counts)}\n"
+        "Failures:\n"
+        f"  Uncaught exceptions: {uncaught_failures_total}\n"
+        "Not processed due to stop (GPT-eligible queue):\n"
+        f"  {not_processed_due_to_stop}"
+    )
 
 def display_uncaught_exceptions(failures: Array[ArticleFailures]) -> Run[Unit]:
     """
@@ -179,7 +242,7 @@ def display_uncaught_exceptions(failures: Array[ArticleFailures]) -> Run[Unit]:
     displays = display_article_failure & failures
     return array_sequence(displays) ^ pure(unit)
 
-def after_processing(process_acc: ProcessAcc[Article, Article]) \
+def after_processing(process_acc: ProcessAcc[Article, ExtractClassResult]) \
     -> Run[NextStep]:
     """
     Handle the result after processing all articles.
@@ -189,6 +252,13 @@ def after_processing(process_acc: ProcessAcc[Article, Article]) \
             article_failures.details[0].type \
                 == ArticleFailureType.UNCAUGHT_EXCEPTION
     run_failures = process_acc.failures.filter(is_run_error)
+    summary = render_extract_summary(
+        stopped=False,
+        gpt_counts=count_classes(process_acc.results),
+        gpt_processed_total=process_acc.results.length,
+        uncaught_failures_total=run_failures.length,
+        not_processed_due_to_stop=0
+    )
     if run_failures.length > 0:
         return \
             put_line("Processing completed with " \
@@ -197,21 +267,34 @@ def after_processing(process_acc: ProcessAcc[Article, Article]) \
             put_line(f"{run_failures.length} articles " \
             "failed due to uncaught exceptions.\n") ^ \
             display_uncaught_exceptions(run_failures) ^ \
+            put_line(summary) ^ \
             pure(NextStep.CONTINUE)
     return \
         put_line("All articles processed:\n") ^ \
+        put_line(summary) ^ \
         pure(NextStep.CONTINUE)
 
 def after_processing_either(articles: Articles,
                             result: Either[
-                                StopRun[Article, Article],
-                                ProcessAcc[Article, Article]
+                                StopRun[Article, ExtractClassResult],
+                                ProcessAcc[Article, ExtractClassResult]
                             ]) -> Run[NextStep]:
     match result:
         case Left(stop):
             processed = stop.acc.processed
             total = len(articles)
-            failures = stop.acc.failures.length
+            def is_run_error(article_failures: ArticleFailures) -> bool:
+                return article_failures.details.length > 0 and \
+                    article_failures.details[0].type \
+                        == ArticleFailureType.UNCAUGHT_EXCEPTION
+            failures = stop.acc.failures.filter(is_run_error).length
+            summary = render_extract_summary(
+                stopped=True,
+                gpt_counts=count_classes(stop.acc.results),
+                gpt_processed_total=stop.acc.results.length,
+                uncaught_failures_total=failures,
+                not_processed_due_to_stop=max(0, len(articles) - processed)
+            )
             return \
                 put_line(
                     "Extraction stopped by user after "
@@ -220,6 +303,7 @@ def after_processing_either(articles: Articles,
                 put_line(
                     f"{failures} article(s) recorded failures before stop.\n"
                 ) ^ \
+                put_line(summary) ^ \
                 pure(NextStep.CONTINUE)
         case Right(v_process):
             return after_processing(v_process)
