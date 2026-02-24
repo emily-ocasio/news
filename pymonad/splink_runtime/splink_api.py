@@ -5,6 +5,9 @@ from __future__ import annotations
 
 from typing import Any, Sequence
 
+from splink.internals.comparison import Comparison as SplinkComparison
+from splink.internals.comparison_creator import ComparisonCreator
+
 from ..array import Array
 from ..hashmap import HashMap
 from ..run import Run
@@ -42,6 +45,7 @@ def splink_dedupe_job(
     skip_u_estimation: bool = False,
     training_blocking_rules: StringBlockingRules | Sequence[StringBlockingRule] | Sequence[BlockingRuleCreator] | None = None,
     training_block_level_map: TrainingBlockToComparisonLevelMap = HashMap.empty(),
+    post_train_ratio_copy_comparisons: Sequence[ComparisonCreator | SplinkComparison] | None = None,
     deterministic_rules: StringBlockingRules | Sequence[StringBlockingRule] | None = None,
     deterministic_recall: float = 0.5,
     visualize: bool = False,
@@ -72,6 +76,7 @@ def splink_dedupe_job(
                 skip_u_estimation,
                 Array.make(tuple(training_blocking_rules or ())),
                 training_block_level_map,
+                Array.make(tuple(post_train_ratio_copy_comparisons or ())),
                 visualize,
                 unique_matching,
                 unique_pairs_table,

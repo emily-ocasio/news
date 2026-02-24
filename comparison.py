@@ -110,8 +110,10 @@ class ComparisonComp(StrEnum):
     EXACT_OFFENDER_ETHNICITY = _exact_comp_builder("offender_ethnicity")
     OFFENDER_ETHNICITY_NULL = _null_comp_builder("offender_ethnicity")
     EXACT_RELATIONSHIP = _exact_comp_builder("relationship")
-    RELATIONSHIP_NULL = _null_comp_builder("relationship") + ' OR ' + \
-            _null_comp_builder("relationship", "= 'other known to victim'")
+    RELATIONSHIP_NULL = _null_comp_builder("relationship")
+    RELATIONSHIP_OTHER_KNOWN_NULL = (
+        _null_comp_builder("relationship", "= 'other known to victim'")
+    )
     RELATIONSHIP_SAME_GROUP = (
         """
         CASE
@@ -312,36 +314,42 @@ DATE_COMP_SHR = cl.CustomComparison(
             "exact year and month",
             ComparisonComp.EXACT_YEAR_MONTH.value
         ).to_dict(),
-        ComparisonLevel(
-            "midpoint within 10 days",
-            _clause_from_comps(
-                ComparisonComp.MIDPOINT_EXISTS,
-                ComparisonComp.MIDPOINT_15DAYS_RIGHT,
-                ComparisonComp.MONTH_PRECISION
-            )
-        ).to_dict(),
+        cll.Or(
+            cll.And(
+                cll.LiteralMatchLevel("date_precision", "day", "string", "left"),
+                cll.AbsoluteDifferenceLevel("midpoint_day", 45),
+                cll.Or(
+                    cll.And(
+                        cll.ExactMatchLevel("year"),
+                        cl.CustomLevel("month_r > month_l")
+                    ),
+                    cll.And(
+                        cl.CustomLevel("year_r - year_l = 1"),
+                        cll.LiteralMatchLevel("month", "1", "int", "right"),
+                        cll.LiteralMatchLevel("month", "12", "int", "left"),
+                    )
+                )
+            ),
+            cll.And(
+                cll.LiteralMatchLevel("date_precision", "month", "string", "left"),
+                cl.CustomLevel("midpoint_day_r - midpoint_day_l <= 45"),
+                cl.CustomLevel("midpoint_day_r >= midpoint_day_l")
+            ),
+            cll.And(
+                cll.LiteralMatchLevel("date_precision", "year", "string", "left"),
+                cll.ExactMatchLevel("year")
+            ),
+        ).configure(label_for_charts="close dates based on precision"),
+        # cll.And(
+        #     cl.CustomLevel("midpoint_day_r - midpoint_day_l <= 90"),
+        #     cl.CustomLevel("midpoint_day_r >= midpoint_day_l")
+        # ).configure(label_for_charts="midpoint within 90 days"),
         # ComparisonLevel(
-        #     "midpoint within 30 days",
+        #     "midpoint within 90 days",
         #     _clause_from_comps(
         #         ComparisonComp.MIDPOINT_EXISTS,
-        #         ComparisonComp.MIDPOINT_30DAYS,
+        #         ComparisonComp.MIDPOINT_90DAYS,
         #         ComparisonComp.MONTH_PRECISION
-        #     )
-        # ).to_dict(),
-        ComparisonLevel(
-            "midpoint within 90 days",
-            _clause_from_comps(
-                ComparisonComp.MIDPOINT_EXISTS,
-                ComparisonComp.MIDPOINT_90DAYS,
-                ComparisonComp.MONTH_PRECISION
-            )
-        ).to_dict(),
-        # ComparisonLevel(
-        #     "midpoint within 7 months",
-        #     _clause_from_comps(
-        #         ComparisonComp.MIDPOINT_EXISTS,
-        #         ComparisonComp.MIDPOINT_7MONTH,
-        #         ComparisonComp.YEAR_PRECISION
         #     )
         # ).to_dict(),
         cll.ElseLevel()
@@ -477,11 +485,11 @@ AGE_COMP_SHR = cl.CustomComparison(
             ComparisonComp.EXACT_AGE.value,
             "victim_age"
         ).to_dict(),
-        TFComparisonLevel(
-            "victim ages within 1 year",
-            ComparisonComp.AGE_1YEAR.value,
-            "victim_age"
-        ).to_dict(),
+        # TFComparisonLevel(
+        #     "victim ages within 1 year",
+        #     ComparisonComp.AGE_1YEAR.value,
+        #     "victim_age"
+        # ).to_dict(),
         TFComparisonLevel(
             "victim ages within 2 years",
             ComparisonComp.AGE_2YEAR.value,
@@ -726,8 +734,8 @@ TF_WEAPON_COMP_SHR = cl.CustomComparison(
             ComparisonComp.WEAPON_NULL.value
         ).to_dict(),
         cll.ExactMatchLevel("weapon").configure(
-            tf_adjustment_column="weapon",
-            tf_minimum_u_value=0.001),
+            tf_adjustment_column="weapon"
+        ),
         cll.ElseLevel()
     ]
 )
@@ -758,6 +766,10 @@ RELATIONSHIP_COMP = cl.CustomComparison(
             "exact match relationship",
             ComparisonComp.EXACT_RELATIONSHIP.value,
             "relationship"
+        ).to_dict(),
+        NullComparisonLevel(
+            "relationship other known NULL",
+            ComparisonComp.RELATIONSHIP_OTHER_KNOWN_NULL.value
         ).to_dict(),
         ComparisonLevel(
             "same relationship family group",
@@ -913,11 +925,16 @@ SHR_COMPARISONS = [
     VICTIM_COUNT_COMP_SHR,
     OFFENDER_AGE_COMP,
     OFFENDER_SEX_COMP,
-    RELATIONSHIP_COMP_SHR,
+    RELATIONSHIP_COMP,
     # DIST_COMP,  # no location in SHR for DC
     TF_WEAPON_COMP_SHR,
     CIRC_COMP,
     cl.ExactMatch("victim_sex").configure(term_frequency_adjustments=True),
     cl.ExactMatch("victim_race"),
     # cl.ExactMatch("victim_ethnicity"),
+]
+
+SHR_POST_TRAIN_RATIO_COPY_COMPARISONS = [
+    DATE_COMP_SHR,
+    AGE_COMP_SHR,
 ]

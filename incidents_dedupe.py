@@ -770,9 +770,11 @@ def _export_final_clusters_excel() -> Run[Unit]:
                 )
             )
             >> (
-                lambda _: sql_export(
-                    SQL(
-                        """--sql
+                lambda _: sql_query(SQL("SELECT COUNT(*) AS n FROM cluster_diffs"))
+                >> (
+                    lambda rows: sql_export(
+                        SQL(
+                            """--sql
                     SELECT
                       source,
                       change,
@@ -819,14 +821,17 @@ def _export_final_clusters_excel() -> Run[Unit]:
                       victim_name_raw,
                       article_id
                     """
-                    ),
-                    "cluster_diffs.xlsx",
-                    "ClusterDiffs",
-                    band_by_group_col="__band_group",
-                    band_wrap=2,
+                        ),
+                        "cluster_diffs.xlsx",
+                        "ClusterDiffs",
+                        band_by_group_col="__band_group",
+                        band_wrap=2,
+                    )
+                    ^ put_line(
+                        f"[D] Wrote cluster_diffs.xlsx ({rows[0]['n']} rows)."
+                    )
                 )
             )
-            ^ put_line("[D] Wrote cluster_diffs.xlsx.")
             ^ pure(unit)
         )
 

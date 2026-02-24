@@ -77,6 +77,7 @@ def _init_splink_dedupe_context(job: SplinkDedupeJob) -> Run[Unit]:
             prediction_rules=prediction_rules,
             training_rules=training_rules,
             training_block_level_map=job.training_block_level_map,
+            post_train_ratio_copy_comparisons=job.post_train_ratio_copy_comparisons,
             settings=job.settings,
             predict_threshold=job.predict_threshold,
             cluster_threshold=job.cluster_threshold,

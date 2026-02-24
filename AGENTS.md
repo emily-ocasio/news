@@ -9,6 +9,13 @@
 - Runtime environment:
   - The application runs under the Conda environment `news`.
   - For Python compilation, type checking, and troubleshooting commands, prefer binaries from `/Users/wendell/miniforge3/envs/news/bin/` (or run after `conda activate news`).
+  - For any code changes, run mypy via `dmypy` using the extension-aligned invocation:
+    - `/Users/wendell/miniforge3/envs/news/bin/dmypy --status-file .dmypy.json run -- --python-executable /Users/wendell/miniforge3/envs/news/bin/python . --show-error-end --no-error-summary --no-pretty --no-color-output --config-file mypy.ini`
+  - Optionally check daemon status:
+    - `/Users/wendell/miniforge3/envs/news/bin/python -m mypy.dmypy --status-file .dmypy.json status`
+  - Run Pyright with the CLI-specific config:
+    - `/Users/wendell/miniforge3/envs/news/bin/pyright --project pyrightconfig.cli.json`
+  - Treat non-zero exits or reported type errors from either checker as failures before finalizing.
 - If DuckDB is locked or unavailable during orphan adjudication:
   - Identify likely lock owner process first.
   - If lock owner is a `python` process:

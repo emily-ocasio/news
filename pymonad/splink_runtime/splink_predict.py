@@ -34,7 +34,11 @@ from .splink_context import (
     with_splink_context,
 )
 from .splink_tables import input_table_value
-from .splink_training import print_prediction_counts, train_linker_for_prediction
+from .splink_training import (
+    apply_post_train_ratio_copy_for_prediction,
+    print_prediction_counts,
+    train_linker_for_prediction,
+)
 from .splink_types import (
     BlockedIdLeftColumnName,
     BlockedIdRightColumnName,
@@ -407,6 +411,7 @@ def splink_predict_pairs_from_ctx(_: SplinkContext):
                 ^ _with_splink_context_api_plan(_build_linker_from_ctx)
                 ^ with_splink_context(print_prediction_counts)
                 ^ train_linker_for_prediction()
+                ^ apply_post_train_ratio_copy_for_prediction()
                 ^ with_splink_context(_predict_pairs_step)
                 ^ _with_splink_context_linker_plan(predict_result_from_ctx)
             )
@@ -415,6 +420,7 @@ def splink_predict_pairs_from_ctx(_: SplinkContext):
             ^ _with_splink_context_api_plan(_build_linker_from_ctx)
             ^ with_splink_context(print_prediction_counts)
             ^ train_linker_for_prediction()
+            ^ apply_post_train_ratio_copy_for_prediction()
             ^ with_splink_context(_predict_pairs_step)
             ^ _with_splink_context_linker_plan(predict_result_from_ctx)
         )

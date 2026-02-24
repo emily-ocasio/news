@@ -116,7 +116,8 @@ from .runsplink import (
     UniquePairsTableName,
     BlockedPairsTableName,
     DoNotLinkTableName,
-    ComparisonLevelKey
+    ComparisonLevelKey,
+    PostTrainRatioCopyComparisons,
 )
 from .string import Char, String, from_char_array, from_string
 from .traverse import array_sequence, array_traverse

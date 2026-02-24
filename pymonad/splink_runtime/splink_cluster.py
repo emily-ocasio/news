@@ -424,21 +424,39 @@ def _run_unique_matching_from_ctx(ctx: SplinkContext) -> Run[Unit]:
 
     def _with_pairs(rows: Array) -> Run[Unit]:
         graph: nx.Graph = nx.Graph()
+        base_edges: list[tuple[str, str, float, float]] = []
         for row in rows:
+            raw_prob = float(row["match_probability"])
+            match_weight = row.get("match_weight")
+            edge_weight = (
+                float(match_weight)
+                if match_weight is not None
+                else raw_prob
+            )
+            base_edges.append(
+                (f"l_{row['unique_id_l']}", f"r_{row['unique_id_r']}", edge_weight, raw_prob)
+            )
+
+        min_base = min((edge[2] for edge in base_edges), default=0.0)
+        # Shift all candidate edges so each contributes positively to objective.
+        weight_shift = (-min_base + 1e-12) if min_base <= 0 else 0.0
+
+        for uid_l, uid_r, edge_weight, raw_prob in base_edges:
             graph.add_edge(
-                f"l_{row['unique_id_l']}",
-                f"r_{row['unique_id_r']}",
-                weight=row["match_probability"],
+                uid_l,
+                uid_r,
+                weight=edge_weight + weight_shift,
+                raw_prob=raw_prob,
             )
         matching = nx.max_weight_matching(graph)
         matched_pairs: list[tuple[str, str, float]] = []
         seen: set[str] = set()
         for u, v in matching:
             if u not in seen and v not in seen:
-                weight = graph[u][v]["weight"]
+                raw_prob = graph[u][v]["raw_prob"]
                 if u.startswith("r_"):
                     u, v = v, u
-                matched_pairs.append((u[2:], v[2:], weight))
+                matched_pairs.append((u[2:], v[2:], raw_prob))
                 seen.add(u)
                 seen.add(v)
 
@@ -459,7 +477,7 @@ def _run_unique_matching_from_ctx(ctx: SplinkContext) -> Run[Unit]:
         """))
 
     return sql_query(SQL(f"""
-        SELECT unique_id_l, unique_id_r, match_probability
+        SELECT unique_id_l, unique_id_r, match_probability, match_weight
         FROM {pairs_out} WHERE match_probability > 0
     """)) >> _with_pairs
 

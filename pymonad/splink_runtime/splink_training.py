@@ -10,6 +10,7 @@ from splink import DuckDBAPI, Linker, blocking_analysis
 from splink.internals.blocking_rule_creator import BlockingRuleCreator
 from splink.internals.blocking_rule_creator_utils import to_blocking_rule_creator
 from splink.internals.comparison import Comparison as SplinkComparison
+from splink.internals.comparison_creator import ComparisonCreator
 from splink.internals.misc import bayes_factor_to_prob, prob_to_bayes_factor
 from splink.internals.parse_sql import get_columns_used_from_sql
 
@@ -231,17 +232,33 @@ def _train_linker_em_runs(ctx: SplinkContext, linker: Linker, plan: PredictPlan)
 
     def _train_block(prev_block_params: EmParams, training_rule: BlockingRuleLike, run_idx: int) -> Run[EmParams]:
         def _run_em() -> Run[EmParams]:
-            linker.training.estimate_parameters_using_expectation_maximisation(
+            em_session = linker.training.estimate_parameters_using_expectation_maximisation(
                 blocking_rule=training_rule,
                 fix_probability_two_random_records_match=False,
             )
+            try:
+                lambda_history = em_session._lambda_history_records
+            except AttributeError:
+                lambda_history = []
+            block_lines: list[str] = []
+            if lambda_history:
+                block_lines.append(
+                    "EM lambda history (probability_two_random_records_match):"
+                )
+                for record in lambda_history:
+                    block_lines.append(
+                        f"  iter {record['iteration']}: "
+                        f"{record['probability_two_random_records_match']:.6f}"
+                    )
             current_settings = linker.misc.save_model_to_json(out_path=None)
             current_params = _extract_em_params(current_settings)
             if len(prev_block_params) != 0:
                 max_delta, _ = _max_delta_from_params(prev_block_params, current_params)
-                return _put_lines([
+                block_lines.append(
                     f"EM run {run_idx + 1}/{ctx.em_max_runs} block drift: max_delta={max_delta:.6f}"
-                ]) ^ pure(current_params)
+                )
+            if block_lines:
+                return _put_lines(block_lines) ^ pure(current_params)
             return pure(current_params)
 
         def _restore_lambda(original_lambda: float, params: EmParams) -> Run[EmParams]:
@@ -288,6 +305,148 @@ def train_linker_for_prediction() -> Run[Unit]:
         _with_splink_context_linker_plan(_train_linker_setup)
         ^ _with_splink_context_linker_plan(_train_linker_em_runs)
     )
+
+
+def _comparison_name_from_target(
+    comparison: ComparisonCreator | SplinkComparison,
+) -> str:
+    if isinstance(comparison, ComparisonCreator):
+        comparison = comparison.get_comparison("duckdb")
+    return f"{comparison.output_column_name}_{comparison.comparison_description}"
+
+
+def _find_runtime_comparison(
+    linker: Linker,
+    comparison_name: str,
+) -> SplinkComparison | None:
+    for comparison in linker._settings_obj.comparisons:
+        runtime_name = (
+            f"{comparison.output_column_name}_{comparison.comparison_description}"
+        )
+        if runtime_name == comparison_name:
+            return comparison
+    return None
+
+
+def _warn_skip(comparison_name: str, reason: str) -> str:
+    return (
+        "Post-training level ratio copy skipped: "
+        f"comparison={comparison_name}, reason={reason}"
+    )
+
+
+def _apply_post_train_ratio_copy(ctx: SplinkContext, linker: Linker) -> Run[Unit]:
+    requested = list(ctx.post_train_ratio_copy_comparisons)
+    if len(requested) == 0:
+        return _put_line_unit(
+            "Post-training level ratio copy: requested=0, applied=0, skipped=0"
+        )
+
+    lines: list[str] = [
+        f"Post-training level ratio copy start: requested={len(requested)}"
+    ]
+    applied = 0
+    skipped = 0
+    seen: set[str] = set()
+
+    for comparison in requested:
+        comparison_name = _comparison_name_from_target(comparison)
+        if comparison_name in seen:
+            skipped += 1
+            lines.append(_warn_skip(comparison_name, "duplicate_comparison"))
+            continue
+        seen.add(comparison_name)
+
+        runtime_comparison = _find_runtime_comparison(linker, comparison_name)
+        if runtime_comparison is None:
+            skipped += 1
+            lines.append(_warn_skip(comparison_name, "comparison_not_found"))
+            continue
+
+        non_null_levels = [
+            level for level in runtime_comparison.comparison_levels if not level.is_null_level
+        ]
+        if len(non_null_levels) < 2:
+            skipped += 1
+            lines.append(_warn_skip(comparison_name, "insufficient_non_null_levels"))
+            continue
+
+        level_1 = non_null_levels[0]
+        level_2 = non_null_levels[1]
+        m1 = level_1.m_probability
+        u1 = level_1.u_probability
+        m2 = level_2.m_probability
+        old_u2 = level_2.u_probability
+
+        probs = [m1, u1, m2]
+        if any(p is None for p in probs):
+            skipped += 1
+            lines.append(_warn_skip(comparison_name, "invalid_probability_values"))
+            continue
+
+        m1_f = cast(float, m1)
+        u1_f = cast(float, u1)
+        m2_f = cast(float, m2)
+
+        if not all(math.isfinite(p) for p in (m1_f, u1_f, m2_f)):
+            skipped += 1
+            lines.append(_warn_skip(comparison_name, "invalid_probability_values"))
+            continue
+
+        if m1_f <= 0.0 or u1_f <= 0.0:
+            skipped += 1
+            lines.append(_warn_skip(comparison_name, "non_positive_anchor_ratio_inputs"))
+            continue
+
+        if m2_f < 0.0:
+            skipped += 1
+            lines.append(_warn_skip(comparison_name, "invalid_probability_values"))
+            continue
+
+        u2_new = m2_f * (u1_f / m1_f)
+        if not math.isfinite(u2_new) or u2_new < 0.0:
+            skipped += 1
+            lines.append(_warn_skip(comparison_name, "non_finite_computed_u2"))
+            continue
+
+        old_ratio = (
+            m2_f / cast(float, old_u2)
+            if old_u2 is not None and math.isfinite(old_u2) and old_u2 > 0
+            else None
+        )
+        new_ratio = m2_f / u2_new if u2_new > 0 else None
+        level_2.u_probability = u2_new
+        applied += 1
+        lines.extend(
+            [
+                (
+                    "Post-training level ratio copy applied: "
+                    f"comparison={comparison_name}, level1={level_1.label_for_charts}, "
+                    f"level2={level_2.label_for_charts}"
+                ),
+                (
+                    "  values: "
+                    f"m1={m1_f:.12g}, u1={u1_f:.12g}, m2={m2_f:.12g}, "
+                    f"old_u2={old_u2}, new_u2={u2_new:.12g}"
+                ),
+                (
+                    "  ratios: "
+                    f"anchor_m1_over_u1={m1_f / u1_f:.12g}, "
+                    f"old_m2_over_u2={old_ratio}, new_m2_over_u2={new_ratio}"
+                ),
+            ]
+        )
+
+    lines.append(
+        "Post-training level ratio copy complete: "
+        f"requested={len(requested)}, applied={applied}, skipped={skipped}"
+    )
+    return _put_lines(lines)
+
+
+def apply_post_train_ratio_copy_for_prediction() -> Run[Unit]:
+    """Apply post-training level-2 ratio copy policy before final prediction."""
+    return with_splink_context_linker(_apply_post_train_ratio_copy)
 
 
 def _extract_em_params(settings_dict: dict[str, Any]) -> EmParams:

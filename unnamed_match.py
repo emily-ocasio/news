@@ -499,12 +499,18 @@ def _integrate_orphan_matches() -> Run[Unit]:
     Integrate the final orphan matches into victim_entity_reps_new.
     Creates victim_entity_reps_new (augmented from victim_entity_reps) based on the entity-orphan matching results.
     """
-    def _stable_edge_weight(match_probability, entity_uid, orphan_uid) -> float:
-        base = 0.0 if match_probability is None else float(match_probability)
+    def _base_edge_weight(match_weight, match_probability) -> float:
+        return (
+            float(match_weight)
+            if match_weight is not None
+            else (0.0 if match_probability is None else float(match_probability))
+        )
+
+    def _stable_edge_weight(base_weight, entity_uid, orphan_uid) -> float:
         seed = f"{entity_uid}|{orphan_uid}".encode("utf-8")
         digest = hashlib.md5(seed).hexdigest()
         jitter = (int(digest[:8], 16) % 1000000) / 1e15
-        return base + jitter
+        return base_weight + jitter
 
     def _max_weight_pairs_by_article(rows) -> list[tuple[str, str, int | None, float | None]]:
         by_article: dict[int | None, list[dict]] = {}
@@ -514,19 +520,27 @@ def _integrate_orphan_matches() -> Run[Unit]:
         matched: list[tuple[str, str, int | None, float | None]] = []
         for article_id, group in by_article.items():
             G: nx.Graph = nx.Graph()  # pylint: disable=C0103
+            base_weights = [
+                _base_edge_weight(row.get("match_weight"), row.get("match_probability"))
+                for row in group
+            ]
+            min_base = min(base_weights) if base_weights else 0.0
+            # Shift all candidate edges so each contributes positively to objective.
+            weight_shift = (-min_base + 1e-12) if min_base <= 0 else 0.0
             for row in group:
                 entity_uid = str(row["entity_uid"])
                 orphan_uid = str(row["orphan_uid"])
                 prob = row["match_probability"]
+                base_weight = _base_edge_weight(row.get("match_weight"), prob)
                 G.add_edge(
                     f"e:{entity_uid}",
                     f"o:{orphan_uid}",
-                    weight=_stable_edge_weight(prob, entity_uid, orphan_uid),
+                    weight=_stable_edge_weight(base_weight + weight_shift, entity_uid, orphan_uid),
                     raw_prob=prob,
                 )
             if not G.edges:
                 continue
-            matching = nx.max_weight_matching(G, maxcardinality=True, weight="weight")
+            matching = nx.max_weight_matching(G, weight="weight")
             for u, v in matching:
                 if u.startswith("o:"):
                     u, v = v, u
@@ -578,7 +592,8 @@ def _integrate_orphan_matches() -> Run[Unit]:
                   bp.unique_id_l AS entity_uid,
                   bp.unique_id_r AS orphan_uid,
                   oi.article_id,
-                  bp.match_probability
+                  bp.match_probability,
+                  bp.match_weight
                 FROM orphan_entity_pairs bp
                 JOIN orphan_link_input oi
                   ON oi.unique_id = bp.unique_id_r;
@@ -1022,6 +1037,7 @@ def _export_orphan_matches_debug_excel() -> Run[Unit]:
         e.victim_fullname_norm,  -- Added
         e.weapon, e.circumstance,
         e.offender_forename_norm, e.offender_surname_norm,
+        e.offender_sex,
         e.victim_count,
         e.offender_count,
         CAST(NULL AS DOUBLE) AS match_probability
@@ -1056,6 +1072,7 @@ def _export_orphan_matches_debug_excel() -> Run[Unit]:
         o.victim_fullname_norm,  -- Added
         o.weapon, o.circumstance,
         o.offender_forename_norm, o.offender_surname_norm,
+        o.offender_sex,
         o.victim_count,
         o.offender_count,
         o.match_probability
@@ -1083,6 +1100,7 @@ def _export_orphan_matches_debug_excel() -> Run[Unit]:
       victim_fullname_norm,  -- Added
       weapon, circumstance,
       offender_forename_norm, offender_surname_norm,
+      offender_sex,
       victim_count,
       offender_count,
       match_probability,
@@ -1146,9 +1164,13 @@ def _export_orphan_matches_debug_excel() -> Run[Unit]:
                 )
             )
             >> (
-                lambda _: sql_export(
-                    SQL(
-                        """--sql
+                lambda _: sql_query(
+                    SQL("SELECT COUNT(*) AS n FROM orphan_matches_final_diffs")
+                )
+                >> (
+                    lambda rows: sql_export(
+                        SQL(
+                            """--sql
                     SELECT
                       *,
                       concat(cast(source AS varchar), '::', cast(match_id AS varchar)) AS __band_group
@@ -1163,14 +1185,18 @@ def _export_orphan_matches_debug_excel() -> Run[Unit]:
                       CASE rec_type WHEN 'entity' THEN 0 ELSE 1 END,
                       uid
                     """
-                    ),
-                    "orphan_matches_final_diffs.xlsx",
-                    "MatchesDiffs",
-                    band_by_group_col="__band_group",
-                    band_wrap=2,
+                        ),
+                        "orphan_matches_final_diffs.xlsx",
+                        "MatchesDiffs",
+                        band_by_group_col="__band_group",
+                        band_wrap=2,
+                    )
+                    ^ put_line(
+                        "[U] Wrote orphan_matches_final_diffs.xlsx "
+                        f"(diffs by match_id, {rows[0]['n']} rows)."
+                    )
                 )
             )
-            ^ put_line("[U] Wrote orphan_matches_final_diffs.xlsx (diffs by match_id).")
             ^ pure(unit)
         )
 
@@ -1212,23 +1238,45 @@ def export_final_victim_entities_excel() -> Run[Unit]:
     """
     final_victim_entities_select = SQL(
         """--sql
+        WITH export_base AS (
+          SELECT
+            vern.* EXCLUDE (summary_vec, avg_age, min_age, max_age)
+          FROM victim_entity_reps_new vern
+        )
         SELECT
-          vern.*,
+          b.* EXCLUDE (
+            offender_fullname,
+            offender_forename,
+            offender_surname,
+            canonical_offender_age,
+            canonical_offender_sex,
+            canonical_offender_race,
+            canonical_offender_ethnicity,
+            canonical_offender_count
+          ),
+          b.offender_fullname,
+          b.offender_forename,
+          b.offender_surname,
+          b.canonical_offender_age,
+          b.canonical_offender_sex,
+          b.canonical_offender_race,
+          b.canonical_offender_ethnicity,
+          b.canonical_offender_count,
           CASE
-            WHEN vern.victim_entity_id IN (SELECT victim_entity_id FROM victim_entity_reps) THEN
-              CASE WHEN vern.victim_entity_id IN (SELECT DISTINCT entity_uid FROM final_orphan_matches) THEN 'newly_matched'
+            WHEN b.victim_entity_id IN (SELECT victim_entity_id FROM victim_entity_reps) THEN
+              CASE WHEN b.victim_entity_id IN (SELECT DISTINCT entity_uid FROM final_orphan_matches) THEN 'newly_matched'
                    ELSE 'unmatched_entity'
               END
             ELSE 'singleton_orphan'
           END AS category,
           CASE
-            WHEN vern.victim_entity_id IN (SELECT victim_entity_id FROM victim_entity_reps) THEN
-              CASE WHEN vern.victim_entity_id IN (SELECT DISTINCT entity_uid FROM final_orphan_matches) THEN 1
+            WHEN b.victim_entity_id IN (SELECT victim_entity_id FROM victim_entity_reps) THEN
+              CASE WHEN b.victim_entity_id IN (SELECT DISTINCT entity_uid FROM final_orphan_matches) THEN 1
                    ELSE 0
               END
             ELSE 2
           END AS band_key
-        FROM victim_entity_reps_new vern
+        FROM export_base b
         ORDER BY entity_midpoint_day
         """
     )

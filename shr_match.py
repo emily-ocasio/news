@@ -21,6 +21,7 @@ from pymonad import (
 )
 from menuprompts import NextStep
 from comparison import (
+    SHR_POST_TRAIN_RATIO_COPY_COMPARISONS,
     SHR_COMPARISONS,
 )
 from blocking import (
@@ -103,6 +104,8 @@ def _export_shr_final_matches_excel() -> Run[Unit]:
                 av.weapon, av.circumstance,
                 av.offender_age, av.offender_sex, av.offender_race, av.offender_ethnicity,
                 ver.article_ids_csv,
+                ver.canonical_fullname AS canonical_victim_name,
+                ver.offender_fullname AS canonical_offender_name,
                 pr.match_probability,
                 pr.entity_uid,
                 pr.shr_uid,
@@ -153,6 +156,8 @@ def _export_shr_final_matches_excel() -> Run[Unit]:
                 av.weapon, av.circumstance,
                 av.offender_age, av.offender_sex, av.offender_race, av.offender_ethnicity,
                 ver.article_ids_csv,
+                ver.canonical_fullname AS canonical_victim_name,
+                ver.offender_fullname AS canonical_offender_name,
                 CAST(NULL AS DOUBLE) AS match_probability,
                 av.unique_id AS entity_uid,
                 CAST(NULL AS VARCHAR) AS shr_uid,
@@ -201,6 +206,8 @@ def _export_shr_final_matches_excel() -> Run[Unit]:
                 sc.weapon, sc.circumstance,
                 sc.offender_age, sc.offender_sex, sc.offender_race, sc.offender_ethnicity,
                 CAST(NULL AS VARCHAR) AS article_ids_csv,
+                CAST(NULL AS VARCHAR) AS canonical_victim_name,
+                CAST(NULL AS VARCHAR) AS canonical_offender_name,
                 CAST(NULL AS DOUBLE) AS match_probability,
                 CAST(NULL AS VARCHAR) AS entity_uid,
                 sc.unique_id AS shr_uid,
@@ -238,6 +245,8 @@ def _export_shr_final_matches_excel() -> Run[Unit]:
               rec_type,
               entity_uid AS e_uid,
               shr_uid AS s_uid,
+              canonical_victim_name,
+              canonical_offender_name,
               match_probability AS prob,
               entity_year AS e_year,
               shr_year AS s_year,
@@ -332,6 +341,8 @@ def _export_shr_debug_matches_excel() -> Run[Unit]:
                 av.weapon, av.circumstance,
                 av.offender_age, av.offender_sex, av.offender_race, av.offender_ethnicity,
                 ver.article_ids_csv,
+                ver.canonical_fullname AS canonical_victim_name,
+                ver.offender_fullname AS canonical_offender_name,
                 pr.match_probability,
                 pr.entity_uid,
                 pr.shr_uid,
@@ -381,6 +392,8 @@ def _export_shr_debug_matches_excel() -> Run[Unit]:
                 av.weapon, av.circumstance,
                 av.offender_age, av.offender_sex, av.offender_race, av.offender_ethnicity,
                 ver.article_ids_csv,
+                ver.canonical_fullname AS canonical_victim_name,
+                ver.offender_fullname AS canonical_offender_name,
                 CAST(NULL AS DOUBLE) AS match_probability,
                 av.unique_id AS entity_uid,
                 CAST(NULL AS VARCHAR) AS shr_uid,
@@ -429,6 +442,8 @@ def _export_shr_debug_matches_excel() -> Run[Unit]:
                 sc.weapon, sc.circumstance,
                 sc.offender_age, sc.offender_sex, sc.offender_race, sc.offender_ethnicity,
                 CAST(NULL AS VARCHAR) AS article_ids_csv,
+                CAST(NULL AS VARCHAR) AS canonical_victim_name,
+                CAST(NULL AS VARCHAR) AS canonical_offender_name,
                 CAST(NULL AS DOUBLE) AS match_probability,
                 CAST(NULL AS VARCHAR) AS entity_uid,
                 sc.unique_id AS shr_uid,
@@ -466,6 +481,8 @@ def _export_shr_debug_matches_excel() -> Run[Unit]:
               rec_type,
               entity_uid AS e_uid,
               shr_uid AS s_uid,
+              canonical_victim_name,
+              canonical_offender_name,
               match_probability AS prob,
               entity_year AS e_year,
               shr_year AS s_year,
@@ -572,7 +589,7 @@ def match_article_to_shr_victims() -> Run[NextStep]:
                             WHEN LOWER(TRIM(Weapon)) LIKE '%knife%' THEN 'knife'
                             WHEN LOWER(TRIM(Weapon)) LIKE '%shotgun%' THEN 'shotgun'
                             WHEN LOWER(TRIM(Weapon)) LIKE '%rifle%' THEN 'rifle'
-                            WHEN LOWER(TRIM(Weapon)) LIKE '%handgun%' THEN 'handgun'
+                            WHEN LOWER(TRIM(Weapon)) LIKE '%handgun%' THEN 'firearm'
                             WHEN LOWER(TRIM(Weapon)) LIKE '%firearm%' THEN 'firearm'
                             WHEN LOWER(TRIM(Weapon)) LIKE '%gun%' THEN 'firearm'
                             WHEN LOWER(TRIM(Weapon)) LIKE '%blunt%' THEN 'blunt object'
@@ -670,7 +687,7 @@ def match_article_to_shr_victims() -> Run[NextStep]:
                         canonical_offender_ethnicity AS offender_ethnicity,
                         canonical_offender_count AS offender_count,
                         CASE
-                            WHEN LOWER(TRIM(mode_weapon)) = 'firearm' THEN 'handgun'
+                            WHEN LOWER(TRIM(mode_weapon)) = 'handgun' THEN 'firearm'
                             ELSE mode_weapon
                         END AS weapon,
                         mode_circumstance AS circumstance
@@ -683,7 +700,7 @@ def match_article_to_shr_victims() -> Run[NextStep]:
         splink_dedupe_job(
             input_table=PredictionInputTableNames(("article_victims", "shr_cached")),
             settings=shr_linkage_settings,
-            predict_threshold=0.01,
+            predict_threshold=0.1,
             deterministic_rules=SHR_DETERMINISTIC_BLOCKS,
             deterministic_recall=0.8,
             pairs_out=PairsTableName("shr_link_pairs"),
@@ -691,6 +708,7 @@ def match_article_to_shr_victims() -> Run[NextStep]:
             training_blocking_rules=SHR_TRAINING_BLOCKS,
             unique_matching=True,
             unique_pairs_table=UniquePairsTableName("shr_max_weight_matches"),
+            post_train_ratio_copy_comparisons=SHR_POST_TRAIN_RATIO_COPY_COMPARISONS,
             em_max_runs=1,
             visualize=False,
             splink_key=SplinkType.SHR,

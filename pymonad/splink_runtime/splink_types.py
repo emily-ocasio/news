@@ -135,6 +135,7 @@ BlockingRuleLikes = (
 )
 
 type TrainingBlockToComparisonLevelMap = HashMap[BlockingRuleLike, Array[ComparisonLevelKey]]
+type PostTrainRatioCopyComparisons = Array[ComparisonCreator | SplinkComparison]
 
 
 def _concat_blocking_rule_likes(
@@ -464,6 +465,9 @@ class SplinkContext:
     training_block_level_map: TrainingBlockToComparisonLevelMap = field(
         default_factory=HashMap.empty
     )
+    post_train_ratio_copy_comparisons: PostTrainRatioCopyComparisons = field(
+        default_factory=Array.empty
+    )
     linker: Maybe[Linker] = field(default_factory=nothing)
     db_api: Maybe[DuckDBAPI] = field(default_factory=nothing)
     predict_plan: Maybe[PredictPlan] = field(default_factory=nothing)
@@ -560,6 +564,9 @@ class SplinkDedupeJob:
     training_blocking_rules: StringBlockingRules | BlockingRuleCreators | None = None
     training_block_level_map: TrainingBlockToComparisonLevelMap = field(
         default_factory=HashMap.empty
+    )
+    post_train_ratio_copy_comparisons: PostTrainRatioCopyComparisons = field(
+        default_factory=Array.empty
     )
     visualize: bool = False
     unique_matching: bool = False

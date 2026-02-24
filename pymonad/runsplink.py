@@ -17,6 +17,7 @@ from .splink_runtime import (
     BlockedPairsTableName,
     DoNotLinkTableName,
     ComparisonLevelKey,
+    PostTrainRatioCopyComparisons,
 )
 
 __all__ = [
@@ -36,4 +37,5 @@ __all__ = [
     "BlockedPairsTableName",
     "DoNotLinkTableName",
     "ComparisonLevelKey",
+    "PostTrainRatioCopyComparisons",
 ]
