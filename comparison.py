@@ -631,8 +631,8 @@ DIST_COMP_NEW = cl.CustomComparison(
             cll.DistanceInKMLevel("lat", "lon", 0.3),
             cllc.And(
                 DIST_STREET_TYPE,
-                cll.JaroWinklerLevel(
-                    "geo_address_short", 0.90)
+                cll.JaroWinklerLevel( "geo_address_short", 0.90),
+                cll.DistanceInKMLevel("lat", "lon", 0.5)
             ),
             cllc.And(
                 cllc.Or(
@@ -834,9 +834,10 @@ OFFENDER_SEX_COMP = cl.CustomComparison(
             "offender sex NULL",
             ComparisonComp.OFFENDER_SEX_NULL.value
         ).to_dict(),
-        ComparisonLevel(
+        TFComparisonLevel(
             "exact match offender sex",
-            ComparisonComp.EXACT_OFFENDER_SEX.value
+            ComparisonComp.EXACT_OFFENDER_SEX.value,
+            "offender_sex"
         ).to_dict(),
         cll.ElseLevel()
     ]

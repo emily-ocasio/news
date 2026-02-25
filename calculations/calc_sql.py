@@ -678,6 +678,27 @@ def articles_ready_for_filter_counts_sql() -> str:
         ORDER BY PubYear
     """
 
+def dates_ready_for_autoclassify_counts_sql() -> str:
+    """
+    SQL statement to return counts of distinct publication dates ready for
+    auto-classification, grouped by publication year.
+    """
+    return """
+        SELECT
+            SUBSTR(CAST(d.PubDate AS TEXT), 1, 4) AS PubYear,
+            COUNT(DISTINCT d.PubDate) AS ReadyCount
+        FROM dates d
+        WHERE d.Complete = 0
+        AND EXISTS (
+            SELECT 1
+            FROM articles a
+            WHERE a.Dataset = 'NOCLASS_WP'
+            AND a.PubDate = d.PubDate
+        )
+        GROUP BY PubYear
+        ORDER BY PubYear
+    """
+
 def articles_to_extract_sql() -> str:
     """
     SQL statement to return articles to extract based on a limit

@@ -461,7 +461,7 @@ def _link_orphans_to_entities(
                 ("entity_link_input", "orphan_link_input")
             ),
             settings=settings,
-            predict_threshold=0.3,
+            predict_threshold=0.45,
             cluster_threshold=0.0,
             pairs_out=PairsTableName("orphan_entity_pairs"),
             deterministic_rules=ORPHAN_DETERMINISTIC_BLOCKS,
@@ -1172,7 +1172,11 @@ def _export_orphan_matches_debug_excel() -> Run[Unit]:
                         SQL(
                             """--sql
                     SELECT
-                      *,
+                      * EXCLUDE (
+                        family_canonical_surname,
+                        family_victim_surname_norm,
+                        family_victim_forename_norm
+                      ),
                       concat(cast(source AS varchar), '::', cast(match_id AS varchar)) AS __band_group
                     FROM orphan_matches_final_diffs
                     ORDER BY

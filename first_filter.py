@@ -5,10 +5,11 @@ from pymonad import Run, with_namespace, to_prompts, Namespace, PromptKey, \
     pure, put_line, sql_query, SQL, SQLParams, sql_exec, input_number, throw, \
     ErrorPayload, process_items, ProcessAcc, Array, \
     String, FailureDetail, Left, Right, Either, StopRun, Tuple, \
-    HashMap
+    HashMap, Unit, unit
 from menuprompts import NextStep
 from article import Article, Articles, ArticleAppError, from_rows
-from calculations import articles_to_classify_sql, classify_sql, cleanup_sql
+from calculations import articles_to_classify_sql, classify_sql, cleanup_sql, \
+    dates_ready_for_autoclassify_counts_sql
 from calculations.calc_core import classify
 from validate import ArticleFailureType
 
@@ -21,6 +22,35 @@ CLASS_CODE_O = String("O")
 CLASS_CODE_UNKNOWN = String("UNKNOWN")
 CLASS_CODES = Array((CLASS_CODE_M, CLASS_CODE_N, CLASS_CODE_O, CLASS_CODE_UNKNOWN))
 type AutoClassResult = Tuple[int, String]
+
+
+def retrieve_autoclassify_date_counts() -> Run[Array]:
+    """
+    Retrieve counts of distinct dates ready for auto-classification by year.
+    """
+    return sql_query(SQL(dates_ready_for_autoclassify_counts_sql()))
+
+
+def display_autoclassify_date_counts(rows: Array) -> Run[Unit]:
+    """
+    Display grouped date counts before asking how many days to process.
+    """
+    if len(rows) == 0:
+        return put_line(
+            "No dates ready for auto-classification "
+            "(Dataset = NOCLASS_WP, Complete = 0).\n"
+        ) ^ pure(unit)
+    lines = "\n".join(
+        f"{row['PubYear']}: {row['ReadyCount']} distinct date(s)"
+        for row in rows
+    )
+    total_days = sum(int(row["ReadyCount"]) for row in rows)
+    return put_line(
+        "Auto-classify date availability by year "
+        "(Dataset = NOCLASS_WP, Complete = 0):\n"
+        f"{lines}\n"
+        f"Total days: {total_days}\n"
+    ) ^ pure(unit)
 
 def increment_count(counts: HashMap[String, int], code: String) -> HashMap[String, int]:
     """
@@ -207,7 +237,9 @@ def first_filter() -> Run[NextStep]:
 
     def _first_filter() -> Run[NextStep]:
         return (
-            input_number_of_days_to_classify()
+            retrieve_autoclassify_date_counts()
+            >> display_autoclassify_date_counts
+            >> (lambda _: input_number_of_days_to_classify())
             >> retrieve_articles
             >> _count_articles
             >> process_all_articles
