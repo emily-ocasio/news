@@ -251,12 +251,18 @@ SELECT
   CASE
     WHEN victim_forename_norm IS NOT NULL AND victim_surname_norm IS NOT NULL
       THEN victim_forename_norm || ' ' || victim_surname_norm
+    WHEN victim_forename_norm IS NOT NULL
+      THEN victim_forename_norm
+    WHEN victim_surname_norm IS NOT NULL
+      THEN victim_surname_norm
   END AS victim_fullname_concat,
   CASE
     WHEN offender_forename_norm IS NOT NULL AND offender_surname_norm IS NOT NULL
       THEN offender_forename_norm || ' ' || offender_surname_norm
     WHEN offender_forename_norm IS NOT NULL
       THEN offender_forename_norm
+    WHEN offender_surname_norm IS NOT NULL
+      THEN offender_surname_norm
   END AS offender_fullname_concat,
 
   -- Individual-part Soundex (from splink_udfs)

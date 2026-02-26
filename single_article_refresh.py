@@ -48,6 +48,26 @@ from pymonad import (
 from pymonad.traverse import array_traverse_run
 
 
+def _looks_like_missing_base_table_error(err: object) -> bool:
+    msg = str(err).lower()
+    missing_markers = (
+        "does not exist",
+        "table with name",
+        "catalog error",
+        "no such table",
+    )
+    base_table_markers = (
+        "incidents_cached",
+        "victims_cached",
+        "victims_cached_enh",
+        "orphan_adjudication_overrides",
+        "sqldb.articles_wp_subset",
+    )
+    return any(m in msg for m in missing_markers) and any(
+        t in msg for t in base_table_markers
+    )
+
+
 def _refresh_sqlite_subset_row(record_id: int) -> Run[Unit]:
     def _run_core() -> Run[Unit]:
         return (
@@ -131,6 +151,17 @@ def _refresh_duckdb_incidents_for_article(env: Environment, record_id: int) -> R
                 """
                 ALTER TABLE incidents_cached
                 ADD COLUMN IF NOT EXISTS summary_vec DOUBLE[384];
+                """
+            )
+        )
+        ^ put_line(f"[F] incidents refresh step: ensure sbert_cache ({record_id})")
+        ^ sql_exec(
+            SQL(
+                """
+                CREATE TABLE IF NOT EXISTS sbert_cache (
+                    input_text VARCHAR,
+                    vec DOUBLE[384]
+                );
                 """
             )
         )
@@ -305,14 +336,24 @@ def _refresh_duckdb_incidents_for_article(env: Environment, record_id: int) -> R
             SQLParams((record_id,)),
         )
         >> (
-            lambda rows: put_line(
-                f"[F] incidents_cached rows refreshed for {record_id}: {len(rows)}"
+            lambda rows: (
+                put_line(
+                    f"[F] incidents_cached rows refreshed for {record_id}: {len(rows)}"
+                )
+                ^ (
+                    array_traverse_run(
+                        Array.make(tuple(rows)),
+                        lambda r: _row_update_run(env, r),
+                    )
+                    if len(rows) > 0
+                    else put_line(
+                        "[F] No in-scope incidents (year >= 1977) "
+                        f"for {record_id}; skipping summary vectorization."
+                    )
+                    ^ pure(Array.mempty())
+                )
+                ^ put_line(f"[F] Updated summary_vec for article {record_id}.")
             )
-            ^ array_traverse_run(
-                Array.make(tuple(rows)),
-                lambda r: _row_update_run(env, r),
-            )
-            ^ put_line(f"[F] Updated summary_vec for article {record_id}.")
         )
         ^ pure(unit)
     )
@@ -468,9 +509,17 @@ def _refresh_duckdb_geocode_for_article(env: Environment, record_id: int) -> Run
                 SQLParams((record_id,)),
             )
             >> (
-                lambda rows: array_traverse_run(
-                    Array.make(tuple(rows)),
-                    lambda r: _upsert_geocode_cache_for_addr(env, str(r["addr_raw"])),
+                lambda rows: (
+                    array_traverse_run(
+                        Array.make(tuple(rows)),
+                        lambda r: _upsert_geocode_cache_for_addr(env, str(r["addr_raw"])),
+                    )
+                    if len(rows) > 0
+                    else put_line(
+                        "[F] No incident locations to geocode "
+                        f"for {record_id}; skipping geocode cache upsert."
+                    )
+                    ^ pure(Array.mempty())
                 )
             )
             ^ sql_exec(CREATE_GEOCODED_VIEW_SQL)
@@ -779,6 +828,8 @@ def _refresh_duckdb_for_article(env: Environment, record_id: int, run_id: str) -
             lambda res: (
                 (
                     put_line("[F] Skipped DuckDB refresh: required base tables are missing.")
+                    if isinstance(res, Left) and _looks_like_missing_base_table_error(res.l)
+                    else put_line(f"[F] DuckDB refresh failed for {record_id}: {res.l}")
                     if isinstance(res, Left)
                     else pure(None)
                 )

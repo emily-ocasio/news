@@ -108,14 +108,22 @@ class Article:
         -> String | None:
         """
         Returns the extracted GPT classification for the article.
+        Extraction is only in-scope for incidents from 1977 onward.
         """
         gpt_class: str | None = None
         _extraction = cast(WashingtonPostArticleIncidentExtraction, \
                                extraction)
         if len(_extraction.incidents) == 0:
             gpt_class = "N_NOINC"
-        else:
+            return String(gpt_class)
+
+        has_in_scope_incident = any(
+            incident.year >= 1977 for incident in _extraction.incidents
+        )
+        if has_in_scope_incident:
             gpt_class = "M"
+        else:
+            gpt_class = "E"
         return String(gpt_class)
 
 def from_row(row: Mapping, current: int = 0, total: int = 0) -> Article:

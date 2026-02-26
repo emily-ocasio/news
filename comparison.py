@@ -768,10 +768,10 @@ TF_WEAPON_COMP_SHR = cl.CustomComparison(
         cll.ExactMatchLevel("weapon").configure(
             tf_adjustment_column="weapon"
         ),
-        cll.And(
-            cll.LiteralMatchLevel("weapon", "firearm", "string", "left"),
-            cll.LiteralMatchLevel("weapon", "shotgun", "string", "right")
-        ),
+        _comparison_level_within_group(
+            "weapon",
+            Array(("firearm","shotgun"))
+        ).configure(label_for_charts="firearm/shotgun group match"),
         cll.ElseLevel()
     ]
 )
@@ -975,12 +975,10 @@ SHR_COMPARISONS = [
     OFFENDER_AGE_COMP,
     OFFENDER_SEX_COMP,
     RELATIONSHIP_COMP_SHR,
-    # DIST_COMP,  # no location in SHR for DC
     TF_WEAPON_COMP_SHR,
     CIRC_COMP,
-    cl.ExactMatch("victim_sex").configure(term_frequency_adjustments=True),
+    VICTIM_SEX_COMP,
     cl.ExactMatch("victim_race"),
-    # cl.ExactMatch("victim_ethnicity"),
 ]
 
 SHR_POST_TRAIN_RATIO_COPY_COMPARISONS = [

@@ -556,7 +556,7 @@ def match_article_to_shr_victims() -> Run[NextStep]:
                     SELECT
                         "index" as unique_id,
                         CASE VicSex WHEN 'Unknown' THEN NULL ELSE lower(VicSex) END as victim_sex,
-                        VicAge as victim_age,
+                        CASE VicAge WHEN 999 THEN NULL ELSE VicAge END as victim_age,
                         CASE VicRace WHEN 'Unknown' THEN NULL ELSE VicRace END as victim_race,
                         CASE VicEthnic WHEN 'Unknown' THEN NULL ELSE VicEthnic END as victim_ethnicity,
                         VicCount+1 as victim_count,
