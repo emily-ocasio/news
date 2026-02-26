@@ -10,6 +10,8 @@ import splink.internals.comparison_level_library as cll
 from splink import ColumnExpression
 import splink.internals.comparison_level_composition as cllc
 
+from pymonad import Array
+
 def _clause_from_comps(*components: StrEnum) -> str:
     return " AND ".join([component.value for component in components])
 
@@ -28,6 +30,21 @@ def _distance_comp_builder(field: str, distance: int) -> str:
 def _jw_similarity_comp_builder(field1: str, field2: str, threshold: float) -> str:
     return f'(jaro_winkler_similarity("{field1}_l", "{field1}_r") >= {threshold}) ' \
            f'AND (jaro_winkler_similarity("{field2}_l", "{field2}_r") >= {threshold})'
+
+def _comparison_level_within_group(
+        field: str, group: Array[str]
+    ) -> cll.And:
+    left_condition = cll.Or(
+        *[cll.LiteralMatchLevel(field, value, "string", "left") for value in group.a]
+    )
+    right_condition = cll.Or(
+        *[cll.LiteralMatchLevel(field, value, "string", "right") for value in group.a]
+    )
+    return cll.And(
+        left_condition,
+        right_condition
+    )
+
 
 class ComparisonComp(StrEnum):
     """
@@ -195,13 +212,19 @@ NAME_COMP = cl.CustomComparison(
                 ComparisonComp.VICTIM_FORENAME_ONLY.value,
             ))
         ).to_dict(),
-        ComparisonLevel(
-            "Forename or surname exact match",
-            ' OR '.join((
-                ComparisonComp.EXACT_VICTIM_FORENAME.value,
-                ComparisonComp.EXACT_VICTIM_SURNAME.value,
-            ))
-        ).to_dict(),
+        cll.Or(
+            cll.JaroWinklerLevel("victim_forename_norm", 0.95),
+            cll.JaroWinklerLevel("victim_surname_norm", 0.95)
+        ).configure(
+            label_for_charts="JW >= 0.95 for forename or surname"
+        ),
+        # ComparisonLevel(
+        #     "Forename or surname exact match",
+        #     ' OR '.join((
+        #         ComparisonComp.EXACT_VICTIM_FORENAME.value,
+        #         ComparisonComp.EXACT_VICTIM_SURNAME.value,
+        #     ))
+        # ).to_dict(),
         ComparisonLevel(
             "All other comparisons",
             "ELSE"
@@ -745,6 +768,10 @@ TF_WEAPON_COMP_SHR = cl.CustomComparison(
         cll.ExactMatchLevel("weapon").configure(
             tf_adjustment_column="weapon"
         ),
+        cll.And(
+            cll.LiteralMatchLevel("weapon", "firearm", "string", "left"),
+            cll.LiteralMatchLevel("weapon", "shotgun", "string", "right")
+        ),
         cll.ElseLevel()
     ]
 )
@@ -800,10 +827,22 @@ RELATIONSHIP_COMP_SHR = cl.CustomComparison(
             ComparisonComp.EXACT_RELATIONSHIP.value,
             "relationship"
         ).to_dict(),
-        ComparisonLevel(
-            "same relationship family group",
-            ComparisonComp.RELATIONSHIP_SAME_GROUP.value
-        ).to_dict(),
+        _comparison_level_within_group(
+            "relationship",
+            Array((
+                "other known to victim",
+                "friend",
+                "acquaintance",
+                "neighbor",
+                "homosexual relationship",
+                "employee",
+                "employer",
+            ))
+        ).configure(label_for_charts="friend/aquaintance group match"),
+        # ComparisonLevel(
+        #     "same relationship family group",
+        #     ComparisonComp.RELATIONSHIP_SAME_GROUP.value
+        # ).to_dict(),
         cll.ElseLevel()
     ]
 )
@@ -935,7 +974,7 @@ SHR_COMPARISONS = [
     VICTIM_COUNT_COMP_SHR,
     OFFENDER_AGE_COMP,
     OFFENDER_SEX_COMP,
-    RELATIONSHIP_COMP,
+    RELATIONSHIP_COMP_SHR,
     # DIST_COMP,  # no location in SHR for DC
     TF_WEAPON_COMP_SHR,
     CIRC_COMP,
@@ -947,4 +986,6 @@ SHR_COMPARISONS = [
 SHR_POST_TRAIN_RATIO_COPY_COMPARISONS = [
     DATE_COMP_SHR,
     AGE_COMP_SHR,
+    TF_WEAPON_COMP_SHR,
+    RELATIONSHIP_COMP_SHR
 ]

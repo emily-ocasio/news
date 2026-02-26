@@ -53,6 +53,12 @@ class BlockComp(StrEnum):
         "floor(l.midpoint_day/213) = floor(r.midpoint_day/213) "
         "AND floor((l.midpoint_day+106)/213) = floor((r.midpoint_day+106)/213)"
     )
+    MIDPOINT_7MONTH_BASE = (
+        "floor(l.midpoint_day/213) = floor(r.midpoint_day/213)"
+    )
+    MIDPOINT_7MONTH_SHIFTED = (
+        "floor((l.midpoint_day+106)/213) = floor((r.midpoint_day+106)/213)"
+    )
     MIDPOINT_BLOCK_7MONTH = (
         "floor(l.midpoint_day_block/213) = floor(r.midpoint_day_block/213) "
         "AND floor((l.midpoint_day_block+106)/213) = "
@@ -147,16 +153,6 @@ class TrainBlockRule(StrEnum):
                                        BlockComp.CLOSE_LONG_LAT)
     AGE_SEX = _train_block_from_comps(BlockComp.SAME_AGE_SEX)
     AGE_DIFF2_SEX = _train_block_from_comps(BlockComp.AGE_DIFF2_SEX)
-    MIDPOINT_7MONTH = _train_block_from_comps(BlockComp.MIDPOINT_EXISTS,
-                                              BlockComp.MIDPOINT_7MONTH)
-    MIDPOINT_BLOCK_7MONTH = _train_block_from_comps(
-        BlockComp.MIDPOINT_BLOCK_EXISTS,
-        BlockComp.MIDPOINT_BLOCK_7MONTH
-    )
-    MIDPOINT_BLOCK_2MONTH = _train_block_from_comps(
-        BlockComp.MIDPOINT_BLOCK_EXISTS,
-        BlockComp.MIDPOINT_BLOCK_2MONTH
-    )
     MIDPOINT_90DAYS_MONTH_PRECISION = _train_block_from_comps(
         BlockComp.MIDPOINT_EXISTS,
         BlockComp.MIDPOINT_90DAYS,
@@ -189,10 +185,6 @@ class TrainBlockRule(StrEnum):
     OFFENDER_AGE_SEX = _train_block_from_comps(
         BlockComp.SAME_OFFENDER_AGE_SEX
     )
-    OFFENDER_SEX_7MONTH = _train_block_from_comps(
-        BlockComp.OFFENDER_SEX,
-        BlockComp.MIDPOINT_7MONTH,
-    )
     YEAR_AGE_SEX = _train_block_from_comps(
         BlockComp.EXACT_YEAR,
         BlockComp.SAME_AGE_SEX
@@ -207,17 +199,6 @@ class TrainBlockRule(StrEnum):
     SEX_GEO_SHORT = _train_block_from_comps(
         BlockComp.GEO_SHORT,
         BlockComp.SAME_SEX,
-    )
-    AGE_SEX_7MONTH = _train_block_from_comps(
-        BlockComp.SAME_AGE_SEX,
-        BlockComp.MIDPOINT_EXISTS,
-        BlockComp.MIDPOINT_7MONTH,
-        BlockComp.YEAR_PRECISION
-    )
-    SEX_7MONTH = _train_block_from_comps(
-        BlockComp.SAME_SEX,
-        BlockComp.MIDPOINT_EXISTS,
-        BlockComp.MIDPOINT_7MONTH,
     )
     SEX_WITHIN_YEAR = _train_block_from_comps(
         BlockComp.SAME_SEX,
@@ -244,7 +225,11 @@ class DedupBlockRule(StrEnum):
     YEAR_MONTH = _block_from_comps(BlockComp.EXACT_YEAR_MONTH)
     YEAR_MONTH_DAY = _block_from_comps(BlockComp.EXACT_YEAR_MONTH_DAY)
     DATE_LOCATION = _block_from_comps(BlockComp.MIDPOINT_EXISTS,
-                                        BlockComp.MIDPOINT_7MONTH,
+                                        BlockComp.MIDPOINT_7MONTH_BASE,
+                                        BlockComp.LONG_LAT_EXISTS,
+                                        BlockComp.CLOSE_LONG_LAT)
+    DATE_LOCATION_SHIFTED = _block_from_comps(BlockComp.MIDPOINT_EXISTS,
+                                        BlockComp.MIDPOINT_7MONTH_SHIFTED,
                                         BlockComp.LONG_LAT_EXISTS,
                                         BlockComp.CLOSE_LONG_LAT)
     SAME_NAMES = _block_from_comps(BlockComp.SAME_NAMES)
@@ -298,6 +283,7 @@ NAMED_VICTIM_BLOCKS = [
     DedupBlockRule.SAME_NAMES_YEAR_DIFF2,
     DedupBlockRule.YEAR_MONTH,
     DedupBlockRule.DATE_LOCATION,
+    DedupBlockRule.DATE_LOCATION_SHIFTED,
     DedupBlockRule.YEAR_SURNAME_SOUNDEX,
     DedupBlockRule.YEAR_FORENAME_SOUNDEX,
     DedupBlockRule.YEAR_AGE_SEX
@@ -329,6 +315,7 @@ ORPHAN_WIDE_BLOCKS = [
 ORPHAN_VICTIM_BLOCKS = [
     DedupBlockRule.YEAR_MONTH,
     DedupBlockRule.DATE_LOCATION,
+    DedupBlockRule.DATE_LOCATION_SHIFTED,
     DedupBlockRule.AGE_SEX,
     DedupBlockRule.AGE_WEAPON,
     DedupBlockRule.OFFENDER_AGE_SEX
@@ -350,9 +337,14 @@ class ShrLinkRule(StrEnum):
     SHR linkage blocking rules intentionally exclude article-level exclusion_id constraints.
     """
 
-    MIDPOINT_7MONTH = _train_block_from_comps(
+    MIDPOINT_7MONTH_BASE = _train_block_from_comps(
         BlockComp.MIDPOINT_EXISTS,
-        BlockComp.MIDPOINT_7MONTH,
+        BlockComp.MIDPOINT_7MONTH_BASE,
+        add_article_exclusion=False,
+    )
+    MIDPOINT_7MONTH_SHIFTED = _train_block_from_comps(
+        BlockComp.MIDPOINT_EXISTS,
+        BlockComp.MIDPOINT_7MONTH_SHIFTED,
         add_article_exclusion=False,
     )
     AGE_SEX = _train_block_from_comps(
@@ -376,7 +368,8 @@ class ShrLinkRule(StrEnum):
 
 
 SHR_OVERALL_BLOCKS = [
-    ShrLinkRule.MIDPOINT_7MONTH,
+    ShrLinkRule.MIDPOINT_7MONTH_BASE,
+    ShrLinkRule.MIDPOINT_7MONTH_SHIFTED,
     ShrLinkRule.AGE_SEX,
 ]
 
