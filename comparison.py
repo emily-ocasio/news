@@ -31,14 +31,27 @@ def _jw_similarity_comp_builder(field1: str, field2: str, threshold: float) -> s
     return f'(jaro_winkler_similarity("{field1}_l", "{field1}_r") >= {threshold}) ' \
            f'AND (jaro_winkler_similarity("{field2}_l", "{field2}_r") >= {threshold})'
 
+def _sql_string_literal(value: str) -> str:
+    escaped = value.replace("'", "''")
+    return f"'{escaped}'"
+
+def _safe_literal_match_level(
+        field: str,
+        value: str,
+        side: str
+    ) -> cll.CustomLevel:
+    side_suffix = {"left": "l", "right": "r"}[side]
+    sql = f'"{field}_{side_suffix}" = {_sql_string_literal(value)}'
+    return cll.CustomLevel(sql)
+
 def _comparison_level_within_group(
         field: str, group: Array[str]
     ) -> cll.And:
     left_condition = cll.Or(
-        *[cll.LiteralMatchLevel(field, value, "string", "left") for value in group.a]
+        *[_safe_literal_match_level(field, value, "left") for value in group.a]
     )
     right_condition = cll.Or(
-        *[cll.LiteralMatchLevel(field, value, "string", "right") for value in group.a]
+        *[_safe_literal_match_level(field, value, "right") for value in group.a]
     )
     return cll.And(
         left_condition,
@@ -783,10 +796,27 @@ CIRC_COMP = cl.CustomComparison(
             "circumstance NULL",
             ComparisonComp.CIRC_NULL.value
         ).to_dict(),
-        ComparisonLevel(
-            "exact match circumstance",
-            ComparisonComp.CIRC_EXACT.value
-        ).to_dict(),
+        cll.ExactMatchLevel("circumstance").configure(
+            tf_adjustment_column="circumstance"
+        ),
+        cll.And(
+            cll.Or(
+                _safe_literal_match_level("circumstance", "argument", "left"),
+                _safe_literal_match_level("circumstance", "argument", "right")
+            ),
+            _comparison_level_within_group(
+                "circumstance",
+                Array((
+                    "argument",
+                    "brawl",
+                    "rape",
+                    "gang killing",
+                    "lover's triangle",
+                    "narcotics related",
+                    "other felony related"
+                ))
+            )
+        ),
         cll.ElseLevel()
     ]
 )

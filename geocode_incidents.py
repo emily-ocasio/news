@@ -38,6 +38,100 @@ from pymonad import (
 from incidents_setup import CREATE_VICTIMS_CACHED_ENH_SQL
 from menuprompts import NextStep
 
+ADDRESS_NORMALIZATION_VERSION = "v2"
+
+GENERAL_STREET_TYPES: dict[str, str] = {
+    "AVE": "AVENUE",
+    "AV": "AVENUE",
+    "RD": "ROAD",
+    "PL": "PLACE",
+    "PLZ": "PLAZA",
+    "TERR": "TERRACE",
+    "TER": "TERRACE",
+    "BLVD": "BOULEVARD",
+    "PKWAY": "PARKWAY",
+    "PKWY": "PARKWAY",
+    "HWY": "HIGHWAY",
+    "DR": "DRIVE",
+    "CT": "COURT",
+    "LN": "LANE",
+    "CIR": "CIRCLE",
+    "WAY": "WAY",
+    "SQ": "SQUARE",
+}
+
+GENERAL_ORDINAL_WORDS: dict[str, str] = {
+    "FIRST": "1ST",
+    "SECOND": "2ND",
+    "THIRD": "3RD",
+    "FOURTH": "4TH",
+    "FIFTH": "5TH",
+    "SIXTH": "6TH",
+    "SEVENTH": "7TH",
+    "EIGHTH": "8TH",
+    "NINTH": "9TH",
+}
+
+GENERAL_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"(?<=\s)ST\b"), "STREET"),
+)
+
+SPECIFIC_OVERRIDE_RULES: dict[str, str] = {
+    "GOOD HOPE ROAD": "MARION BARRY AVENUE",
+    "CAPITAL HILTON HOTEL": "CAPITAL HILTON",
+    "CAPITOL HILTON HOTEL": "CAPITAL HILTON",
+    "CONDON TERRACE CIRCLE": "CONDON TERRACE SE AND 8TH STREET SE",
+    "600 BLOCK OF CONDON TERRACE SE": "601 BLOCK OF CONDON TERRACE SE",
+}
+
+DC_SUFFIX_RE = re.compile(
+    r"(?i)\s*,?\s*(washington(,)?\s*d\.?c\.?|dc|washington)\s*$"
+)
+BLOCK_OF_RE = re.compile(r"\bBLOCK\b(?!\s+OF\b)")
+HALF_ADDRESS_RE = re.compile(
+    r"\b(\d+)\s+1/2\s+(\w+)\s+"
+    r"(AVE|AV|AVENUE|ST|STREET|RD|ROAD|PL|PLACE|PLZ|PLAZA|TERR|TER|"
+    r"TERRACE|BLVD|BOULEVARD|PKWAY|PKWY|PARKWAY|HWY|HIGHWAY|DR|DRIVE|"
+    r"CT|COURT|LN|LANE|CIR|CIRCLE|WAY|SQ|SQUARE)\b"
+)
+LEADING_A_RE = re.compile(r"^([0-9]+)(?:-?A)\b")
+STREET_ORDINAL_NUM_RE = re.compile(r"\b([0-9]+)\s+STREET\b")
+
+
+def _add_ordinal_suffix(m: re.Match[str]) -> str:
+    n = int(m.group(1))
+    if 10 <= (n % 100) <= 20:
+        suffix = "TH"
+    else:
+        suffix = {1: "ST", 2: "ND", 3: "RD"}.get(n % 10, "TH")
+    return f"{n}{suffix} STREET"
+
+
+def normalize_general(a: str) -> str:
+    normalized = DC_SUFFIX_RE.sub("", (a or "").strip()).upper()
+    normalized = normalized.replace(".", "")
+    normalized = LEADING_A_RE.sub(r"\1", normalized)
+    normalized = HALF_ADDRESS_RE.sub(r"\1 \2 \3", normalized)
+    for short, full in GENERAL_STREET_TYPES.items():
+        normalized = re.sub(rf"\b{short}\b", full, normalized)
+    for pattern, replacement in GENERAL_RULES:
+        normalized = pattern.sub(replacement, normalized)
+    for word, num in GENERAL_ORDINAL_WORDS.items():
+        normalized = re.sub(rf"\b{word}\b", num, normalized)
+    normalized = STREET_ORDINAL_NUM_RE.sub(_add_ordinal_suffix, normalized)
+    normalized = BLOCK_OF_RE.sub("BLOCK OF", normalized)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return normalized
+
+
+def apply_specific_overrides(canonical: str) -> str:
+    return SPECIFIC_OVERRIDE_RULES.get(canonical, canonical)
+
+
+def normalize_for_mar(a: str) -> str:
+    canonical = normalize_general(a)
+    return apply_specific_overrides(canonical)
+
 CREATE_CACHE_SQL = SQL(
     """--sql
 CREATE TABLE IF NOT EXISTS mar_cache (
@@ -188,72 +282,6 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
             * if missing: call MAR; if not ok -> validation failure; if ok -> cache
         - accumulate failures but keep processing others
         """
-        # Local normalizer: strip trailing DC city/state; MAR wants street only
-        dc_suffix_re = re.compile(
-            r"(?i)\s*,?\s*(washington(,)?\s*d\.?c\.?|dc|washington)\s*$"
-        )
-
-        block_of_re = re.compile(r"\bBLOCK\b(?!\s+OF\b)")
-
-        def normalize_for_mar(a: str) -> str:
-            normalized = dc_suffix_re.sub("", (a or "").strip()).upper()
-            normalized = normalized.replace(".", "")
-            normalized = re.sub(r"^([0-9]+)(?:-?A)\b", r"\1", normalized)
-            normalized = re.sub(
-                r"\b(\d+)\s+1/2\s+(\w+)\s+(AVE|AV|AVENUE|ST|STREET|RD|ROAD|PL|PLACE|PLZ|PLAZA|TERR|TER|TERRACE|BLVD|BOULEVARD|PKWAY|PKWY|PARKWAY|HWY|HIGHWAY|DR|DRIVE|CT|COURT|LN|LANE|CIR|CIRCLE|WAY|SQ|SQUARE)\b",
-                r"\1 \2 \3",
-                normalized,
-            )
-            street_types = {
-                "AVE": "AVENUE",
-                "AV": "AVENUE",
-                "RD": "ROAD",
-                "PL": "PLACE",
-                "PLZ": "PLAZA",
-                "TERR": "TERRACE",
-                "TER": "TERRACE",
-                "BLVD": "BOULEVARD",
-                "PKWAY": "PARKWAY",
-                "PKWY": "PARKWAY",
-                "HWY": "HIGHWAY",
-                "DR": "DRIVE",
-                "CT": "COURT",
-                "LN": "LANE",
-                "CIR": "CIRCLE",
-                "WAY": "WAY",
-                "SQ": "SQUARE",
-            }
-            for short, full in street_types.items():
-                normalized = re.sub(rf"\b{short}\b", full, normalized)
-            normalized = re.sub(r"(?<=\s)ST\b", "STREET", normalized)
-            ordinals = {
-                "FIRST": "1ST",
-                "SECOND": "2ND",
-                "THIRD": "3RD",
-                "FOURTH": "4TH",
-                "FIFTH": "5TH",
-                "SIXTH": "6TH",
-                "SEVENTH": "7TH",
-                "EIGHTH": "8TH",
-                "NINTH": "9TH",
-            }
-            for word, num in ordinals.items():
-                normalized = re.sub(rf"\b{word}\b", num, normalized)
-            def add_ordinal_suffix(m: re.Match) -> str:
-                n = int(m.group(1))
-                if 10 <= (n % 100) <= 20:
-                    suffix = "TH"
-                else:
-                    suffix = {1: "ST", 2: "ND", 3: "RD"}.get(n % 10, "TH")
-                return f"{n}{suffix} STREET"
-
-            normalized = re.sub(r"\b([0-9]+)\s+STREET\b", add_ordinal_suffix, normalized)
-            normalized = re.sub(r"\bGOOD\s+HOPE\s+ROAD\b", "MARION BARRY AVENUE", normalized)
-            normalized = re.sub(
-                r"\bCAPIT[AO]L\s+HILTON\s+HOTEL\b", "CAPITAL HILTON", normalized
-            )
-            return block_of_re.sub("BLOCK OF", normalized)
-
         def cache_result_type(
             raw_json_value: object, addr_key: str
         ) -> AddressResultType:
@@ -693,6 +721,9 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
         sql_exec(CREATE_CACHE_SQL)
         ^ sql_exec(CREATE_ADDR_MAP_SQL)
         ^ sql_exec(ALTER_CACHE_SQL)
+        ^ put_line(
+            f"[GEO] Address normalization version: {ADDRESS_NORMALIZATION_VERSION}"
+        )
         ^ sql_query(SELECT_ADDRESSES_SQL)
         >> (
             lambda rows: put_line(f"[GEO] Found {len(rows)} distinct raw addresses.")

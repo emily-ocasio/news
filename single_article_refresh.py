@@ -154,6 +154,14 @@ def _refresh_duckdb_incidents_for_article(env: Environment, record_id: int) -> R
                 """
             )
         )
+        ^ sql_exec(
+            SQL(
+                """
+                ALTER TABLE incidents_cached
+                ADD COLUMN IF NOT EXISTS offender_count INTEGER;
+                """
+            )
+        )
         ^ put_line(f"[F] incidents refresh step: ensure sbert_cache ({record_id})")
         ^ sql_exec(
             SQL(
@@ -382,6 +390,14 @@ def _refresh_duckdb_victims_for_article(record_id: int) -> Run[Unit]:
         ^ sql_exec(
             SQL(
                 """
+                ALTER TABLE victims_cached
+                ADD COLUMN IF NOT EXISTS offender_count INTEGER;
+                """
+            )
+        )
+        ^ sql_exec(
+            SQL(
+                """
                 CREATE INDEX IF NOT EXISTS idx_victims_cached_article_id
                 ON victims_cached(article_id);
                 """
@@ -576,6 +592,14 @@ def _refresh_duckdb_victims_enh_for_article(record_id: int) -> Run[Unit]:
                 """
                 ALTER TABLE victims_cached_enh
                 ADD COLUMN IF NOT EXISTS relationship VARCHAR;
+                """
+            )
+        )
+        ^ sql_exec(
+            SQL(
+                """
+                ALTER TABLE victims_cached_enh
+                ADD COLUMN IF NOT EXISTS offender_count INTEGER;
                 """
             )
         )
