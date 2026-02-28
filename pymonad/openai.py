@@ -65,6 +65,11 @@ class GPTModel(str, Enum):
                 raise ValueError(
                     f"Unknown model or token type: {self}, {token_type}")
 
+
+class EmbeddingModel(str, Enum):
+    """OpenAI embedding model enumeration."""
+    TEXT_EMBEDDING_3_SMALL = "text-embedding-3-small"
+
 @dataclass(frozen=True)
 class GPTPromptTemplate:
     """OpenAI GPT stored prompt template"""

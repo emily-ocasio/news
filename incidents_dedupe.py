@@ -242,7 +242,7 @@ def _build_representative_victims() -> Run[Unit]:
                     i.generate_series AS comp_idx,
                     m.summary_vec[i.generate_series] AS val
                 FROM victim_entity_members m
-                CROSS JOIN generate_series(1, 384) AS i
+                CROSS JOIN generate_series(1, 1536) AS i
             ),
             avg_per_component AS (
                 SELECT
@@ -256,7 +256,7 @@ def _build_representative_victims() -> Run[Unit]:
                 victim_entity_id,
                 CAST(
                   array_agg(avg_val ORDER BY comp_idx)
-                  AS DOUBLE[384]
+                  AS DOUBLE[1536]
                 ) AS entity_summary_vec
             FROM avg_per_component
             GROUP BY victim_entity_id;

@@ -5,9 +5,10 @@ Intent, eliminator and constructors for OpenAI API calls
 from dataclasses import dataclass
 from collections.abc import Callable
 import json
+import math
 import threading
 import time
-from typing import Any, TypeVar, cast, Literal
+from typing import Any, TypeVar, cast, Literal, Sequence
 
 
 from jsonref import replace_refs
@@ -18,8 +19,14 @@ from pydantic import BaseModel
 
 from .either import Left, Right
 from .environment import PromptKey, Environment, EnvKey, all_prompts
-from .openai import GPTModel, GPTPrompt, GPTFullResponse, GPTResponseTuple, \
-    GPTPromptTemplate
+from .openai import (
+    EmbeddingModel,
+    GPTModel,
+    GPTPrompt,
+    GPTFullResponse,
+    GPTResponseTuple,
+    GPTPromptTemplate,
+)
 from .run import ErrorPayload, throw, Run, _unhandled, ask, local, pure, \
     put_line, UserAbort
 
@@ -68,6 +75,15 @@ class OAChat:
     stream: bool = False
 
 
+@dataclass(frozen=True)
+class OAEmbedding:
+    """OpenAI Embeddings API call intent."""
+    input_texts: tuple[str, ...]
+    model: EmbeddingModel
+    dimensions: int | None = None
+    normalize: bool = True
+
+
 def gpt_response(
     prompt: GPTPrompt,
     model: GPTModel,
@@ -82,6 +98,24 @@ def gpt_response(
     intent = OAChat(
         prompt, text_format=text_format, model=model, temperature=temperature, \
               effort=effort, stream=stream)
+    return Run(lambda self: self._perform(intent, self), _unhandled)
+
+
+def openai_embeddings(
+    input_texts: Sequence[str],
+    model: EmbeddingModel,
+    dimensions: int | None = None,
+    normalize: bool = True,
+) -> Run[tuple[tuple[float, ...], ...]]:
+    """
+    Call the OpenAI Embeddings API and return vectors in input order.
+    """
+    intent = OAEmbedding(
+        input_texts=tuple(str(text) for text in input_texts),
+        model=model,
+        dimensions=dimensions,
+        normalize=normalize,
+    )
     return Run(lambda self: self._perform(intent, self), _unhandled)
 
 def resolve_prompt_template(env: Environment, prompt_key: PromptKey) \
@@ -197,6 +231,25 @@ def run_openai(
                         prompt=prompt.to_gpt,
                         temperature=temperature
                     )
+                case OAEmbedding(input_texts, model, dimensions, normalize):
+                    if len(input_texts) == 0:
+                        return tuple()
+                    kwargs: dict[str, Any] = {
+                        "model": model.value,
+                        "input": list(input_texts),
+                    }
+                    if dimensions is not None:
+                        kwargs["dimensions"] = dimensions
+                    response = client.embeddings.create(**kwargs)
+                    rows: list[tuple[float, ...]] = []
+                    for item in response.data:
+                        vec = [float(v) for v in item.embedding]
+                        if normalize:
+                            norm = math.sqrt(sum(v * v for v in vec))
+                            if norm > 0:
+                                vec = [v / norm for v in vec]
+                        rows.append(tuple(vec))
+                    return tuple(rows)
                 case _:
                     return parent(intent, current)
 

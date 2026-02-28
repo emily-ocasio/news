@@ -18,94 +18,260 @@ from pymonad import (
     SQLParams,
     String,
     Unit,
+    unit,
+    EmbeddingModel,
+    openai_embeddings,
 )
 from pymonad.traverse import array_traverse_run
 from menuprompts import NextStep
-from calculations import sbert_average_vector
 
-ZERO_VEC_SQL = f"ARRAY[{', '.join('0' for _ in range(384))}]"
+SUMMARY_EMBED_MODEL = EmbeddingModel.TEXT_EMBEDDING_3_SMALL
+SUMMARY_EMBED_DIM = 1536
+SUMMARY_EMBED_BATCH_SIZE = 100
+ZERO_VEC_SQL = f"ARRAY[{', '.join('0' for _ in range(SUMMARY_EMBED_DIM))}]"
 
 
-def _row_update_run(env: Environment, row) -> Run[Unit]:
-    """
-    Given an environment and a row dict with article_id,
-    incident_idx, summary_norm, return a Run[Unit] effect
-    that updates that row’s summary_vec.
+def _vec_to_array_sql(vec: tuple[float, ...]) -> str:
+    return f"ARRAY[{','.join(format(x, '.17g') for x in vec)}]"
 
-    Uses `summary_norm` as the cache key. Key is parameterized to avoid
-    quoting issues when the normalized text contains quotes.
-    """
-    key = (row.get("summary_norm") or "").strip()
+
+def _sql_quote(value: str) -> str:
+    return value.replace("'", "''")
+
+
+def _ensure_openai_embedding_cache_table() -> Run[Unit]:
+    return (
+        sql_exec(
+            SQL(
+                """
+            CREATE TABLE IF NOT EXISTS sbert_cache (
+                input_text VARCHAR,
+                vec DOUBLE[384]
+            );
+            """
+            )
+        )
+        ^
+        sql_exec(
+            SQL(
+                f"""
+            CREATE TABLE IF NOT EXISTS openai_embedding_cache (
+                model VARCHAR,
+                dimensions INTEGER,
+                input_text VARCHAR,
+                vec DOUBLE[{SUMMARY_EMBED_DIM}]
+            );
+            """
+            )
+        )
+        ^ sql_exec(
+            SQL(
+                """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_openai_embedding_cache_key
+            ON openai_embedding_cache(model, dimensions, input_text);
+            """
+            )
+        )
+    )
+
+
+def _ensure_summary_vec_column() -> Run[Unit]:
+    return (
+        sql_exec(
+            SQL(
+                f"""
+            ALTER TABLE incidents_cached
+            ADD COLUMN IF NOT EXISTS summary_vec DOUBLE[{SUMMARY_EMBED_DIM}];
+            """
+            )
+        )
+        ^ sql_exec(
+            SQL(
+                f"""
+            ALTER TABLE incidents_cached
+            ALTER COLUMN summary_vec TYPE DOUBLE[{SUMMARY_EMBED_DIM}]
+            USING CAST(NULL AS DOUBLE[{SUMMARY_EMBED_DIM}]);
+            """
+            )
+        )
+    )
+
+
+def _chunked(values: list[str], size: int) -> list[list[str]]:
+    return [values[i : i + size] for i in range(0, len(values), size)]
+
+
+def _embed_missing_texts(texts: list[str]) -> Run[list[tuple[str, tuple[float, ...]]]]:
+    if len(texts) == 0:
+        return pure([])
+
+    batches = _chunked(texts, SUMMARY_EMBED_BATCH_SIZE)
+
+    def _loop(idx: int, acc: list[tuple[str, tuple[float, ...]]]) -> Run[list[tuple[str, tuple[float, ...]]]]:
+        if idx >= len(batches):
+            return pure(acc)
+        batch = batches[idx]
+        return openai_embeddings(
+            input_texts=batch,
+            model=SUMMARY_EMBED_MODEL,
+            dimensions=SUMMARY_EMBED_DIM,
+            normalize=True,
+        ) >> (
+            lambda vecs: _loop(idx + 1, acc + list(zip(batch, vecs)))
+        )
+
+    return _loop(0, [])
+
+
+def _cache_miss_vectors(texts: list[str]) -> Run[Unit]:
+    if len(texts) == 0:
+        return pure(unit)
+
+    return _embed_missing_texts(texts) >> (
+        lambda rows: array_traverse_run(
+            Array.make(tuple(rows)),
+            lambda rec: sql_exec(
+                SQL(
+                    f"""
+                INSERT INTO openai_embedding_cache (model, dimensions, input_text, vec)
+                VALUES (?, ?, ?, {_vec_to_array_sql(rec[1])})
+                ON CONFLICT(model, dimensions, input_text) DO NOTHING;
+                """
+                ),
+                SQLParams(
+                    (
+                        String(SUMMARY_EMBED_MODEL.value),
+                        SUMMARY_EMBED_DIM,
+                        String(rec[0]),
+                    )
+                ),
+            ),
+        ).map(lambda _: unit)
+    )
+
+
+def _update_single_summary_vec(row) -> Run[Unit]:
+    key = str(row.get("summary_norm") or "").strip()
+    article_id = row["article_id"]
+    incident_idx = row["incident_idx"]
 
     if key == "":
         return sql_exec(
             SQL(
-                f"""
-        UPDATE incidents_cached
-        SET summary_vec = NULL
-        WHERE article_id = {row['article_id']}
-          AND incident_idx = {row['incident_idx']};
-        """
-            )
+                """
+            UPDATE incidents_cached
+            SET summary_vec = NULL
+            WHERE article_id = ? AND incident_idx = ?;
+            """
+            ),
+            SQLParams((article_id, incident_idx)),
         )
 
     if key.lower() == "no details":
-        return (
-            put_line(
-                "[I] Summary marked 'No details' -> zero vector "
-                f"(article_id={row['article_id']}, incident_idx={row['incident_idx']}): "
-                f"{key}"
-            )
-            ^ sql_exec(
-                SQL(
-                    f"""
+        return sql_exec(
+            SQL(
+                f"""
             UPDATE incidents_cached
             SET summary_vec = {ZERO_VEC_SQL}
-            WHERE article_id = {row['article_id']}
-              AND incident_idx = {row['incident_idx']};
+            WHERE article_id = ? AND incident_idx = ?;
             """
-                )
-            )
+            ),
+            SQLParams((article_id, incident_idx)),
         )
 
-    def _cache_miss_update(vec_vals) -> Run[Unit]:
-        return (
-            put_line(f"[I] Cache miss for summary: {key[:60]}")
-            ^ sql_exec(
-                SQL(
-                    f"INSERT INTO sbert_cache (input_text, vec) VALUES (?, ARRAY[{','.join(format(x, '.17g') for x in vec_vals)}]);"
-                ),
-                SQLParams((String(key),)),
-            )
-            ^ sql_exec(
-                SQL(
-                    f"UPDATE incidents_cached SET summary_vec = ARRAY[{','.join(format(x, '.17g') for x in vec_vals)}] WHERE article_id = ? AND incident_idx = ?;"
-                ),
-                SQLParams((row["article_id"], row["incident_idx"])),
-            )
+    return sql_exec(
+        SQL(
+            """
+        UPDATE incidents_cached
+        SET summary_vec = (
+            SELECT vec
+            FROM openai_embedding_cache
+            WHERE model = ?
+              AND dimensions = ?
+              AND input_text = ?
         )
-
-    # Check cache first (parameterized)
-    return sql_query(
-        SQL("SELECT vec FROM sbert_cache WHERE input_text = ?;"),
-        SQLParams((String(key),)),
-    ) >> (
-        lambda rows: (
+        WHERE article_id = ? AND incident_idx = ?;
+        """
+        ),
+        SQLParams(
             (
-                put_line(
-                    f"[I] Using cached vector for summary (len={len(rows)}): {key[:60]}"
-                )
-                ^ sql_exec(
-                    SQL(
-                        "UPDATE incidents_cached SET summary_vec = (SELECT vec FROM sbert_cache WHERE input_text = ?) WHERE article_id = ? AND incident_idx = ?;"
-                    ),
-                    SQLParams((String(key), row["article_id"], row["incident_idx"])),
-                )
+                String(SUMMARY_EMBED_MODEL.value),
+                SUMMARY_EMBED_DIM,
+                String(key),
+                article_id,
+                incident_idx,
             )
-            if len(rows) > 0
-            else _cache_miss_update(sbert_average_vector(env["fasttext_model"].model, key))
-        )
+        ),
     )
+
+
+def _update_summary_vectors_for_rows(env: Environment, rows: Array) -> Run[Unit]:
+    """
+    Populate summary vectors for a set of incidents using OpenAI embeddings.
+    """
+    _ = env
+    row_list = list(rows)
+    if len(row_list) == 0:
+        return pure(unit)
+
+    embed_keys = [
+        str(row.get("summary_norm") or "").strip()
+        for row in row_list
+        if str(row.get("summary_norm") or "").strip() not in ("",)
+        and str(row.get("summary_norm") or "").strip().lower() != "no details"
+    ]
+    unique_keys = list(dict.fromkeys(embed_keys))
+
+    def _missing_keys(existing_rows: Array) -> Run[Unit]:
+        existing = {str(r["input_text"]) for r in existing_rows}
+        missing = [k for k in unique_keys if k not in existing]
+        return (
+            put_line(f"[I] OpenAI embedding cache hit={len(existing)} miss={len(missing)}")
+            ^ _cache_miss_vectors(missing)
+            ^ array_traverse_run(
+                Array.make(tuple(row_list)),
+                _update_single_summary_vec,
+            ).map(lambda _: unit)
+        )
+
+    if len(unique_keys) == 0:
+        return (
+            _ensure_openai_embedding_cache_table()
+            ^ _ensure_summary_vec_column()
+            ^ array_traverse_run(
+                Array.make(tuple(row_list)),
+                _update_single_summary_vec,
+            ).map(lambda _: unit)
+        )
+
+    values_sql = ",".join(f"('{_sql_quote(k)}')" for k in unique_keys)
+    return (
+        _ensure_openai_embedding_cache_table()
+        ^ _ensure_summary_vec_column()
+        ^ sql_query(
+            SQL(
+                f"""
+            WITH keys(input_text) AS (
+                VALUES {values_sql}
+            )
+            SELECT k.input_text
+            FROM keys k
+            JOIN openai_embedding_cache c
+              ON c.input_text = k.input_text
+             AND c.model = '{_sql_quote(SUMMARY_EMBED_MODEL.value)}'
+             AND c.dimensions = {SUMMARY_EMBED_DIM};
+            """
+            )
+        )
+        >> _missing_keys
+    )
+
+
+def _row_update_run(env: Environment, row) -> Run[Unit]:
+    """
+    Compatibility wrapper kept for callers that still process a single row.
+    """
+    return _update_summary_vectors_for_rows(env, Array.make((row,)))
 
 
 # --- DuckDB SQL ---
@@ -531,14 +697,6 @@ def build_incident_views() -> Run[NextStep]:
                 ^ sql_query(COUNT_VIEW_SQL)
                 >> (lambda rows: put_line(f"[I] View rows: {rows[0]['n']}"))
                 ^ sql_script(CREATE_INCIDENTS_CACHED_SQL)
-                ^ sql_script(
-                    SQL(
-                        """
-                ALTER TABLE incidents_cached
-                ADD COLUMN IF NOT EXISTS summary_vec DOUBLE[384];
-                """
-                    )
-                )
                 ^ sql_query(
                     SQL(
                         """
@@ -551,9 +709,7 @@ def build_incident_views() -> Run[NextStep]:
                     lambda rows: put_line(
                         f"[I] Retrieved {len(rows)} rows for vectorization…"
                     )
-                    ^ array_traverse_run(
-                        Array.make(tuple(rows)), lambda r: _row_update_run(env, r)
-                    )
+                    ^ _update_summary_vectors_for_rows(env, Array.make(tuple(rows)))
                 )
                 ^ put_line("[I] Updated vectorized summary for all incidents.")
                 ^ sql_script(CREATE_VICTIMS_CACHED_SQL)

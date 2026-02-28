@@ -494,7 +494,7 @@ def _build_postadj_orphancluster_canonical() -> Run[Unit]:
                   mode(city_id) FILTER (WHERE city_id IS NOT NULL) AS city_id,
                   MIN(midpoint_day) AS min_event_day,
                   MAX(midpoint_day) AS max_event_day,
-                  CAST(NULL AS DOUBLE[384]) AS summary_vec,
+                  CAST(NULL AS DOUBLE[1536]) AS summary_vec,
                   CASE
                     WHEN da.n_day > 0 THEN 'day'
                     WHEN da.n_month > 0 THEN 'month'

@@ -8,10 +8,9 @@ import json
 import re
 from typing import Iterable, Mapping, cast
 
-from calculations import cosine_similarity, sbert_average_vector
+from calculations import cosine_similarity
 from menuprompts import NextStep
 from pymonad import (
-    Environment,
     Namespace,
     PromptKey,
     Run,
@@ -19,7 +18,8 @@ from pymonad import (
     SQLParams,
     String,
     Unit,
-    ask,
+    EmbeddingModel,
+    openai_embeddings,
     input_number,
     input_with_prompt,
     pure,
@@ -29,6 +29,7 @@ from pymonad import (
     to_prompts,
     with_duckdb,
     with_namespace,
+    unit,
 )
 
 VEC_SIM_PROMPTS: dict[str, str | tuple[str, str] | tuple[str]] = {
@@ -37,6 +38,9 @@ VEC_SIM_PROMPTS: dict[str, str | tuple[str, str] | tuple[str]] = {
     "incident_left": "Select incident number for the first article: ",
     "incident_right": "Select incident number for the second article: ",
 }
+
+SUMMARY_EMBED_MODEL = EmbeddingModel.TEXT_EMBEDDING_3_SMALL
+SUMMARY_EMBED_DIM = 1536
 
 
 def _normalize_text(text: str) -> str:
@@ -62,46 +66,90 @@ def _coerce_vec(raw) -> tuple[float, ...]:
         return tuple()
 
 
-def _ensure_sbert_cache_table() -> Run[Unit]:
-    return sql_exec(
-        SQL(
-            """
-        CREATE TABLE IF NOT EXISTS sbert_cache (
+def _ensure_openai_cache_table() -> Run[Unit]:
+    return (
+        sql_exec(
+            SQL(
+                f"""
+        CREATE TABLE IF NOT EXISTS openai_embedding_cache (
+            model VARCHAR,
+            dimensions INTEGER,
             input_text VARCHAR,
-            vec DOUBLE[384]
+            vec DOUBLE[{SUMMARY_EMBED_DIM}]
         );
         """
+            )
+        )
+        ^ sql_exec(
+            SQL(
+                """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_openai_embedding_cache_key
+        ON openai_embedding_cache(model, dimensions, input_text);
+        """
+            )
         )
     )
 
 
-def _get_or_create_vec(env: Environment, text: str) -> Run[tuple[float, ...]]:
+def _get_or_create_vec(text: str) -> Run[tuple[float, ...]]:
     key = _normalize_text(text)
     if key == "":
         return put_line("[W] Empty text provided; skipping vector.") ^ pure(tuple())
 
+    if key.lower() == "no details":
+        return pure(tuple(0.0 for _ in range(SUMMARY_EMBED_DIM)))
+
     def _cache_miss() -> Run[tuple[float, ...]]:
-        vec_vals = sbert_average_vector(env["fasttext_model"].model, key)
         return (
-            put_line(f"[I] Cache miss for text: {key[:60]}")
-            ^ sql_exec(
-                SQL(
-                    f"INSERT INTO sbert_cache (input_text, vec) VALUES (?, {_vec_to_array_sql(vec_vals)});"
-                ),
-                SQLParams((String(key),)),
+            openai_embeddings(
+                [key],
+                model=SUMMARY_EMBED_MODEL,
+                dimensions=SUMMARY_EMBED_DIM,
+                normalize=True,
             )
-            ^ pure(tuple(vec_vals))
+            >> (
+                lambda vecs: (
+                    put_line(f"[I] OpenAI embedding cache miss for text: {key[:60]}")
+                    ^ sql_exec(
+                        SQL(
+                            f"INSERT INTO openai_embedding_cache (model, dimensions, input_text, vec) VALUES (?, ?, ?, {_vec_to_array_sql(vecs[0])});"
+                        ),
+                        SQLParams(
+                            (
+                                String(SUMMARY_EMBED_MODEL.value),
+                                SUMMARY_EMBED_DIM,
+                                String(key),
+                            )
+                        ),
+                    )
+                    ^ pure(vecs[0])
+                )
+            )
         )
 
     return with_duckdb(
-        _ensure_sbert_cache_table()
+        _ensure_openai_cache_table()
         ^ sql_query(
-            SQL("SELECT vec FROM sbert_cache WHERE input_text = ?;"),
-            SQLParams((String(key),)),
+            SQL(
+                """
+            SELECT vec
+            FROM openai_embedding_cache
+            WHERE model = ?
+              AND dimensions = ?
+              AND input_text = ?;
+            """
+            ),
+            SQLParams(
+                (
+                    String(SUMMARY_EMBED_MODEL.value),
+                    SUMMARY_EMBED_DIM,
+                    String(key),
+                )
+            ),
         )
         >> (
             lambda rows: (
-                put_line(f"[I] Using cached vector for text: {key[:60]}")
+                put_line(f"[I] Using cached OpenAI vector for text: {key[:60]}")
                 ^ pure(_coerce_vec(rows[0].get("vec")))
                 if len(rows) > 0
                 else _cache_miss()
@@ -310,7 +358,6 @@ def _resolve_vector_for_input(
     record_prompt: PromptKey,
     incident_prompt: PromptKey,
     label: str,
-    env: Environment,
 ) -> Run[tuple[float, ...] | None]:
     def _loop() -> Run[tuple[float, ...] | None]:
         return (
@@ -336,7 +383,7 @@ def _resolve_vector_for_input(
                                 >> (lambda summary: (
                                     _loop()
                                     if summary == ""
-                                    else _get_or_create_vec(env, summary)
+                                    else _get_or_create_vec(summary)
                                     >> (
                                         lambda vec:
                                         pure(cast(tuple[float, ...] | None, vec))
@@ -360,16 +407,15 @@ def _resolve_vector_for_input(
 
 def vector_similarity() -> Run[NextStep]:
     """
-    Prompt for two article IDs, compute cosine similarity, and return to main menu.
+    Prompt for two article/entity IDs, compute cosine similarity, and return.
     """
+
     def _run() -> Run[NextStep]:
-        return ask() >> (
-            lambda env:
+        return (
             _resolve_vector_for_input(
                 PromptKey("article_left"),
                 PromptKey("incident_left"),
                 "First",
-                env,
             )
             >> (lambda vec_a:
                 pure(NextStep.CONTINUE)
@@ -379,7 +425,6 @@ def vector_similarity() -> Run[NextStep]:
                         PromptKey("article_right"),
                         PromptKey("incident_right"),
                         "Second",
-                        env,
                     )
                     >> (lambda vec_b:
                         pure(NextStep.CONTINUE)
@@ -390,8 +435,15 @@ def vector_similarity() -> Run[NextStep]:
                                     "[W] Unable to compute similarity due to missing vector."
                                 )
                                 if not vec_a or not vec_b
-                                else put_line(
-                                    f"[I] Cosine similarity: {cosine_similarity(vec_a, vec_b):.6f}"
+                                else (
+                                    put_line(
+                                        "[E] Vector dimensions differ: "
+                                        f"{len(vec_a)} vs {len(vec_b)}."
+                                    )
+                                    if len(vec_a) != len(vec_b)
+                                    else put_line(
+                                        f"[I] Cosine similarity: {cosine_similarity(vec_a, vec_b):.6f}"
+                                    )
                                 )
                             )
                             ^ pure(NextStep.CONTINUE)

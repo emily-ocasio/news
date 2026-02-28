@@ -70,6 +70,7 @@ from .run import (
     rename_file,
 )
 from .openai import (
+    EmbeddingModel,
     GPTPrompt,
     GPTFullResponse,
     GPTPromptTemplate,
@@ -93,6 +94,7 @@ from .runsql import (
 )
 from .runopenai import (
     run_openai,
+    openai_embeddings,
     with_models,
     response_with_gpt_prompt,
     response_message,

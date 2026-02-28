@@ -18,9 +18,10 @@ from geocode_incidents import (
     INSERT_CACHE_SQL,
 )
 from incidents_setup import (
+    SUMMARY_EMBED_DIM,
     VICTIMS_CACHED_ENH_SELECT_SQL,
     VICTIMS_CACHED_SELECT_SQL,
-    _row_update_run,
+    _update_summary_vectors_for_rows,
 )
 from pymonad import (
     Array,
@@ -148,9 +149,9 @@ def _refresh_duckdb_incidents_for_article(env: Environment, record_id: int) -> R
         ^ put_line(f"[F] incidents refresh step: alter incidents_cached summary_vec ({record_id})")
         ^ sql_exec(
             SQL(
-                """
+                f"""
                 ALTER TABLE incidents_cached
-                ADD COLUMN IF NOT EXISTS summary_vec DOUBLE[384];
+                ADD COLUMN IF NOT EXISTS summary_vec DOUBLE[{SUMMARY_EMBED_DIM}];
                 """
             )
         )
@@ -162,7 +163,28 @@ def _refresh_duckdb_incidents_for_article(env: Environment, record_id: int) -> R
                 """
             )
         )
-        ^ put_line(f"[F] incidents refresh step: ensure sbert_cache ({record_id})")
+        ^ put_line(f"[F] incidents refresh step: ensure openai_embedding_cache ({record_id})")
+        ^ sql_exec(
+            SQL(
+                f"""
+                CREATE TABLE IF NOT EXISTS openai_embedding_cache (
+                    model VARCHAR,
+                    dimensions INTEGER,
+                    input_text VARCHAR,
+                    vec DOUBLE[{SUMMARY_EMBED_DIM}]
+                );
+                """
+            )
+        )
+        ^ sql_exec(
+            SQL(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_openai_embedding_cache_key
+                ON openai_embedding_cache(model, dimensions, input_text);
+                """
+            )
+        )
+        ^ put_line(f"[F] incidents refresh step: ensure sbert_cache legacy table ({record_id})")
         ^ sql_exec(
             SQL(
                 """
@@ -181,7 +203,7 @@ def _refresh_duckdb_incidents_for_article(env: Environment, record_id: int) -> R
         ^ put_line(f"[F] incidents refresh step: insert refreshed incidents row(s) ({record_id})")
         ^ sql_exec(
             SQL(
-                """
+                f"""
                 INSERT INTO incidents_cached (
                   article_id, city_id, incident_idx, incident_json,
                   publish_date, article_title, article_text,
@@ -203,7 +225,7 @@ def _refresh_duckdb_incidents_for_article(env: Environment, record_id: int) -> R
                   offender_count, offender_name, offender_age,
                   offender_sex, offender_race, offender_ethnicity,
                   victim_count, summary, summary_norm,
-                  CAST(NULL AS DOUBLE[384]) AS summary_vec
+                  CAST(NULL AS DOUBLE[{SUMMARY_EMBED_DIM}]) AS summary_vec
                 FROM (
                   WITH base AS (
                         SELECT
@@ -349,16 +371,16 @@ def _refresh_duckdb_incidents_for_article(env: Environment, record_id: int) -> R
                     f"[F] incidents_cached rows refreshed for {record_id}: {len(rows)}"
                 )
                 ^ (
-                    array_traverse_run(
+                    _update_summary_vectors_for_rows(
+                        env,
                         Array.make(tuple(rows)),
-                        lambda r: _row_update_run(env, r),
                     )
                     if len(rows) > 0
                     else put_line(
                         "[F] No in-scope incidents (year >= 1977) "
                         f"for {record_id}; skipping summary vectorization."
                     )
-                    ^ pure(Array.mempty())
+                    ^ pure(unit)
                 )
                 ^ put_line(f"[F] Updated summary_vec for article {record_id}.")
             )

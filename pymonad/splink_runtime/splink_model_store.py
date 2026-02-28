@@ -13,6 +13,9 @@ from splink import DuckDBAPI, Linker
 from .splink_tables import input_table_value
 from .splink_types import PredictionInputTableNames
 
+SUMMARY_EMBED_MODEL = "text-embedding-3-small"
+SUMMARY_EMBED_DIMENSIONS = 1536
+
 
 def _splink_model_paths(splink_key: Any) -> tuple[Path, Path]:
     key_str = str(splink_key).replace("/", "_")
@@ -43,7 +46,15 @@ def save_splink_model(
     except Exception:  # pylint: disable=W0718
         actual_input_table = input_table_value(input_table)
     with open(meta_path, "w", encoding="utf-8") as f:
-        json.dump({"input_table": actual_input_table}, f, indent=2)
+        json.dump(
+            {
+                "input_table": actual_input_table,
+                "embedding_model": SUMMARY_EMBED_MODEL,
+                "embedding_dimensions": SUMMARY_EMBED_DIMENSIONS,
+            },
+            f,
+            indent=2,
+        )
 
 
 def load_splink_model(
@@ -61,6 +72,10 @@ def load_splink_model(
             meta = json.load(f)
         input_table = meta.get("input_table")
         if input_table is None:
+            return None
+        if meta.get("embedding_model") != SUMMARY_EMBED_MODEL:
+            return None
+        if int(meta.get("embedding_dimensions", -1)) != SUMMARY_EMBED_DIMENSIONS:
             return None
         db_api = DuckDBAPI(connection=con)
         return Linker(input_table, str(model_path), db_api=db_api)
