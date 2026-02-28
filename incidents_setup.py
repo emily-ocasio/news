@@ -76,25 +76,36 @@ def _ensure_openai_embedding_cache_table() -> Run[Unit]:
 
 
 def _ensure_summary_vec_column() -> Run[Unit]:
-    return (
-        sql_exec(
+    target_type = f"DOUBLE[{SUMMARY_EMBED_DIM}]"
+
+    def _ensure(rows) -> Run[Unit]:
+        type_by_name = {
+            str(row["name"]): str(row["type"]).upper()
+            for row in rows
+        }
+        current = type_by_name.get("summary_vec")
+        if current is None:
+            return sql_exec(
+                SQL(
+                    f"""
+                ALTER TABLE incidents_cached
+                ADD COLUMN summary_vec {target_type};
+                """
+                )
+            )
+        if current == target_type:
+            return pure(unit)
+        return sql_exec(
             SQL(
                 f"""
             ALTER TABLE incidents_cached
-            ADD COLUMN IF NOT EXISTS summary_vec DOUBLE[{SUMMARY_EMBED_DIM}];
+            ALTER COLUMN summary_vec TYPE {target_type}
+            USING CAST(NULL AS {target_type});
             """
             )
         )
-        ^ sql_exec(
-            SQL(
-                f"""
-            ALTER TABLE incidents_cached
-            ALTER COLUMN summary_vec TYPE DOUBLE[{SUMMARY_EMBED_DIM}]
-            USING CAST(NULL AS DOUBLE[{SUMMARY_EMBED_DIM}]);
-            """
-            )
-        )
-    )
+
+    return sql_query(SQL("SELECT name, type FROM pragma_table_info('incidents_cached');")) >> _ensure
 
 
 def _chunked(values: list[str], size: int) -> list[list[str]]:
