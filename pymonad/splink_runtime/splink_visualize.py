@@ -6,6 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import html
 import re
+import sys
 import uuid
 import webbrowser
 from pathlib import Path
@@ -739,7 +740,10 @@ def _handle_waterfall_chart(
         print_df = ctx.inspect_df.copy()
 
     inspect_dict = cast(list[dict[str, Any]], ctx.inspect_df.to_dict(orient="records"))
-    waterfall = linker.visualisations.waterfall_chart(inspect_dict, filter_nulls=False)
+    # Ensure long numpy vectors are fully stringified (no "...") so
+    # _vectors_to_similarity can parse and replace them with cosine similarity.
+    with np.printoptions(threshold=sys.maxsize):
+        waterfall = linker.visualisations.waterfall_chart(inspect_dict, filter_nulls=False)
     waterfall_no_summary = _truncate_long_chart_values(waterfall)
 
     print_df = print_df.copy()

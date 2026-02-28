@@ -85,6 +85,7 @@ def _init_splink_dedupe_context(job: SplinkDedupeJob) -> Run[Unit]:
             deterministic_recall=job.deterministic_recall,
             train_first=job.train_first,
             skip_u_estimation=job.skip_u_estimation,
+            u_estimation_max_pairs=job.u_estimation_max_pairs,
             visualize=job.visualize,
             unique_matching=job.unique_matching,
             em_max_runs=job.em_max_runs,

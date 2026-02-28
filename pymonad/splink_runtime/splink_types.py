@@ -483,6 +483,7 @@ class SplinkContext:
     deterministic_recall: float = 0.5
     train_first: bool = False
     skip_u_estimation: bool = False
+    u_estimation_max_pairs: int = 100_000_000
     visualize: bool = False
     unique_matching: bool = False
     em_max_runs: int = 3
@@ -580,3 +581,4 @@ class SplinkDedupeJob:
     do_not_link_right_col: BlockedIdRightColumnName = BlockedIdRightColumnName("id_r")
     blocked_pairs_out: BlockedPairsTableName = BlockedPairsTableName("")
     capture_blocked_edges: bool = True
+    u_estimation_max_pairs: int = 100_000_000

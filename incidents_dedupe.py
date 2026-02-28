@@ -86,6 +86,7 @@ def _dedupe_named_victims(_: Unit) -> Run[Unit]:
         splink_key=SplinkType.DEDUP,
         do_not_link_table=DoNotLinkTableName("victim_cluster_exclusion"),
         blocked_pairs_out=BlockedPairsTableName("victim_cluster_blocked_edges"),
+        u_estimation_max_pairs=1_000_000,
     ) >> (
         lambda outnames: put_line(
             f"[D] Wrote {outnames[1]} and {outnames[2]} in DuckDB."

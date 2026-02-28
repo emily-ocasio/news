@@ -82,7 +82,7 @@ def _train_linker_setup(ctx: SplinkContext, linker: Linker, _: PredictPlan) -> R
             list(ctx.deterministic_rules), recall=ctx.deterministic_recall
         )
         if not ctx.skip_u_estimation:
-            linker.training.estimate_u_using_random_sampling(1e8)
+            linker.training.estimate_u_using_random_sampling(ctx.u_estimation_max_pairs)
         return pure(unit)
 
     return _run()
