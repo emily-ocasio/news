@@ -235,8 +235,8 @@ NAME_COMP = cl.CustomComparison(
                     0.80
                 )
             ),
-            cll.CustomLevel(ComparisonComp.VICTIM_SURNAME_ONLY.value),
-            cll.CustomLevel(ComparisonComp.VICTIM_FORENAME_ONLY.value),
+            # cll.CustomLevel(ComparisonComp.VICTIM_SURNAME_ONLY.value),
+            # cll.CustomLevel(ComparisonComp.VICTIM_FORENAME_ONLY.value),
             cll.CustomLevel(ComparisonComp.VICTIM_SURNAME_MIDDLE_ALIAS.value),
         ).configure(
             label_for_charts=(
