@@ -115,6 +115,7 @@ class BlockComp(StrEnum):
     )
     CLOSE_LONG_LAT = "abs(l.lat - r.lat) <= 0.0045 AND abs(l.lon - r.lon) <= 0.0055"
     CLOSE_SUMMARY = "array_cosine_similarity(l.summary_vec, r.summary_vec) >= 0.5"
+    RIGHT_NOT_EARLIER = "r.year >= l.year"
 
 
 def _add_city(*creators: BlockingRuleCreator) -> list[BlockingRuleCreator]:
@@ -351,6 +352,11 @@ class ShrLinkRule(StrEnum):
         BlockComp.SAME_AGE_SEX,
         add_article_exclusion=False,
     )
+    DATE_AGE_SEX = _train_block_from_comps(
+        BlockComp.SAME_AGE_SEX,
+        BlockComp.RIGHT_NOT_EARLIER,
+        add_article_exclusion=False,
+    )
     MONTH_AGE_SEX_WEAPON = _train_block_from_comps(
         BlockComp.EXACT_YEAR_MONTH,
         BlockComp.SAME_AGE_SEX,
@@ -370,7 +376,7 @@ class ShrLinkRule(StrEnum):
 SHR_OVERALL_BLOCKS = [
     ShrLinkRule.MIDPOINT_7MONTH_BASE,
     ShrLinkRule.MIDPOINT_7MONTH_SHIFTED,
-    ShrLinkRule.AGE_SEX,
+    ShrLinkRule.DATE_AGE_SEX,
 ]
 
 SHR_DETERMINISTIC_BLOCKS = [

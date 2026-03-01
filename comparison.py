@@ -837,24 +837,30 @@ CIRC_COMP = cl.CustomComparison(
         cll.ExactMatchLevel("circumstance").configure(
             tf_adjustment_column="circumstance"
         ),
-        cll.And(
-            cll.Or(
-                _safe_literal_match_level("circumstance", "argument", "left"),
-                _safe_literal_match_level("circumstance", "argument", "right")
-            ),
+        cll.Or(
             _comparison_level_within_group(
                 "circumstance",
-                Array((
-                    "argument",
-                    "brawl",
-                    "rape",
-                    "gang killing",
-                    "lover's triangle",
-                    "narcotics related",
-                    "other felony related"
-                ))
+                Array(("other felony related", "robbery", "burglary"))
+            ),
+            cll.And(
+                cll.Or(
+                    _safe_literal_match_level("circumstance", "argument", "left"),
+                    _safe_literal_match_level("circumstance", "argument", "right")
+                ),
+                _comparison_level_within_group(
+                    "circumstance",
+                    Array((
+                        "argument",
+                        "brawl",
+                        "rape",
+                        "gang killing",
+                        "lover's triangle",
+                        "narcotics related",
+                        "other felony related"
+                    ))
+                )
             )
-        ),
+        ).configure(label_for_charts="closely related circumstance group match"),
         cll.ElseLevel()
     ]
 )
@@ -1046,7 +1052,7 @@ SHR_COMPARISONS = [
     TF_WEAPON_COMP_SHR,
     CIRC_COMP,
     VICTIM_SEX_COMP,
-    cl.ExactMatch("victim_race"),
+    cl.ExactMatch("victim_race").configure(term_frequency_adjustments=True),
 ]
 
 SHR_POST_TRAIN_RATIO_COPY_COMPARISONS = [

@@ -700,9 +700,9 @@ def match_article_to_shr_victims() -> Run[NextStep]:
         splink_dedupe_job(
             input_table=PredictionInputTableNames(("article_victims", "shr_cached")),
             settings=shr_linkage_settings,
-            predict_threshold=0.1,
+            predict_threshold=0.5,
             deterministic_rules=SHR_DETERMINISTIC_BLOCKS,
-            deterministic_recall=0.8,
+            deterministic_recall=0.1,
             pairs_out=PairsTableName("shr_link_pairs"),
             train_first=True,
             training_blocking_rules=SHR_TRAINING_BLOCKS,
