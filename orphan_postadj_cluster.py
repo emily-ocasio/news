@@ -493,10 +493,10 @@ def _build_postadj_orphancluster_canonical() -> Run[Unit]:
                 vector_per_component AS (
                   SELECT
                     m.cluster_id,
-                    u.comp_idx,
-                    u.val
+                    i.generate_series AS comp_idx,
+                    m.summary_vec[i.generate_series] AS val
                   FROM members m
-                  CROSS JOIN UNNEST(m.summary_vec) WITH ORDINALITY AS u(val, comp_idx)
+                  CROSS JOIN generate_series(1, 1536) AS i
                   WHERE m.summary_vec IS NOT NULL
                 ),
                 vector_avg_per_component AS (
@@ -510,7 +510,7 @@ def _build_postadj_orphancluster_canonical() -> Run[Unit]:
                 vector_agg AS (
                   SELECT
                     cluster_id,
-                    CAST(array_agg(avg_val ORDER BY comp_idx) AS DOUBLE[]) AS summary_vec
+                    CAST(array_agg(avg_val ORDER BY comp_idx) AS DOUBLE[1536]) AS summary_vec
                   FROM vector_avg_per_component
                   GROUP BY cluster_id
                 )
