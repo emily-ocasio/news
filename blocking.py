@@ -384,8 +384,8 @@ SHR_TRAINING_BLOCKS = [
 ]
 
 YEAR_MONTH_COMPARISON = [
-    "exact date or month precision match",
-    "exact yr/mon or within 2 days"
+    "exact date / month precision match",
+    "exact yr/mon or within 2 days or year precision match"
 ]
 
 TRAINING_BLOCK_LEVEL_MAP: TrainingBlockToComparisonLevelMap = HashMap.make({

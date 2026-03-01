@@ -226,6 +226,12 @@ NAME_COMP = cl.CustomComparison(
             "exact match victim name",
             ComparisonComp.EXACT_VICTIM_FULLNAME.value
         ).to_dict(),
+        cll.And(
+            cll.JaroWinklerLevel("victim_forename_norm", 0.95),
+            cll.JaroWinklerLevel("victim_surname_norm", 0.95)
+        ).configure(
+            label_for_charts="JW >= 0.95 for both forename and surname"
+        ),
         cll.Or(
             cll.CustomLevel(ComparisonComp.VICTIM_EXACT_REVERSED.value),
             cll.CustomLevel(
@@ -235,13 +241,11 @@ NAME_COMP = cl.CustomComparison(
                     0.80
                 )
             ),
-            # cll.CustomLevel(ComparisonComp.VICTIM_SURNAME_ONLY.value),
-            # cll.CustomLevel(ComparisonComp.VICTIM_FORENAME_ONLY.value),
             cll.CustomLevel(ComparisonComp.VICTIM_SURNAME_MIDDLE_ALIAS.value),
         ).configure(
             label_for_charts=(
                 "Reversed exact or JW >= 0.80 victim names "
-                "or exact single surname"
+                "or middle name matches surname"
             )
         ),
         cll.Or(
