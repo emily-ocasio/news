@@ -56,6 +56,11 @@ class Sleep:
     ms: int
 
 
+@dataclass(frozen=True)
+class MonotonicNow:
+    """Effect: Read monotonic clock timestamp."""
+
+
 REAL_DISPATCH: dict[type, Callable] = {}
 
 def intentdef(intent: type) -> Callable[[Callable], Callable]:
@@ -97,6 +102,11 @@ def _mar_geocode(x: MarGeocode) -> GeocodeResult:
 @intentdef(Sleep)
 def _sleep(x: Sleep) -> None:
     time.sleep(max(0, x.ms) / 1000.0)
+
+
+@intentdef(MonotonicNow)
+def _monotonic_now(_: MonotonicNow) -> float:
+    return time.perf_counter()
 
 
 @intentdef(FileExists)

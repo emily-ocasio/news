@@ -3,6 +3,7 @@ Controller for GPT extraction of incident details
 """
 from typing import cast
 
+from appstate import run_timer_name, run_timer_start_perf
 from pymonad import Run, with_namespace, to_prompts, Namespace, EnvKey, \
     PromptKey, pure, put_line, sql_query, SQL, SQLParams, \
     GPTModel, with_models, response_with_gpt_prompt, to_json,\
@@ -10,12 +11,13 @@ from pymonad import Run, with_namespace, to_prompts, Namespace, EnvKey, \
     GPTResponseTuple, GPTFullResponse, String, input_number, throw, \
     ErrorPayload, Tuple, array_sequence, Unit, unit, \
     bind_first, process_items, ProcessAcc, Array, \
-    Left, Right, Either, StopRun
+    Left, Right, Either, StopRun, set_, view, monotonic_now, Maybe, Just, Nothing
 from pymonad.hashmap import HashMap
 from menuprompts import NextStep
 from article import Article, Articles, ArticleAppError, from_rows
 from calculations import articles_to_extract_sql, \
     articles_ready_for_extract_counts_sql, gpt_victims_sql
+from calculations.calc_core import elapsed_line
 from gpt_filtering import render_as_failure, save_gpt_fn, \
     save_article_class, ArticleClassTuple, _to_full, \
     print_gpt_response, GPTFullKreisli
@@ -36,7 +38,34 @@ PROMPT_KEY_STR = "extract_incidents_dc"
 MODEL_KEY_STR = "extract"
 CLASS_CODE_UNKNOWN = String("UNKNOWN")
 CLASS_CODE_NULL = String("NULL")
+RUN_TIMER_NAME = String("gpt_incidents")
 type ExtractClassResult = Tuple[int, String]
+
+def start_run_timer(run_name: String) -> Run[Unit]:
+    """
+    Start/replace a named run timer in AppState.
+    """
+    return (set_(run_timer_name, run_name) ^ monotonic_now()) >> (lambda now:
+        set_(run_timer_start_perf, now) ^ pure(unit)
+    )
+
+def read_elapsed_display(expected_run_name: String) -> Run[Maybe[String]]:
+    """
+    Read elapsed display for the expected run timer if available.
+    """
+    def _just_elapsed(now: float, start: float) -> Run[Maybe[String]]:
+        maybe_value: Maybe[String] = Just(String(elapsed_line(now - start)))
+        return pure(maybe_value)
+
+    def _from_start(timer_name: str, start: float | None) -> Run[Maybe[String]]:
+        if str(timer_name) != str(expected_run_name) or start is None:
+            return pure(Nothing)
+        return monotonic_now() >> (lambda now: _just_elapsed(now, start))
+    return view(run_timer_name) >> (lambda timer_name:
+        view(run_timer_start_perf) >> (lambda start:
+            _from_start(timer_name, start)
+        )
+    )
 
 def input_number_to_extract() -> Run[int]:
     """
@@ -213,12 +242,13 @@ def render_extract_summary(
     gpt_processed_total: int,
     uncaught_failures_total: int,
     not_processed_due_to_stop: int,
+    elapsed_display: Maybe[String] = Nothing,
 ) -> String:
     """
     Render final summary for extraction run.
     """
     header = "Extract run summary (stopped early)" if stopped else "Extract run summary"
-    return String(
+    summary = String(
         f"{header}\n"
         "GPT-processed class counts:\n"
         f"  Total processed: {gpt_processed_total}\n"
@@ -228,6 +258,11 @@ def render_extract_summary(
         "Not processed due to stop (GPT-eligible queue):\n"
         f"  {not_processed_due_to_stop}"
     )
+    match elapsed_display:
+        case Just(display):
+            return String(f"{summary}\n{display}")
+        case _:
+            return summary
 
 def display_uncaught_exceptions(failures: Array[ArticleFailures]) -> Run[Unit]:
     """
@@ -235,10 +270,11 @@ def display_uncaught_exceptions(failures: Array[ArticleFailures]) -> Run[Unit]:
     """
     if failures.length == 0:
         return pure(unit)
-    def display_article_failure(failures: ArticleFailures) -> Run[None]:
+    def display_article_failure(failures: ArticleFailures) -> Run[Unit]:
         return \
             put_line(f"Article {failures.item.record_id} " \
-                     f"failed due to {failures.details[0].s}\n")
+                     f"failed due to {failures.details[0].s}\n") ^ \
+            pure(unit)
     displays = display_article_failure & failures
     return array_sequence(displays) ^ pure(unit)
 
@@ -252,27 +288,31 @@ def after_processing(process_acc: ProcessAcc[Article, ExtractClassResult]) \
             article_failures.details[0].type \
                 == ArticleFailureType.UNCAUGHT_EXCEPTION
     run_failures = process_acc.failures.filter(is_run_error)
-    summary = render_extract_summary(
-        stopped=False,
-        gpt_counts=count_classes(process_acc.results),
-        gpt_processed_total=process_acc.results.length,
-        uncaught_failures_total=run_failures.length,
-        not_processed_due_to_stop=0
-    )
-    if run_failures.length > 0:
-        return \
-            put_line("Processing completed with " \
-            f"{process_acc.failures.length} articles " \
-            "failing validation.\n") ^ \
-            put_line(f"{run_failures.length} articles " \
-            "failed due to uncaught exceptions.\n") ^ \
-            display_uncaught_exceptions(run_failures) ^ \
-            put_line(summary) ^ \
+    return read_elapsed_display(RUN_TIMER_NAME) >> (lambda elapsed_display:
+        (lambda summary:
+            put_line("Processing completed with "
+            f"{process_acc.failures.length} articles "
+            "failing validation.\n") ^
+            put_line(f"{run_failures.length} articles "
+            "failed due to uncaught exceptions.\n") ^
+            display_uncaught_exceptions(run_failures) ^
+            put_line(summary) ^
             pure(NextStep.CONTINUE)
-    return \
-        put_line("All articles processed:\n") ^ \
-        put_line(summary) ^ \
-        pure(NextStep.CONTINUE)
+            if run_failures.length > 0 else
+            put_line("All articles processed:\n") ^
+            put_line(summary) ^
+            pure(NextStep.CONTINUE)
+        )(
+            render_extract_summary(
+                stopped=False,
+                gpt_counts=count_classes(process_acc.results),
+                gpt_processed_total=process_acc.results.length,
+                uncaught_failures_total=run_failures.length,
+                not_processed_due_to_stop=0,
+                elapsed_display=elapsed_display
+            )
+        )
+    )
 
 def after_processing_either(articles: Articles,
                             result: Either[
@@ -288,23 +328,28 @@ def after_processing_either(articles: Articles,
                     article_failures.details[0].type \
                         == ArticleFailureType.UNCAUGHT_EXCEPTION
             failures = stop.acc.failures.filter(is_run_error).length
-            summary = render_extract_summary(
-                stopped=True,
-                gpt_counts=count_classes(stop.acc.results),
-                gpt_processed_total=stop.acc.results.length,
-                uncaught_failures_total=failures,
-                not_processed_due_to_stop=max(0, len(articles) - processed)
+            return read_elapsed_display(RUN_TIMER_NAME) >> (lambda elapsed_display:
+                (lambda summary:
+                    put_line(
+                        "Extraction stopped by user after "
+                        f"{processed} of {total} articles.\n"
+                    ) ^ \
+                    put_line(
+                        f"{failures} article(s) recorded failures before stop.\n"
+                    ) ^ \
+                    put_line(summary) ^ \
+                    pure(NextStep.CONTINUE)
+                )(
+                    render_extract_summary(
+                        stopped=True,
+                        gpt_counts=count_classes(stop.acc.results),
+                        gpt_processed_total=stop.acc.results.length,
+                        uncaught_failures_total=failures,
+                        not_processed_due_to_stop=max(0, len(articles) - processed),
+                        elapsed_display=elapsed_display
+                    )
+                )
             )
-            return \
-                put_line(
-                    "Extraction stopped by user after "
-                    f"{processed} of {total} articles.\n"
-                ) ^ \
-                put_line(
-                    f"{failures} article(s) recorded failures before stop.\n"
-                ) ^ \
-                put_line(summary) ^ \
-                pure(NextStep.CONTINUE)
         case Right(v_process):
             return after_processing(v_process)
     raise RuntimeError("Unreachable Either branch")
@@ -326,12 +371,14 @@ def gpt_incidents() -> Run[NextStep]:
     and in correct location
     """
     def _extract() -> Run[NextStep]:
-        return \
-            retrieve_extract_counts() >> \
-            display_extract_counts >> \
-            (lambda _: input_number_to_extract()) >> \
-            retrieve_articles >> \
-            process_all_articles
+        return (
+            (start_run_timer(RUN_TIMER_NAME)
+            ^ retrieve_extract_counts())
+            >> display_extract_counts
+            ^ input_number_to_extract()
+            >> retrieve_articles
+            >> process_all_articles
+        )
 
     return (
         with_models(

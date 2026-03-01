@@ -14,7 +14,7 @@ from typing import cast, Any, Generic, TypeVar
 from .applicative import Applicative
 from .array import Array
 from .dispatch import GetLine, PutLine, InputPrompt, MarGeocode, Sleep, \
-    GeocodeResult, FileExists, RenameFile
+    GeocodeResult, FileExists, RenameFile, MonotonicNow
 from .either import Either, Left, Right
 from .environment import Environment, Namespace, PromptKey, AllPrompts, \
     all_prompts
@@ -314,6 +314,10 @@ def file_exists(path: str) -> Run[bool]:
 def rename_file(src: str, dest: str) -> Run[Unit]:
     """Rename (replace) a file path (base effect)."""
     return Run(lambda self: self._perform(RenameFile(src, dest), self), _unhandled)
+
+def monotonic_now() -> Run[float]:
+    """Read monotonic clock timestamp from base effect."""
+    return Run(lambda self: self._perform(MonotonicNow(), self), _unhandled)
 
 # ===== Eliminators =====
 

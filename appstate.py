@@ -14,6 +14,8 @@ class AppState(Monoid):
     user_name: String = String.mempty()
     selected_option: String = String.mempty()
     prompt_key: String = String.mempty()
+    run_timer_name: String = String.mempty()
+    run_timer_start_perf: float | None = None
 
     @classmethod
     def mempty(cls) -> "AppState":
@@ -41,3 +43,5 @@ class AppState(Monoid):
 user_name: Lens[AppState, str] = lens("user_name")
 selected_option: Lens[AppState, str] = lens("selected_option")
 prompt_key: Lens[AppState, str] = lens("prompt_key")
+run_timer_name: Lens[AppState, str] = lens("run_timer_name")
+run_timer_start_perf: Lens[AppState, float | None] = lens("run_timer_start_perf")

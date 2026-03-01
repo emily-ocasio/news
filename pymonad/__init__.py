@@ -4,7 +4,7 @@ from .applicative import Applicative
 from .array import Array
 from .bind import Bind
 from .curry import curry2, curry3, return_type, curry_n
-from .dispatch import PutLine, GetLine, REAL_DISPATCH, InputPrompt
+from .dispatch import PutLine, GetLine, REAL_DISPATCH, InputPrompt, MonotonicNow
 from .either import Either, Left, Right
 from .environment import (
     Environment,
@@ -66,6 +66,7 @@ from .run import (
     ErrorPayload,
     _unhandled,
     geocode_address,
+    monotonic_now,
     file_exists,
     rename_file,
 )

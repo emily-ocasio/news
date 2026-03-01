@@ -1,16 +1,17 @@
 """
 First filtering of articles using automatic regex classification
 """
+from appstate import run_timer_name, run_timer_start_perf
 from pymonad import Run, with_namespace, to_prompts, Namespace, PromptKey, \
     pure, put_line, sql_query, SQL, SQLParams, sql_exec, input_number, throw, \
     ErrorPayload, process_items, ProcessAcc, Array, \
     String, FailureDetail, Left, Right, Either, StopRun, Tuple, \
-    HashMap, Unit, unit
+    HashMap, Unit, unit, set_, view, monotonic_now, Maybe, Just, Nothing
 from menuprompts import NextStep
 from article import Article, Articles, ArticleAppError, from_rows
 from calculations import articles_to_classify_sql, classify_sql, cleanup_sql, \
     dates_ready_for_autoclassify_counts_sql
-from calculations.calc_core import classify
+from calculations.calc_core import classify, elapsed_line
 from validate import ArticleFailureType
 
 FIRST_FILTER_PROMPTS: dict[str, str | tuple[str,]] = {
@@ -21,7 +22,34 @@ CLASS_CODE_N = String("N")
 CLASS_CODE_O = String("O")
 CLASS_CODE_UNKNOWN = String("UNKNOWN")
 CLASS_CODES = Array((CLASS_CODE_M, CLASS_CODE_N, CLASS_CODE_O, CLASS_CODE_UNKNOWN))
+RUN_TIMER_NAME = String("first_filter")
 type AutoClassResult = Tuple[int, String]
+
+def start_run_timer(run_name: String) -> Run[Unit]:
+    """
+    Start/replace a named run timer in AppState.
+    """
+    return (set_(run_timer_name, run_name) ^ monotonic_now()) >> (lambda now:
+        set_(run_timer_start_perf, now) ^ pure(unit)
+    )
+
+def read_elapsed_display(expected_run_name: String) -> Run[Maybe[String]]:
+    """
+    Read elapsed display for the expected run timer if available.
+    """
+    def _just_elapsed(now: float, start: float) -> Run[Maybe[String]]:
+        maybe_value: Maybe[String] = Just(String(elapsed_line(now - start)))
+        return pure(maybe_value)
+
+    def _from_start(timer_name: str, start: float | None) -> Run[Maybe[String]]:
+        if str(timer_name) != str(expected_run_name) or start is None:
+            return pure(Nothing)
+        return monotonic_now() >> (lambda now: _just_elapsed(now, start))
+    return view(run_timer_name) >> (lambda timer_name:
+        view(run_timer_start_perf) >> (lambda start:
+            _from_start(timer_name, start)
+        )
+    )
 
 
 def retrieve_autoclassify_date_counts() -> Run[Array]:
@@ -87,7 +115,8 @@ def count_auto_classes(results: Array[AutoClassResult]) -> HashMap[String, int]:
 def render_summary(counts: HashMap[String, int],
                    processed: int,
                    failures: int,
-                   stopped: bool) -> String:
+                   stopped: bool,
+                   elapsed_display: Maybe[String] = Nothing) -> String:
     """
     Render run summary with class counts, processed total, and failures total.
     """
@@ -101,12 +130,16 @@ def render_summary(counts: HashMap[String, int],
     )
     unknown_count = get_count(counts, CLASS_CODE_UNKNOWN)
     unknown_line = (f"  UNKNOWN: {unknown_count}",) if unknown_count > 0 else tuple()
-    return String("\n".join(
-        (header,) + count_lines + unknown_line + (
-            f"  Processed: {processed}",
-            f"  Failures: {failures}",
-        )
-    ))
+    base_lines = (header,) + count_lines + unknown_line + (
+        f"  Processed: {processed}",
+        f"  Failures: {failures}",
+    )
+    match elapsed_display:
+        case Just(display):
+            elapsed_lines: tuple[str, ...] = (str(display),)
+        case _:
+            elapsed_lines = tuple()
+    return String("\n".join(base_lines + elapsed_lines))
 
 def input_number_of_days_to_classify() -> Run[int]:
     """
@@ -159,31 +192,34 @@ def render_as_failure(err: ErrorPayload) -> Array[FailureDetail]:
         s=String(f"Exception: {err}")
     ),))
 
-def after_processing(process_acc: ProcessAcc[Article, AutoClassResult]) \
-    -> Run[NextStep]:
+def after_processing(process_acc: ProcessAcc[Article, AutoClassResult]) -> Run[NextStep]:
     """
     Handle the result after processing all articles.
     """
     failures = process_acc.failures.length
-    summary = render_summary(
-        count_auto_classes(process_acc.results),
-        process_acc.processed,
-        failures,
-        stopped=False
-    )
-    if failures > 0:
-        return \
-            put_line("Processing completed with " \
-            f"{failures} articles " \
-            "failing validation.\n") ^ \
-            put_line(summary) ^ \
+    return read_elapsed_display(RUN_TIMER_NAME) >> (lambda elapsed_display:
+        (lambda summary:
+            put_line("Processing completed with "
+                     f"{failures} articles "
+                     "failing validation.\n") ^
+            put_line(summary) ^
             pure(NextStep.CONTINUE)
-    return \
-        put_line("All articles processed:\n") ^ \
-        sql_exec(SQL(cleanup_sql())) ^ \
-        put_line("[A] Dates cleanup applied.\n") ^ \
-        put_line(summary) ^ \
-        pure(NextStep.CONTINUE)
+            if failures > 0 else
+            put_line("All articles processed:\n") ^
+            sql_exec(SQL(cleanup_sql())) ^
+            put_line("[A] Dates cleanup applied.\n") ^
+            put_line(summary) ^
+            pure(NextStep.CONTINUE)
+        )(
+            render_summary(
+                count_auto_classes(process_acc.results),
+                process_acc.processed,
+                failures,
+                stopped=False,
+                elapsed_display=elapsed_display
+            )
+        )
+    )
 
 def after_processing_either(articles: Articles,
                             result: Either[
@@ -195,22 +231,27 @@ def after_processing_either(articles: Articles,
             processed = stop.acc.processed
             total = len(articles)
             failures = stop.acc.failures.length
-            summary = render_summary(
-                count_auto_classes(stop.acc.results),
-                processed,
-                failures,
-                stopped=True
+            return read_elapsed_display(RUN_TIMER_NAME) >> (lambda elapsed_display:
+                (lambda summary:
+                    put_line(
+                        "Processing stopped by user after "
+                        f"{processed} of {total} articles.\n"
+                    ) ^
+                    put_line(
+                        f"{failures} article(s) recorded failures before stop.\n"
+                    ) ^
+                    put_line(summary) ^
+                    pure(NextStep.CONTINUE)
+                )(
+                    render_summary(
+                        count_auto_classes(stop.acc.results),
+                        processed,
+                        failures,
+                        stopped=True,
+                        elapsed_display=elapsed_display
+                    )
+                )
             )
-            return \
-                put_line(
-                    "Processing stopped by user after "
-                    f"{processed} of {total} articles.\n"
-                ) ^ \
-                put_line(
-                    f"{failures} article(s) recorded failures before stop.\n"
-                ) ^ \
-                put_line(summary) ^ \
-                pure(NextStep.CONTINUE)
         case Right(v_process):
             return after_processing(v_process)
     raise RuntimeError("Unreachable Either branch")
@@ -237,9 +278,10 @@ def first_filter() -> Run[NextStep]:
 
     def _first_filter() -> Run[NextStep]:
         return (
-            retrieve_autoclassify_date_counts()
+            (start_run_timer(RUN_TIMER_NAME)
+            ^ retrieve_autoclassify_date_counts())
             >> display_autoclassify_date_counts
-            >> (lambda _: input_number_of_days_to_classify())
+            ^ input_number_of_days_to_classify()
             >> retrieve_articles
             >> _count_articles
             >> process_all_articles

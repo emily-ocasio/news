@@ -70,6 +70,23 @@ def distance_km(point1: tuple[float, float], point2: tuple[float, float]) -> flo
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     return earth_radius_km * c
 
+def format_elapsed(seconds: float) -> str:
+    """
+    Format elapsed seconds for compact summary display.
+    """
+    safe_seconds = max(0.0, seconds)
+    if safe_seconds < 60.0:
+        return f"{safe_seconds:.1f}s"
+    mins = int(safe_seconds // 60.0)
+    secs = safe_seconds - (mins * 60.0)
+    return f"{mins}m {secs:.1f}s"
+
+def elapsed_line(seconds: float) -> str:
+    """
+    Render elapsed summary line.
+    """
+    return f"Elapsed: {format_elapsed(seconds)}"
+
 conditional_roots = (
     'shot',
     'shooting',

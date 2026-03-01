@@ -653,12 +653,14 @@ def articles_to_filter_sql() -> str:
     SQL statement to return articles to filter based on a limit
     Only considers articles within the dataset called 'CLASS_WP'
     And that the AutoClass is 'M' (previously filtered as murder by regex)
+    Includes records not yet processed by GPT and retry candidates with
+    gptClass = 'ERR_M_NONE'
     """
     return """
         SELECT * FROM articles
         WHERE Dataset = 'CLASS_WP'
         AND AutoClass = 'M'
-        AND gptClass IS NULL
+        AND (gptClass IS NULL OR gptClass = 'ERR_M_NONE')
         ORDER BY PubDate
         LIMIT ?
     """
@@ -673,7 +675,7 @@ def articles_ready_for_filter_counts_sql() -> str:
         FROM articles
         WHERE Dataset = 'CLASS_WP'
         AND AutoClass = 'M'
-        AND gptClass IS NULL
+        AND (gptClass IS NULL OR gptClass = 'ERR_M_NONE')
         GROUP BY PubYear
         ORDER BY PubYear
     """

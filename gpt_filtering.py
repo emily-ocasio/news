@@ -7,7 +7,7 @@ from datetime import datetime
 import json
 import re
 
-from appstate import user_name
+from appstate import user_name, run_timer_name, run_timer_start_perf
 from pymonad import Run, with_namespace, to_prompts, Namespace, EnvKey, \
     PromptKey, pure, put_line, sql_query, SQL, SQLParams, Right, \
     Left, Either, StopRun, GPTModel, with_models, response_with_gpt_prompt, \
@@ -15,13 +15,15 @@ from pymonad import Run, with_namespace, to_prompts, Namespace, EnvKey, \
     GPTResponseTuple, GPTFullResponse, String, input_number, throw, \
     ErrorPayload, Tuple, resolve_prompt_template, GPTPromptTemplate, wal, ask, \
     view, bind_first, validate_all_pure, ValidationAcc, process_items, ProcessAcc, \
-    Array, Unit, unit, V, FailureDetail, FailureDetails, array_sequence
+    Array, Unit, unit, V, FailureDetail, FailureDetails, array_sequence, set_, \
+    monotonic_now, Maybe, Just, Nothing
 from pymonad.hashmap import HashMap
 from menuprompts import NextStep
 from article import Article, Articles, ArticleAppError, from_rows
 from calculations import articles_to_filter_sql, \
     articles_ready_for_filter_counts_sql, gpt_homicide_class_sql, \
     insert_gptresults_sql
+from calculations.calc_core import elapsed_line
 from state import WashingtonPostArticleHomicideClassification
 from validate import ArticleValidator, ArticleFailureDetail, \
     ArticleFailureType, SpecialCaseTerm, ArticleErrInfo, ArticleFailures
@@ -48,9 +50,36 @@ MODEL_KEY_STR = "filter"
 SPECIAL_CASE_TERMS = ('Hanafi','Urgo')
 CLASS_CODE_UNKNOWN = String("UNKNOWN")
 CLASS_CODE_NULL = String("NULL")
+RUN_TIMER_NAME = String("second_filter")
 
 print_gpt_response = bind_first(response_message, \
         lambda parsed_output: cast(FormatType, parsed_output).result_str)
+
+def start_run_timer(run_name: String) -> Run[Unit]:
+    """
+    Start/replace a named run timer in AppState.
+    """
+    return (set_(run_timer_name, run_name) ^ monotonic_now()) >> (lambda now:
+        set_(run_timer_start_perf, now) ^ pure(unit)
+    )
+
+def read_elapsed_display(expected_run_name: String) -> Run[Maybe[String]]:
+    """
+    Read elapsed display for the expected run timer if available.
+    """
+    def _just_elapsed(now: float, start: float) -> Run[Maybe[String]]:
+        maybe_value: Maybe[String] = Just(String(elapsed_line(now - start)))
+        return pure(maybe_value)
+
+    def _from_start(timer_name: str, start: float | None) -> Run[Maybe[String]]:
+        if str(timer_name) != str(expected_run_name) or start is None:
+            return pure(Nothing)
+        return monotonic_now() >> (lambda now: _just_elapsed(now, start))
+    return view(run_timer_name) >> (lambda timer_name:
+        view(run_timer_start_perf) >> (lambda start:
+            _from_start(timer_name, start)
+        )
+    )
 
 def _to_full(resp_t: GPTResponseTuple) -> Run[GPTFullResponse]:
     out: GPTFullResponse = Right(resp_t)
@@ -320,12 +349,13 @@ def render_filter_summary(
     gpt_processed_total: int,
     uncaught_failures_total: int,
     not_processed_due_to_stop: int,
+    elapsed_display: Maybe[String] = Nothing,
 ) -> String:
     """
     Render final summary for GPT filtering run.
     """
     header = "Filter run summary (stopped early)" if stopped else "Filter run summary"
-    return String(
+    summary = String(
         f"{header}\n"
         "Special-case detected (validation):\n"
         f"  Total: {special_total}\n"
@@ -338,6 +368,11 @@ def render_filter_summary(
         "Not processed due to stop (GPT-eligible queue):\n"
         f"  {not_processed_due_to_stop}"
     )
+    match elapsed_display:
+        case Just(display):
+            return String(f"{summary}\n{display}")
+        case _:
+            return summary
 
 def display_special_case_failures(special_failures: Array[ArticleFailures]) \
     -> Run[Unit]:
@@ -346,14 +381,14 @@ def display_special_case_failures(special_failures: Array[ArticleFailures]) \
     """
     if special_failures.length == 0:
         return pure(unit)
-    def display_failure(af: ArticleFailures) -> Run[None]:
+    def display_failure(af: ArticleFailures) -> Run[Unit]:
         special_case_details = af.details.filter(is_special_case_detail)
         special_case_terms = (lambda d: d.s) & special_case_details
         terms_text = ", ".join(str(s) for s in special_case_terms)
         return \
             put_line(f"Special case article:\n{af.item}") ^ \
             put_line(f"Article is a special case: {terms_text}\n") ^ \
-            pure(None)
+            pure(unit)
     return array_sequence(display_failure & special_failures) ^ pure(unit)
 
 def process_special_cases(special_failures: Array[ArticleFailures]) \
@@ -414,19 +449,18 @@ def after_processing(validation_acc: ValidationAcc[Article],
             lambda af: Tuple(af.item.record_id or 0, special_case_class_code(af))
         )
     )
-    summary = render_filter_summary(
-        stopped=False,
-        special_counts=special_counts_detected,
-        special_total=special_case_failures.length,
-        gpt_counts=gpt_counts,
-        gpt_processed_total=process_acc.results.length,
-        uncaught_failures_total=run_failures.length,
-        not_processed_due_to_stop=0
-    )
-
     def _after_special(
         special_result: Either[StopRun[ArticleFailures, ClassResult],
                                ProcessAcc[ArticleFailures, ClassResult]]
+    ) -> Run[NextStep]:
+        return read_elapsed_display(RUN_TIMER_NAME) >> (lambda elapsed_display:
+            _after_special_with_elapsed(special_result, elapsed_display)
+        )
+
+    def _after_special_with_elapsed(
+        special_result: Either[StopRun[ArticleFailures, ClassResult],
+                               ProcessAcc[ArticleFailures, ClassResult]],
+        elapsed_display: Maybe[String]
     ) -> Run[NextStep]:
         def is_special_run_error(failure_item) -> bool:
             return failure_item.details.length > 0 and \
@@ -435,7 +469,16 @@ def after_processing(validation_acc: ValidationAcc[Article],
         if isinstance(special_result, Left):
             return \
                 put_line("Special case processing stopped by user.\n") ^ \
-                put_line(summary) ^ \
+                put_line(render_filter_summary(
+                    stopped=False,
+                    special_counts=special_counts_detected,
+                    special_total=special_case_failures.length,
+                    gpt_counts=gpt_counts,
+                    gpt_processed_total=process_acc.results.length,
+                    uncaught_failures_total=run_failures.length,
+                    not_processed_due_to_stop=0,
+                    elapsed_display=elapsed_display
+                )) ^ \
                 pure(NextStep.CONTINUE)
         special_run_failures = special_result.r.failures.filter(is_special_run_error).length
         total_uncaught = run_failures.length + special_run_failures
@@ -446,7 +489,8 @@ def after_processing(validation_acc: ValidationAcc[Article],
             gpt_counts=gpt_counts,
             gpt_processed_total=process_acc.results.length,
             uncaught_failures_total=total_uncaught,
-            not_processed_due_to_stop=0
+            not_processed_due_to_stop=0,
+            elapsed_display=elapsed_display
         )
         if failures.length > 0:
             return \
@@ -492,33 +536,38 @@ def after_processing_either(
             special_case_failures = validation_acc.failures.filter(
                 lambda af: af.details.filter(is_special_case_detail).length > 0
             )
-            summary = render_filter_summary(
-                stopped=True,
-                special_counts=count_classes(
-                    special_case_failures.map(
-                        lambda af: Tuple(af.item.record_id or 0,
-                                         special_case_class_code(af))
+            return read_elapsed_display(RUN_TIMER_NAME) >> (lambda elapsed_display:
+                (lambda summary:
+                    put_line(
+                        "Processing stopped by user after "
+                        f"{processed} of {total} articles.\n"
+                    ) ^ \
+                    put_line(
+                        f"{failures} article(s) recorded failures before stop.\n"
+                    ) ^ \
+                    put_line(summary) ^ \
+                    pure(NextStep.CONTINUE)
+                )(
+                    render_filter_summary(
+                        stopped=True,
+                        special_counts=count_classes(
+                            special_case_failures.map(
+                                lambda af: Tuple(af.item.record_id or 0,
+                                                 special_case_class_code(af))
+                            )
+                        ),
+                        special_total=special_case_failures.length,
+                        gpt_counts=count_classes(stop.acc.results),
+                        gpt_processed_total=stop.acc.results.length,
+                        uncaught_failures_total=failures,
+                        not_processed_due_to_stop=max(
+                            0,
+                            validation_acc.valid_items.length - processed
+                        ),
+                        elapsed_display=elapsed_display
                     )
-                ),
-                special_total=special_case_failures.length,
-                gpt_counts=count_classes(stop.acc.results),
-                gpt_processed_total=stop.acc.results.length,
-                uncaught_failures_total=failures,
-                not_processed_due_to_stop=max(
-                    0,
-                    validation_acc.valid_items.length - processed
                 )
             )
-            return \
-                put_line(
-                    "Processing stopped by user after "
-                    f"{processed} of {total} articles.\n"
-                ) ^ \
-                put_line(
-                    f"{failures} article(s) recorded failures before stop.\n"
-                ) ^ \
-                put_line(summary) ^ \
-                pure(NextStep.CONTINUE)
         case Right(process_acc):
             return after_processing(validation_acc, process_acc)
     raise RuntimeError("Unreachable Either branch")
@@ -548,12 +597,14 @@ def second_filter() -> Run[NextStep]:
     and in correct location
     """
     def _second_filter() -> Run[NextStep]:
-        return \
-            retrieve_filter_counts() >> \
-            display_filter_counts >> \
-            (lambda _: input_number_to_filter()) >> \
-            retrieve_articles >> \
-            process_all_articles
+        return (
+            (start_run_timer(RUN_TIMER_NAME)
+            ^ retrieve_filter_counts())
+            >> display_filter_counts
+            ^ input_number_to_filter()
+            >> retrieve_articles
+            >> process_all_articles
+        )
 
     return (
         with_models(
