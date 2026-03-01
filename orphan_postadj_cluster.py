@@ -161,6 +161,7 @@ def _build_postadj_orphan_cluster_input() -> Run[Unit]:
                   CAST(NULL AS VARCHAR) AS victim_fullname_norm,
                   CAST(NULL AS VARCHAR) AS victim_fullname_concat,
                   CAST(NULL AS VARCHAR) AS victim_forename_norm,
+                  CAST(NULL AS VARCHAR) AS victim_middle_norm,
                   CAST(NULL AS VARCHAR) AS victim_surname_norm,
                   vep.mode_weapon AS weapon,
                   vep.mode_circumstance AS circumstance,

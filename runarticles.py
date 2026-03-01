@@ -5,6 +5,8 @@ Monadic version
 from typing import cast
 import sqlite3
 import duckdb
+import os
+import tempfile
 from openai import OpenAI
 from pymonad import Run, run_reader, run_state, run_base_effect, run_except, \
     run_sql, run_openai, run_splink, Environment, Namespace, EnvKey, ErrorPayload, \
@@ -19,6 +21,32 @@ from st_initialize import SentenceTransformerModel
 from secr_apis.gpt3_key import GPT_API_KEY
 from secr_apis.mar_key import MAR_API_KEY
 
+def _configure_duckdb_pragmas(duck_con: duckdb.DuckDBPyConnection) -> None:
+    """
+    Apply DuckDB runtime pragmas for better large-query performance.
+    Can be overridden via env vars:
+      - DUCKDB_THREADS
+      - DUCKDB_MEMORY_LIMIT (e.g. '16GB')
+      - DUCKDB_TEMP_DIRECTORY
+    """
+    default_threads = max(1, os.cpu_count() or 1)
+    threads_raw = os.getenv("DUCKDB_THREADS", str(default_threads)).strip()
+    try:
+        threads = max(1, int(threads_raw))
+    except ValueError:
+        threads = default_threads
+
+    memory_limit = os.getenv("DUCKDB_MEMORY_LIMIT", "16GB").strip() or "16GB"
+
+    temp_dir = os.getenv("DUCKDB_TEMP_DIRECTORY", "").strip()
+    if not temp_dir:
+        temp_dir = os.path.join(tempfile.gettempdir(), "duckdb_tmp_news")
+    os.makedirs(temp_dir, exist_ok=True)
+
+    duck_con.execute(f"PRAGMA threads={threads};")
+    duck_con.execute(f"PRAGMA memory_limit='{memory_limit}';")
+    duck_con.execute(f"PRAGMA temp_directory='{temp_dir}';")
+
 def main() -> None:
     """
     Main program that binds the intents and runs the Run monads.
@@ -28,6 +56,7 @@ def main() -> None:
     sqlite_con = sqlite3.connect(db_path)
     sqlite_con.row_factory = sqlite3.Row
     duck_con = duckdb.connect(duckdb_path)
+    _configure_duckdb_pragmas(duck_con)
     try:
         duck_con.execute("INSTALL sqlite_scanner;")
         duck_con.execute("LOAD sqlite_scanner;")
