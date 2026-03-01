@@ -65,6 +65,7 @@ def _run_visualization(
 SPLINK_PROMPTS = (
     "[D]edup",
     "[O]rphan",
+    "[P]ost-adj orphan cluster",
     "[S]HR",
 )
 SPLINK_CHART_PROMPTS = (
@@ -86,6 +87,7 @@ class SplinkChoice(Enum):
     """
     DEDUP = MenuChoice("D")
     ORPHAN = MenuChoice("O")
+    POSTADJ_ORPHAN_CLUSTER = MenuChoice("P")
     SHR = MenuChoice("S")
     QUIT = MenuChoice("Q")
 
@@ -109,6 +111,8 @@ def _choice_to_type(choice: SplinkChoice) -> SplinkType:
             return SplinkType.DEDUP
         case SplinkChoice.ORPHAN:
             return SplinkType.ORPHAN
+        case SplinkChoice.POSTADJ_ORPHAN_CLUSTER:
+            return SplinkType.POSTADJ_ORPHAN_CLUSTER
         case SplinkChoice.SHR:
             return SplinkType.SHR
         case _:
@@ -134,7 +138,7 @@ def _chart_choice_to_type(choice: SplinkChartChoice) -> SplinkChartType:
 
 
 def _chart_prompts_for_type(splink_key: SplinkType) -> MenuPrompts:
-    if splink_key == SplinkType.DEDUP:
+    if splink_key in (SplinkType.DEDUP, SplinkType.POSTADJ_ORPHAN_CLUSTER):
         return MenuPrompts(SPLINK_CHART_PROMPTS_DEDUP)
     return MenuPrompts(SPLINK_CHART_PROMPTS)
 

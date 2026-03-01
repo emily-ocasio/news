@@ -21,6 +21,7 @@ from .splink_types import (
     StringBlockingRule,
     StringBlockingRules,
     SplinkChartType,
+    SplinkDedupeResult,
     SplinkDedupeJob,
     SplinkVisualizeJob,
     TrainingBlockToComparisonLevelMap,
@@ -61,7 +62,7 @@ def splink_dedupe_job(
     blocked_pairs_out: BlockedPairsTableName = BlockedPairsTableName(""),
     capture_blocked_edges: bool = True,
     u_estimation_max_pairs: int = 100_000_000,
-) -> Run[tuple[Any, str, str]]:
+) -> Run[SplinkDedupeResult]:
     return Run(
         lambda self: self._perform(
             SplinkDedupeJob(

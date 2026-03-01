@@ -228,6 +228,18 @@ def _cluster_postadj_singletons() -> Run[Unit]:
             ^ sql_exec(
                 SQL(
                     """--sql
+                    CREATE OR REPLACE TABLE postadj_orphan_clusters_member_provenance (
+                      cluster_id VARCHAR,
+                      member_id VARCHAR,
+                      linked_from VARCHAR,
+                      linked_prob DOUBLE
+                    );
+                    """
+                )
+            )
+            ^ sql_exec(
+                SQL(
+                    """--sql
                     CREATE OR REPLACE TABLE postadj_orphan_cluster_blocked_edges (
                       id_l VARCHAR,
                       id_r VARCHAR,
@@ -246,7 +258,7 @@ def _cluster_postadj_singletons() -> Run[Unit]:
             input_table=PredictionInputTableName("postadj_orphan_cluster_input"),
             settings=settings,
             predict_threshold=0.25,
-            cluster_threshold=0.0,
+            cluster_threshold=0.5,
             pairs_out=PairsTableName("postadj_orphan_cluster_pairs"),
             clusters_out=ClustersTableName("postadj_orphan_clusters"),
             deterministic_rules=ORPHAN_DETERMINISTIC_BLOCKS,
@@ -260,8 +272,10 @@ def _cluster_postadj_singletons() -> Run[Unit]:
             blocked_pairs_out=BlockedPairsTableName("postadj_orphan_cluster_blocked_edges"),
             capture_blocked_edges=False,
         ) >> (
-            lambda outnames: (
-                put_line(f"[O] Wrote {outnames[1]} and {outnames[2]} in DuckDB.")
+            lambda result: (
+                put_line(
+                    f"[O] Wrote {result.pairs_table} and {result.clusters_table} in DuckDB."
+                )
                 ^ sql_exec(
                     SQL(
                         """--sql
@@ -747,6 +761,8 @@ def _export_postadj_orphan_clusters_excel() -> Run[Unit]:
             v.article_ids_csv,
             o.entity_origin_type,
             CAST(NULL AS VARCHAR) AS adjudication_reason_summary,
+            CAST(NULL AS VARCHAR) AS linked_from,
+            CAST(NULL AS DOUBLE) AS linked_prob,
             0 AS band_key,
             v.victim_entity_id AS order_group
           FROM victim_entity_reps_postadj_orphancluster v
@@ -801,6 +817,8 @@ def _export_postadj_orphan_clusters_excel() -> Run[Unit]:
             m.source_article_ids_csv AS article_ids_csv,
             'clustered_singleton_orphans' AS entity_origin_type,
             al.reason_summary AS adjudication_reason_summary,
+            p.linked_from,
+            p.linked_prob,
             CASE
               WHEN MOD(clr.leader_rank, 2) = 1
                 THEN 1
@@ -814,6 +832,9 @@ def _export_postadj_orphan_clusters_excel() -> Run[Unit]:
             ON clr.cluster_id = m.cluster_id
           LEFT JOIN adjudication_lookup al
             ON al.orphan_id = m.unique_id
+          LEFT JOIN postadj_orphan_clusters_member_provenance p
+            ON p.cluster_id = m.cluster_id
+           AND p.member_id = m.unique_id
         ),
         unchanged_singletons AS (
           SELECT
@@ -842,6 +863,8 @@ def _export_postadj_orphan_clusters_excel() -> Run[Unit]:
             i.source_article_ids_csv AS article_ids_csv,
             'singleton_orphan_unresolved' AS entity_origin_type,
             al.reason_summary AS adjudication_reason_summary,
+            CAST(NULL AS VARCHAR) AS linked_from,
+            CAST(NULL AS DOUBLE) AS linked_prob,
             3 AS band_key,
             i.unique_id AS order_group
           FROM postadj_orphan_cluster_input i
@@ -860,6 +883,8 @@ def _export_postadj_orphan_clusters_excel() -> Run[Unit]:
           rec_type,
           uid,
           entity_uid,
+          linked_from,
+          linked_prob,
           midpoint_day,
           date_precision,
           incident_date,

@@ -650,7 +650,7 @@ def match_article_to_shr_victims() -> Run[NextStep]:
                         2 AS city_id  -- Corresponds to DC (PublicationID of Washi Post)
                     FROM sqldb.shr
                     WHERE State = 'District of Columbia' -- Only DC for now
-                    AND Year >= 1977 AND Year <= 1984 -- Limit to 1977-84 for now
+                    AND Year >= 1977 AND Year <= 1987 -- Limit to 1977-87 for now
                 ) AS shr_rows
                 """
             )
@@ -713,8 +713,8 @@ def match_article_to_shr_victims() -> Run[NextStep]:
             visualize=False,
             splink_key=SplinkType.SHR,
         ) >>
-        (lambda pairs_clusters: put_line(
-            f"Linkage complete. Pairs table: {pairs_clusters[1]}, Clusters table: {pairs_clusters[2]}"
+        (lambda result: put_line(
+            f"Linkage complete. Pairs table: {result.pairs_table}, Clusters table: {result.clusters_table}"
         ) ^
         sql_exec(
             SQL(
@@ -724,7 +724,7 @@ def match_article_to_shr_victims() -> Run[NextStep]:
                     unique_id_l AS entity_uid,
                     unique_id_r AS shr_id,
                     match_probability
-                FROM {pairs_clusters[1]}
+                FROM {result.pairs_table}
                 """
             )
         ) ^

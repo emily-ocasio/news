@@ -88,8 +88,8 @@ def _dedupe_named_victims(_: Unit) -> Run[Unit]:
         blocked_pairs_out=BlockedPairsTableName("victim_cluster_blocked_edges"),
         u_estimation_max_pairs=1_000_000,
     ) >> (
-        lambda outnames: put_line(
-            f"[D] Wrote {outnames[1]} and {outnames[2]} in DuckDB."
+        lambda result: put_line(
+            f"[D] Wrote {result.pairs_table} and {result.clusters_table} in DuckDB."
         )
     ) ^ pure(unit)
 
@@ -698,13 +698,15 @@ def _export_final_clusters_excel() -> Run[Unit]:
       WHERE v.victim_surname_norm IS NOT NULL
       GROUP BY vc.cluster_id
     )
-    SELECT
-      c.cluster_id,
-      c.member_count,
-      cn.canonical_surname,
-      v.article_id,
-      v.victim_row_id,
-      v.city_id,
+	    SELECT
+	      c.cluster_id,
+	      c.member_count,
+	      cn.canonical_surname,
+	      v.article_id,
+	      v.victim_row_id,
+	      cp.linked_from,
+	      cp.linked_prob,
+	      v.city_id,
       v.incident_date,
       v.midpoint_day,
       v.date_precision,
@@ -723,17 +725,20 @@ def _export_final_clusters_excel() -> Run[Unit]:
       v.address_type,
       v.geo_address_short,
       v.geo_address_short_2,
-      v.geo_score,
-      COALESCE(v.geo_address_norm, '') AS address,
-      COALESCE(v.offender_name_norm, '') AS offender,
-      COALESCE(v.weapon, '') AS weapon
-    FROM victim_clusters_counts c
-    JOIN victim_clusters vc
-      ON c.cluster_id = vc.cluster_id
-    JOIN victims_cached_enh v
-      ON vc.victim_row_id = v.victim_row_id
-    LEFT JOIN canon cn
-      ON c.cluster_id = cn.cluster_id
+	      v.geo_score,
+	      COALESCE(v.geo_address_norm, '') AS address,
+	      COALESCE(v.offender_name_norm, '') AS offender,
+	      COALESCE(v.weapon, '') AS weapon
+	    FROM victim_clusters_counts c
+	    JOIN victim_clusters vc
+	      ON c.cluster_id = vc.cluster_id
+	    JOIN victims_cached_enh v
+	      ON vc.victim_row_id = v.victim_row_id
+	    LEFT JOIN canon cn
+	      ON c.cluster_id = cn.cluster_id
+	    LEFT JOIN victim_clusters_member_provenance cp
+	      ON cp.cluster_id = c.cluster_id
+	     AND cp.member_id = CAST(v.victim_row_id AS VARCHAR)
     ORDER BY
       cn.canonical_surname NULLS LAST,
       c.cluster_id,
@@ -803,10 +808,12 @@ def _export_final_clusters_excel() -> Run[Unit]:
                       change,
                       cluster_id,
                       member_count,
-                      canonical_surname,
-                      article_id,
-                      victim_row_id,
-                      city_id,
+	                      canonical_surname,
+	                      article_id,
+	                      victim_row_id,
+	                      linked_from,
+	                      linked_prob,
+	                      city_id,
                       incident_date,
                       midpoint_day,
                       date_precision,
@@ -826,11 +833,11 @@ def _export_final_clusters_excel() -> Run[Unit]:
                       geo_address_short,
                       geo_address_short_2,
                       geo_score,
-                      address,
-                      offender,
-                      weapon,
-                      concat(cast(source AS varchar), '::', cast(cluster_id AS varchar)) AS __band_group
-                    FROM cluster_diffs
+	                      address,
+	                      offender,
+	                      weapon,
+	                      concat(cast(source AS varchar), '::', cast(cluster_id AS varchar)) AS __band_group
+	                    FROM cluster_diffs
                     ORDER BY
                       change_order,
                       family_canonical_surname NULLS LAST,

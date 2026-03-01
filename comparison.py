@@ -813,9 +813,15 @@ TF_WEAPON_COMP_SHR = cl.CustomComparison(
         cll.ExactMatchLevel("weapon").configure(
             tf_adjustment_column="weapon"
         ),
-        _comparison_level_within_group(
-            "weapon",
-            Array(("firearm","shotgun"))
+        cll.Or(
+            _comparison_level_within_group(
+                "weapon",
+                Array(("firearm","shotgun"))
+            ),
+            _comparison_level_within_group(
+                "weapon",
+                Array(("personal weapon", "blunt object"))
+            )
         ).configure(label_for_charts="firearm/shotgun group match"),
         cll.ElseLevel()
     ]

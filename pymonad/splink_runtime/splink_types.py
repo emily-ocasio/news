@@ -316,6 +316,10 @@ class ResultClustersTableName(TableName):
     """Actual clusters table returned by the dedupe run."""
 
 
+class ResultProvenanceTableName(TableName):
+    """Actual provenance table returned by the dedupe run."""
+
+
 class ExclusionInputTableName(TableName):
     """Input table name used after exclusion enrichment."""
 
@@ -411,10 +415,17 @@ class BlockedEdgesRows:
 
 
 @dataclass(frozen=True)
+class ClusterProvenanceRows:
+    """Cluster-member provenance dataframe wrapper."""
+    df: DataFrame
+
+
+@dataclass(frozen=True)
 class ClusterResult:
     """Outputs from constrained clustering."""
     clusters: ClusteredRows
     blocked: Maybe[BlockedEdgesRows]
+    provenance: Maybe[ClusterProvenanceRows]
 
 
 TableNameType = type[TableRef]
@@ -538,6 +549,15 @@ class SplinkPredictResult:
     do_not_link_right_col: BlockedIdRightColumnName
     blocked_pairs_out: BlockedPairsTableName
     unique_pairs_table: UniquePairsTableName
+
+
+@dataclass(frozen=True)
+class SplinkDedupeResult:
+    """Final dedupe outputs including optional provenance table metadata."""
+    linker: Linker
+    pairs_table: str
+    clusters_table: str
+    provenance_table: Maybe[str]
 
 
 @dataclass(frozen=True)

@@ -9,7 +9,7 @@ import duckdb
 from splink import DuckDBAPI, Linker
 
 from ..array import Array
-from ..maybe import Just
+from ..maybe import Just, nothing
 from ..monad import Unit, unit
 from ..run import ErrorPayload, Run, ask, put_splink_context, pure, throw
 from ..runsql import with_duckdb
@@ -35,7 +35,9 @@ from .splink_tables import (
 from .splink_types import (
     ResultClustersTableName,
     ResultPairsTableName,
+    ResultProvenanceTableName,
     SplinkContext,
+    SplinkDedupeResult,
     SplinkDedupeJob,
     SplinkLinkType,
     SplinkPhase,
@@ -155,15 +157,27 @@ def _splink_dedupe_predict_pairs() -> Run[Unit]:
 def _splink_dedupe_finalize(
     ctx: SplinkContext,
     linker: Linker,
-) -> Run[tuple[Linker, str, str]]:
-    def _with_pairs(pairs_table: ResultPairsTableName) -> Run[tuple[Linker, str, str]]:
+) -> Run[SplinkDedupeResult]:
+    def _with_pairs(pairs_table: ResultPairsTableName) -> Run[SplinkDedupeResult]:
         clusters_table = tables_get_optional(ctx.tables, ResultClustersTableName)
-        return context_replace(phase=SplinkPhase.DONE) ^ pure((linker, str(pairs_table), str(clusters_table)))
+        provenance_table = tables_get_optional(ctx.tables, ResultProvenanceTableName)
+        return context_replace(phase=SplinkPhase.DONE) ^ pure(
+            SplinkDedupeResult(
+                linker=linker,
+                pairs_table=str(pairs_table),
+                clusters_table=str(clusters_table),
+                provenance_table=(
+                    Just(str(provenance_table))
+                    if provenance_table.is_present()
+                    else nothing()
+                ),
+            )
+        )
 
     return tables_get_required(ctx.tables, ResultPairsTableName) >> _with_pairs
 
 
-def run_splink_dedupe_monadic(job: SplinkDedupeJob) -> Run[tuple[Linker, str, str]]:
+def run_splink_dedupe_monadic(job: SplinkDedupeJob) -> Run[SplinkDedupeResult]:
     chain = (
         _init_splink_dedupe_context(job)
         ^ _configure_splink_logger_step()

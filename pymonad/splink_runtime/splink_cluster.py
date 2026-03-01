@@ -1,6 +1,7 @@
 """Splink runtime clustering and pair post-processing helpers."""
 from __future__ import annotations
 
+from collections import deque
 from typing import Any
 
 import networkx as nx
@@ -28,6 +29,7 @@ from .splink_types import (
     ClusterEdgeRightId,
     ClusterEdgeWeight,
     ClusterPairsTableName,
+    ClusterProvenanceRows,
     ClusterResult,
     ClusteredRows,
     ClustersCountsTableName,
@@ -40,6 +42,7 @@ from .splink_types import (
     PairsTableName,
     ResultClustersTableName,
     ResultPairsTableName,
+    ResultProvenanceTableName,
     SplinkContext,
     SplinkPairsSchemaError,
     SplinkPhase,
@@ -151,7 +154,7 @@ def _constrained_greedy_clusters(
     unique_id_column_name: str,
     capture_blocked: bool = False,
     blocked_id_cols: tuple[str, str] = ("id_l", "id_r"),
-) -> tuple[DataFrame, DataFrame | None]:
+) -> tuple[DataFrame, DataFrame | None, DataFrame]:
     unique_ids: list[str] = []
     exclusion_by_id: dict[str, str] = {}
     for uid, excl in nodes:
@@ -197,12 +200,14 @@ def _constrained_greedy_clusters(
 
     known = set(parent.keys())
     blocked_rows: list[dict[str, Any]] = []
+    accepted_edges: list[tuple[str, str, float]] = []
     id_left_col, id_right_col = blocked_id_cols
     for uid_l, uid_r, prob in edges:
         if uid_l in known and uid_r in known:
             ok, shared, same_component = union_status(uid_l, uid_r)
             if ok:
                 union(uid_l, uid_r)
+                accepted_edges.append((uid_l, uid_r, prob))
             elif capture_blocked and not same_component and shared:
                 print(
                     "Blocked union: "
@@ -235,13 +240,75 @@ def _constrained_greedy_clusters(
             rows.append({"cluster_id": cluster_id, unique_id_column_name: uid})
 
     clusters_df = DataFrame(rows, columns=["cluster_id", unique_id_column_name])
+    adjacency: dict[str, list[tuple[str, float]]] = {uid: [] for uid in unique_ids}
+    for uid_l, uid_r, prob in accepted_edges:
+        adjacency[uid_l].append((uid_r, prob))
+        adjacency[uid_r].append((uid_l, prob))
+
+    provenance_rows: list[dict[str, Any]] = []
+    for members in members_sorted:
+        if not members:
+            continue
+        cluster_id = members[0]
+        member_set = set(members)
+        visited: set[str] = set([cluster_id])
+        provenance_rows.append(
+            {
+                "cluster_id": cluster_id,
+                "member_id": cluster_id,
+                "linked_from": None,
+                "linked_prob": None,
+            }
+        )
+        queue: deque[str] = deque([cluster_id])
+        while queue:
+            current = queue.popleft()
+            neighbors = sorted(
+                (
+                    (nbr, prob)
+                    for nbr, prob in adjacency.get(current, [])
+                    if nbr in member_set and nbr not in visited
+                ),
+                key=lambda item: item[0],
+            )
+            for neighbor, prob in neighbors:
+                visited.add(neighbor)
+                queue.append(neighbor)
+                provenance_rows.append(
+                    {
+                        "cluster_id": cluster_id,
+                        "member_id": neighbor,
+                        "linked_from": current,
+                        "linked_prob": prob,
+                    }
+                )
+        # Defensive fallback for malformed/disconnected accepted edge graph.
+        for orphan in sorted(member_set.difference(visited)):
+            provenance_rows.append(
+                {
+                    "cluster_id": cluster_id,
+                    "member_id": orphan,
+                    "linked_from": None,
+                    "linked_prob": None,
+                }
+            )
+
+    provenance_df = DataFrame(
+        provenance_rows,
+        columns=[
+            "cluster_id",
+            "member_id",
+            "linked_from",
+            "linked_prob",
+        ],
+    )
     blocked_df = None
     if capture_blocked:
         blocked_df = DataFrame(
             blocked_rows,
             columns=[id_left_col, id_right_col, "match_probability", "shared_exclusion_ids"],
         )
-    return clusters_df, blocked_df
+    return clusters_df, blocked_df, provenance_df
 
 
 def _set_cluster_result(ctx: SplinkContext) -> Run[Unit]:
@@ -253,7 +320,7 @@ def _set_cluster_result(ctx: SplinkContext) -> Run[Unit]:
 
     do_not_link_table = tables_get_optional(ctx.tables, DoNotLinkTableName)
     capture_blocked = ctx.capture_blocked_edges and do_not_link_table.is_present()
-    clusters_df, blocked_df = _constrained_greedy_clusters(
+    clusters_df, blocked_df, provenance_df = _constrained_greedy_clusters(
         nodes=_to_nodes(),
         edges=_to_edges(),
         unique_id_column_name=str(ctx.unique_id_col),
@@ -261,7 +328,12 @@ def _set_cluster_result(ctx: SplinkContext) -> Run[Unit]:
         blocked_id_cols=(str(ctx.do_not_link_left_col), str(ctx.do_not_link_right_col)),
     )
     blocked = nothing() if blocked_df is None else Just(BlockedEdgesRows(blocked_df))
-    return context_replace(cluster_result=Just(ClusterResult(ClusteredRows(clusters_df), blocked)))
+    provenance = Just(ClusterProvenanceRows(provenance_df))
+    return context_replace(
+        cluster_result=Just(
+            ClusterResult(ClusteredRows(clusters_df), blocked, provenance)
+        )
+    )
 
 
 def _result_pairs_table_from_ctx(ctx: SplinkContext) -> ResultPairsTableName:
@@ -290,9 +362,25 @@ def _persist_diagnostic_blocked_edges(ctx: SplinkContext) -> Run[Unit]:
 
 def _persist_final_clusters(ctx: SplinkContext) -> Run[Unit]:
     clusters_out = ctx.tables.get_required(ClustersTableName)
+    provenance_out = ResultProvenanceTableName(f"{clusters_out}_member_provenance")
     blocked_pairs_out = tables_get_optional(ctx.tables, BlockedPairsTableName)
     match ctx.cluster_result:
         case Just(result):
+            def _persist_provenance() -> Run[Unit]:
+                match result.provenance:
+                    case Just(provenance_rows):
+                        return (
+                            sql_register("_constrained_cluster_provenance_df", provenance_rows.df)
+                            ^ sql_exec(
+                                SQL(
+                                    f"CREATE OR REPLACE TABLE {provenance_out} "
+                                    "AS SELECT * FROM _constrained_cluster_provenance_df"
+                                )
+                            )
+                        )
+                    case _:
+                        return pure(unit)
+
             def _persist_blocked() -> Run[Unit]:
                 match result.blocked:
                     case Just(blocked_rows) if blocked_pairs_out.is_present():
@@ -306,6 +394,7 @@ def _persist_final_clusters(ctx: SplinkContext) -> Run[Unit]:
             return (
                 sql_register("_constrained_clusters_df", result.clusters.df)
                 ^ sql_exec(SQL(f"CREATE OR REPLACE TABLE {clusters_out} AS SELECT * FROM _constrained_clusters_df"))
+                ^ _persist_provenance()
                 ^ _persist_blocked()
                 ^ sql_exec(SQL(f"""
                     CREATE OR REPLACE TABLE {ClustersCountsTableName.from_clusters(clusters_out)} AS
@@ -314,7 +403,10 @@ def _persist_final_clusters(ctx: SplinkContext) -> Run[Unit]:
                     GROUP BY cluster_id
                 """))
                 ^ context_replace(
-                    tables=ctx.tables.set(_result_pairs_table_from_ctx(ctx)).set(ResultClustersTableName(str(clusters_out))),
+                    tables=ctx.tables
+                    .set(_result_pairs_table_from_ctx(ctx))
+                    .set(ResultClustersTableName(str(clusters_out)))
+                    .set(provenance_out),
                     phase=SplinkPhase.PERSIST,
                 )
             )

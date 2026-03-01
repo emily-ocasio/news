@@ -20,6 +20,7 @@ from .splink_types import (
     DoNotLinkTableName,
     ComparisonLevelKey,
     PostTrainRatioCopyComparisons,
+    SplinkDedupeResult,
 )
 
 __all__ = [
@@ -40,4 +41,5 @@ __all__ = [
     "DoNotLinkTableName",
     "ComparisonLevelKey",
     "PostTrainRatioCopyComparisons",
+    "SplinkDedupeResult",
 ]

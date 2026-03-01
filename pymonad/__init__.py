@@ -121,6 +121,7 @@ from .runsplink import (
     DoNotLinkTableName,
     ComparisonLevelKey,
     PostTrainRatioCopyComparisons,
+    SplinkDedupeResult,
 )
 from .string import Char, String, from_char_array, from_string
 from .traverse import array_sequence, array_traverse

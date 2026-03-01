@@ -478,7 +478,7 @@ def _link_orphans_to_entities(
             em_max_runs=1,
             splink_key=SplinkType.ORPHAN,
         ) >> (
-            lambda outnames: put_line(f"[U] Wrote {outnames[1]} in DuckDB.")
+            lambda result: put_line(f"[U] Wrote {result.pairs_table} in DuckDB.")
         ) ^ pure(unit)
 
     if reuse_model:

@@ -27,8 +27,8 @@ def run_splink(prog: Run[A]) -> Run[A]:
                     if con is None:
                         return throw(ErrorPayload("Splink requires a DuckDB connection."))._step(current)
                     out = run_splink_dedupe_monadic(intent)._step(current)
-                    put_splink_linker(intent.splink_key, out[0])._step(current)
-                    save_splink_model(intent.splink_key, out[0], intent.input_table)
+                    put_splink_linker(intent.splink_key, out.linker)._step(current)
+                    save_splink_model(intent.splink_key, out.linker, intent.input_table)
                     return out
                 case SplinkVisualizeJob():
                     linker = get_splink_linker(intent.splink_key)._step(current)
