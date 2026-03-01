@@ -244,6 +244,7 @@ def _build_representative_victims() -> Run[Unit]:
                     m.summary_vec[i.generate_series] AS val
                 FROM victim_entity_members m
                 CROSS JOIN generate_series(1, 1536) AS i
+                WHERE m.summary_vec IS NOT NULL
             ),
             avg_per_component AS (
                 SELECT
@@ -710,6 +711,7 @@ def _export_final_clusters_excel() -> Run[Unit]:
       v.victim_name_raw,
       v.victim_fullname_concat,
       v.victim_forename_norm,
+      v.victim_middle_norm,
       v.victim_surname_norm,
       v.victim_age,
       v.victim_count,
@@ -811,6 +813,7 @@ def _export_final_clusters_excel() -> Run[Unit]:
                       victim_name_raw,
                       victim_fullname_concat,
                       victim_forename_norm,
+                      victim_middle_norm,
                       victim_surname_norm,
                       victim_age,
                       victim_count,

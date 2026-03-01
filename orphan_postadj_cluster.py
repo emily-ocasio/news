@@ -488,13 +488,37 @@ def _build_postadj_orphancluster_canonical() -> Run[Unit]:
                     ON m.cluster_id = c.cluster_id
                    AND m.max_age_cnt = c.age_cnt
                   GROUP BY c.cluster_id
+                ),
+                vector_per_component AS (
+                  SELECT
+                    m.cluster_id,
+                    u.comp_idx,
+                    u.val
+                  FROM members m
+                  CROSS JOIN UNNEST(m.summary_vec) WITH ORDINALITY AS u(val, comp_idx)
+                  WHERE m.summary_vec IS NOT NULL
+                ),
+                vector_avg_per_component AS (
+                  SELECT
+                    cluster_id,
+                    comp_idx,
+                    AVG(val) AS avg_val
+                  FROM vector_per_component
+                  GROUP BY cluster_id, comp_idx
+                ),
+                vector_agg AS (
+                  SELECT
+                    cluster_id,
+                    CAST(array_agg(avg_val ORDER BY comp_idx) AS DOUBLE[]) AS summary_vec
+                  FROM vector_avg_per_component
+                  GROUP BY cluster_id
                 )
                 SELECT
                   MIN(unique_id) AS victim_entity_id,
                   mode(city_id) FILTER (WHERE city_id IS NOT NULL) AS city_id,
                   MIN(midpoint_day) AS min_event_day,
                   MAX(midpoint_day) AS max_event_day,
-                  CAST(NULL AS DOUBLE[1536]) AS summary_vec,
+                  va.summary_vec AS summary_vec,
                   CASE
                     WHEN da.n_day > 0 THEN 'day'
                     WHEN da.n_month > 0 THEN 'month'
@@ -560,10 +584,12 @@ def _build_postadj_orphancluster_canonical() -> Run[Unit]:
                   ON rb.cluster_id = m.cluster_id
                 LEFT JOIN offender_age_best oab
                   ON oab.cluster_id = m.cluster_id
+                LEFT JOIN vector_agg va
+                  ON va.cluster_id = m.cluster_id
                 GROUP BY m.cluster_id, da.n_day, da.n_month, da.mode_day_date, da.mode_month_mid, da.mode_year_mid,
                          lb.canonical_geo_address_norm, lb.canonical_geo_address_short, lb.canonical_geo_address_short_2,
                          lb.canonical_geo_score, lb.canonical_address_type, lb.canonical_lat, lb.canonical_lon, rb.canonical_relationship,
-                         aa.avg_age, aa.min_age, aa.max_age, oab.canonical_offender_age;
+                         aa.avg_age, aa.min_age, aa.max_age, oab.canonical_offender_age, va.summary_vec;
                 """
             )
         )

@@ -115,6 +115,20 @@ class ComparisonComp(StrEnum):
         _null_comp_builder("victim_forename_norm"),
         _exact_comp_builder("victim_surname_norm"),
     ))
+    VICTIM_SURNAME_MIDDLE_ALIAS = (
+        "victim_forename_norm_l IS NOT NULL "
+        "AND victim_forename_norm_r IS NOT NULL "
+        "AND victim_surname_norm_l IS NOT NULL "
+        "AND victim_surname_norm_r IS NOT NULL "
+        "AND victim_forename_norm_l = victim_forename_norm_r "
+        "AND ("
+        "(victim_middle_norm_r IS NOT NULL "
+        "AND victim_surname_norm_l = victim_middle_norm_r) "
+        "OR "
+        "(victim_middle_norm_l IS NOT NULL "
+        "AND victim_surname_norm_r = victim_middle_norm_l)"
+        ")"
+    )
     OFFENDER_NULL = _null_comp_builder("offender_fullname_concat")
     OFFENDER_CLOSE = _jw_similarity_comp_builder(
         "offender_forename_norm", "offender_surname_norm", 0.85)
@@ -212,19 +226,24 @@ NAME_COMP = cl.CustomComparison(
             "exact match victim name",
             ComparisonComp.EXACT_VICTIM_FULLNAME.value
         ).to_dict(),
-        ComparisonLevel(
-            "Reversed exact or JW >= 0.80 victim names or exact single surname",
-            ' OR '.join((
-                ComparisonComp.VICTIM_EXACT_REVERSED.value,
+        cll.Or(
+            cll.CustomLevel(ComparisonComp.VICTIM_EXACT_REVERSED.value),
+            cll.CustomLevel(
                 _jw_similarity_comp_builder(
                     "victim_forename_norm",
                     "victim_surname_norm",
                     0.80
-                ),
-                ComparisonComp.VICTIM_SURNAME_ONLY.value,
-                ComparisonComp.VICTIM_FORENAME_ONLY.value,
-            ))
-        ).to_dict(),
+                )
+            ),
+            cll.CustomLevel(ComparisonComp.VICTIM_SURNAME_ONLY.value),
+            cll.CustomLevel(ComparisonComp.VICTIM_FORENAME_ONLY.value),
+            cll.CustomLevel(ComparisonComp.VICTIM_SURNAME_MIDDLE_ALIAS.value),
+        ).configure(
+            label_for_charts=(
+                "Reversed exact or JW >= 0.80 victim names "
+                "or exact single surname"
+            )
+        ),
         cll.Or(
             cll.JaroWinklerLevel("victim_forename_norm", 0.95),
             cll.JaroWinklerLevel("victim_surname_norm", 0.95)
@@ -590,10 +609,17 @@ VICTIM_SEX_COMP = cl.CustomComparison(
     ]
 )
 
-DIST_COMP = cl.DistanceInKMAtThresholds(
-    lat_col="lat",
-    long_col="lon",
-    km_thresholds=[0.1, 0.5, 1.5],
+DIST_COMP = cl.CustomComparison(
+    output_column_name="location",
+    comparison_levels=[
+        cll.NullLevel(
+            ColumnExpression("geo_address_norm").nullif("UNKNOWN").nullif("")
+        ),
+        cll.DistanceInKMLevel("lat", "lon", 0.1),
+        cll.DistanceInKMLevel("lat", "lon", 0.5),
+        cll.DistanceInKMLevel("lat", "lon", 1.5),
+        cll.ElseLevel(),
+    ],
 )
 
 DIST_STREET_TYPE = cllc.Or(
@@ -641,7 +667,9 @@ DIST_PLACE_TYPE = cllc.Or(
 DIST_COMP_NEW = cl.CustomComparison(
     output_column_name = "location",
     comparison_levels = [
-        cll.NullLevel(ColumnExpression("geo_address_norm").nullif("UNKNOWN")),
+        cll.NullLevel(
+            ColumnExpression("geo_address_norm").nullif("UNKNOWN").nullif("")
+        ),
         cllc.Or(
             cllc.And(
                 cll.DistanceInKMLevel("lat", "lon", 0.0001),

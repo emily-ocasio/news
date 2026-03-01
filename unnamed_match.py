@@ -12,7 +12,6 @@ from blocking import (
     ORPHAN_VICTIM_BLOCKS,
     ORPHAN_DETERMINISTIC_BLOCKS,
     ORPHAN_TRAINING_BLOCKS,
-    TrainBlockRule,
     TRAINING_BLOCK_LEVEL_MAP,
 )
 
@@ -146,6 +145,7 @@ def _create_linkage_input_tables() -> Run[Unit]:
                     CAST(canonical_fullname AS VARCHAR) AS victim_fullname_norm,  -- Added: victim fullname from entities
                     CAST(canonical_fullname AS VARCHAR) AS victim_fullname_concat,
                     CAST(NULL AS VARCHAR) AS victim_forename_norm,
+                    CAST(NULL AS VARCHAR) AS victim_middle_norm,
                     CAST(NULL AS VARCHAR) AS victim_surname_norm,
                     canonical_offender_age AS offender_age,
                     canonical_offender_sex AS offender_sex,
@@ -199,6 +199,7 @@ def _create_linkage_input_tables() -> Run[Unit]:
                     CAST(NULL AS VARCHAR) AS victim_fullname_norm,  -- Added: orphans have no victim fullname
                     CAST(NULL AS VARCHAR) AS victim_fullname_concat,
                     CAST(NULL AS VARCHAR) AS victim_forename_norm,
+                    CAST(NULL AS VARCHAR) AS victim_middle_norm,
                     CAST(NULL AS VARCHAR) AS victim_surname_norm,
                     weapon,
                     circumstance,
@@ -215,6 +216,7 @@ def _create_linkage_input_tables() -> Run[Unit]:
                     '' AS exclusion_id,
                     []::VARCHAR[] AS exclusion_ids
                 FROM victims_orphan;
+
     """
             )
         )

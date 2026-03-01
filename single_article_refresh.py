@@ -605,6 +605,14 @@ def _refresh_duckdb_victims_enh_for_article(record_id: int) -> Run[Unit]:
             SQL(
                 """
                 ALTER TABLE victims_cached_enh
+                ADD COLUMN IF NOT EXISTS victim_middle_norm VARCHAR;
+                """
+            )
+        )
+        ^ sql_exec(
+            SQL(
+                """
+                ALTER TABLE victims_cached_enh
                 ADD COLUMN IF NOT EXISTS victim_relationship VARCHAR;
                 """
             )

@@ -424,6 +424,28 @@ parts AS (
 SELECT
   p.*,
 
+  CASE
+    WHEN p.victim_name_raw IS NULL THEN NULL
+    WHEN p.victim_surname_norm IS NULL THEN NULL
+    WHEN regexp_matches(p.name_core, '^[a-z''\-]+\s+[a-z''\-]+\s+') THEN
+      nullif(
+        trim(
+          regexp_replace(
+            regexp_replace(
+              p.name_core,
+              '^[a-z''\-]+\s+',
+              '',
+              'g'
+            ),
+            '\s+' || p.victim_surname_norm || '$',
+            '',
+            'g'
+          )
+        ),
+        ''
+      )
+  END AS victim_middle_norm,
+
   -- Concatenations
   CASE
     WHEN victim_forename_norm IS NOT NULL AND victim_surname_norm IS NOT NULL
