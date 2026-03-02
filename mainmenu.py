@@ -24,6 +24,7 @@ from special_add import add_special_articles
 from vector_similarity import vector_similarity
 from orphan_adjudication_apply import apply_orphan_adjudications
 from orphan_postadj_cluster import cluster_postadj_orphans
+from humanization_pipeline import humanization_shr
 
 MAIN_MENU_PROMPTS = mainmenu_prompts + ("Apply orphan adjudication [J]",)
 
@@ -115,11 +116,12 @@ def dispatch_from_main_menu(choice: MainChoice) -> Run[NextStep]:
             return review_special_cases()
         case MainChoice.SPECIAL_ADD:
             return add_special_articles()
+        case MainChoice.HUMANIZE:
+            return humanization_shr()
         case (
             MainChoice.REVIEW
             | MainChoice.NEW
             | MainChoice.ASSIGN
-            | MainChoice.HUMANIZE
             | MainChoice.VICTIM
         ):
             return put_line(f"Dispatching to {choice.name}...") ^ pure(

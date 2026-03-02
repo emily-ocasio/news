@@ -401,6 +401,38 @@ class GenericArticleAnalysisResponse(BaseModel):
         description="Information for each homicide victim in the article. "
         "Only include dead victims.")
 
+class HumanizationClass(str, Enum):
+    """
+    Binary humanization decision class.
+    """
+    HUMANIZING = "humanizing"
+    NOT_HUMANIZING = "not humanizing"
+
+
+class HumanizationExtractResponse(BaseModel):
+    """
+    Step 1 response model for incident-specific verbatim extraction.
+    """
+    incident_excerpt: str = Field(
+        description="Verbatim excerpt containing only text relevant to the target incident."
+    )
+
+
+class HumanizationDeidentifyResponse(BaseModel):
+    """
+    Step 2 response model for de-identified text.
+    """
+    deidentified_excerpt: str = Field(
+        description="Incident excerpt with name/age/sex/race/ethnicity removed."
+    )
+
+
+class HumanizationDecisionResponse(BaseModel):
+    """
+    Step 3 response model for strict binary humanization adjudication.
+    """
+    humanization_classification: HumanizationClass
+
 
 class ArticleGenericVictimItem(NamedTuple):
     """

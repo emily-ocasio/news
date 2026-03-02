@@ -286,7 +286,7 @@ def to_json(text_format: type[BaseModel]) -> str:
     schema.pop('type')
     schema.pop('required')
     schema = replace_refs(schema, jsonschema=True, proxies=False)
-    schema.pop('$defs') #type:ignore
+    schema.pop('$defs', None) #type:ignore
     return json.dumps(schema, indent=2)
 
 def from_either(fn: Callable[[GPTResponseTuple], Run[Any]],

@@ -242,6 +242,7 @@ CREATE TABLE gptResults (
     FOREIGN KEY (RecordId) REFERENCES articles(RecordId)
 );
 CREATE INDEX gptResults_recordid ON gptResults(RecordId);
+CREATE INDEX gptResults_recordid_promptkey_ts ON gptResults(RecordId, PromptKey, TimeStamp, ResultId);
 CREATE INDEX gptClass on articles(Dataset, gptClass, PubDate);
 CREATE INDEX Autoclass ON articles (Dataset, Autoclass, gptClass, PubDate);
 CREATE TABLE articles_wp_subset(

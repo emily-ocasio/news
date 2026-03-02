@@ -77,9 +77,15 @@ def format_elapsed(seconds: float) -> str:
     safe_seconds = max(0.0, seconds)
     if safe_seconds < 60.0:
         return f"{safe_seconds:.1f}s"
-    mins = int(safe_seconds // 60.0)
-    secs = safe_seconds - (mins * 60.0)
-    return f"{mins}m {secs:.1f}s"
+    if safe_seconds < 3600.0:
+        mins = int(safe_seconds // 60.0)
+        secs = safe_seconds - (mins * 60.0)
+        return f"{mins}m {secs:.1f}s"
+    hours = int(safe_seconds // 3600.0)
+    rem = safe_seconds - (hours * 3600.0)
+    mins = int(rem // 60.0)
+    secs = rem - (mins * 60.0)
+    return f"{hours}h {mins}m {secs:.1f}s"
 
 def elapsed_line(seconds: float) -> str:
     """

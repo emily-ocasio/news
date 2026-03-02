@@ -25,6 +25,11 @@ ARTICLE_PROMPT = ("Apply [S]econd filter via GPT",
                   "Extract incident via [G]PT",
                   "Select another article to [F]ix",
                   "Go back to [M]ain menu")
+HUMANIZATION_PROMPT_KEYS = (
+    "humanize_extract_incident",
+    "humanize_deidentify",
+    "humanize_classify",
+)
 
 class FixAction(Enum):
     """
@@ -115,7 +120,12 @@ def _display_latest_gpt_response(article: Article) -> Run[Article]:
     record_id = article.record_id or 0
     return \
         (gpt_usage_reasoning_from_rows & \
-        sql_query(SQL(latest_gptresults_sql()), SQLParams((record_id,)))) \
+        sql_query(SQL(latest_gptresults_sql()), SQLParams((
+            record_id,
+            String(HUMANIZATION_PROMPT_KEYS[0]),
+            String(HUMANIZATION_PROMPT_KEYS[1]),
+            String(HUMANIZATION_PROMPT_KEYS[2]),
+        )))) \
         >> after_query
 
 def _select_apply_action(article: Article) -> Run[NextStep]:

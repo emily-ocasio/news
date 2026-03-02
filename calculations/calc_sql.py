@@ -643,6 +643,7 @@ def latest_gptresults_sql() -> str:
         SELECT *
         FROM gptResults
         WHERE RecordId = ?
+        AND COALESCE(PromptKey, '') NOT IN (?, ?, ?)
         ORDER BY TimeStamp DESC, ResultId DESC
         LIMIT 1
     """
