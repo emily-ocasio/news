@@ -756,7 +756,7 @@ def _lookup_cache(incident_cache_key: str) -> Run[Array]:
               AND step1_status = 'success'
               AND step2_status = 'success'
               AND step3_status = 'success'
-              AND step3_decision_label IN ('humanizing', 'not_humanizing')
+              AND step3_decision_label IN ('humanizing', 'not humanizing', 'not_humanizing')
               AND step1_model = ?
               AND step2_model = ?
               AND step3_model = ?
@@ -1005,7 +1005,7 @@ def _write_article_result(
     )
 
 
-def _resolve_candidate(candidate_row) -> Run[CandidateDecision]:
+def resolve_candidate(candidate_row, force_refresh: bool = False) -> Run[CandidateDecision]:
     cache_key = str(_row_value(candidate_row, "incident_cache_key", ""))
 
     def _from_cache(rows: Array) -> Run[CandidateDecision]:
@@ -1109,7 +1109,27 @@ def _resolve_candidate(candidate_row) -> Run[CandidateDecision]:
             >> _after_step1
         )
 
+    if force_refresh:
+        return _from_cache(Array.make(tuple()))
     return _lookup_cache(cache_key) >> _from_cache
+
+
+def _resolve_candidate(candidate_row) -> Run[CandidateDecision]:
+    return resolve_candidate(candidate_row)
+
+
+def ensure_humanization_tables() -> Run[Unit]:
+    """
+    Public helper to ensure humanization tables exist.
+    """
+    return _ensure_tables()
+
+
+def build_humanization_candidates_current() -> Run[Unit]:
+    """
+    Public helper to build canonical SHR-member humanization candidates.
+    """
+    return _build_current_candidates()
 
 
 def _retrieve_candidates_for_shr(shr_uid: str) -> Run[Array]:
@@ -1254,7 +1274,7 @@ def _process_single_shr(run_id: str, shr_row) -> Run[ShrProcessResult]:
             sql_query(SQL("SELECT 1;"))
             >> (
                 lambda _noop: (
-                    _resolve_candidate(candidate)
+                    resolve_candidate(candidate)
                     >> (
                         lambda dec: _write_article_result(
                             run_id,
@@ -1403,7 +1423,7 @@ def _process_candidates_with_error_capture(
 
         cand = candidates[idx]
         return (
-            _resolve_candidate(cand)
+            resolve_candidate(cand)
             >> (
                 lambda dec: _write_article_result(
                     run_id,
@@ -1512,7 +1532,7 @@ def _process_candidates_with_error_capture(
         return (
             ask()
             >> (
-                lambda _env: _resolve_candidate(candidates[idx])
+                lambda _env: resolve_candidate(candidates[idx])
                 >> (
                     lambda dec: _write_article_result(
                         run_id,
@@ -1584,7 +1604,7 @@ def _process_candidates_with_error_capture(
 
         from pymonad import run_except
 
-        return run_except(_resolve_candidate(candidates[idx])) >> (
+        return run_except(resolve_candidate(candidates[idx])) >> (
             lambda ei: (
                 _handle_error(
                     idx,
@@ -1630,7 +1650,25 @@ def _process_candidates_with_error_capture(
 
 
 def _process_shr_row(run_id: str, row) -> Run[ShrProcessResult]:
-    return _process_single_shr_safe(run_id, row)
+    shr_uid = str(_row_value(row, "shr_uid", ""))
+
+    def _result_label(res: ShrProcessResult) -> str:
+        if res.humanizing_binary == 1:
+            return "humanizing"
+        if res.humanizing_binary == 0:
+            return "not humanizing"
+        return "pending_retry"
+
+    return (
+        put_line(f"Starting SHR index analysis: {shr_uid}")
+        ^ _process_single_shr_safe(run_id, row)
+        >> (
+            lambda res: put_line(
+                f"Completed SHR index analysis: {shr_uid} -> {_result_label(res)}"
+            )
+            ^ pure(res)
+        )
+    )
 
 
 def _sum_result_int(results: list[ShrProcessResult], attr: str) -> int:
@@ -2033,8 +2071,8 @@ def _run_pipeline() -> Run[NextStep]:
         ^ put_line(f"Step 1 JSON schema:\n{to_json(HumanizationExtractResponse)}")
         ^ put_line(f"Step 2 JSON schema:\n{to_json(HumanizationDeidentifyResponse)}")
         ^ put_line(f"Step 3 JSON schema:\n{to_json(HumanizationDecisionResponse)}")
-        ^ _ensure_tables()
-        ^ _build_current_candidates()
+        ^ ensure_humanization_tables()
+        ^ build_humanization_candidates_current()
         ^ _build_reprocess_queue()
         ^ _display_queue_counts()
         ^ _input_number_to_process()

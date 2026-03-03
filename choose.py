@@ -26,7 +26,7 @@ def choice(choice_type: str) -> Callable[[Reaction], Reaction]:
 
 
 initial_prompts = (
-    "[R]eview matches from previous labels",
+    "[R]eview humanizing determinations",
     "[F]ix errors by Record Id",
     "Enter [N]ew labels",
     "[A]uto categorize by date",

@@ -6,6 +6,7 @@ __pycache__/
 newarticles.db
 news.duckdb
 homicide_data.csv
+homicide_data2_monadic.csv
 apcs.py
 shr_mass.pkl
 secr_apis/

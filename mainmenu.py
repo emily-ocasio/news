@@ -25,6 +25,7 @@ from vector_similarity import vector_similarity
 from orphan_adjudication_apply import apply_orphan_adjudications
 from orphan_postadj_cluster import cluster_postadj_orphans
 from humanization_pipeline import humanization_shr
+from review_humanization_determinations import review_humanization_determinations
 
 MAIN_MENU_PROMPTS = mainmenu_prompts + ("Apply orphan adjudication [J]",)
 
@@ -119,14 +120,15 @@ def dispatch_from_main_menu(choice: MainChoice) -> Run[NextStep]:
         case MainChoice.HUMANIZE:
             return humanization_shr()
         case (
-            MainChoice.REVIEW
-            | MainChoice.NEW
+            MainChoice.NEW
             | MainChoice.ASSIGN
             | MainChoice.VICTIM
         ):
             return put_line(f"Dispatching to {choice.name}...") ^ pure(
                 NextStep.CONTINUE
             )
+        case MainChoice.REVIEW:
+            return review_humanization_determinations()
         case MainChoice.QUIT:
             return pure(NextStep.QUIT)
 
