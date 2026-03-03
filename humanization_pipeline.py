@@ -1744,12 +1744,149 @@ def _export_results(run_id: str) -> Run[str]:
     )
 
 
+def _export_analyze_compatible_csv() -> Run[str]:
+    filename = "homicide_data2_monadic.csv"
+    return (
+        sql_export(
+            SQL(
+                """
+                WITH shr_scope AS (
+                  SELECT
+                    s."index",
+                    s.ID,
+                    s.CNTYFIPS,
+                    s.Ori,
+                    s.State,
+                    s.Agency,
+                    s.Agentype,
+                    s.Source,
+                    s.Solved,
+                    s.Year,
+                    s.StateName,
+                    s.Month,
+                    s.Incident,
+                    s.ActionType,
+                    s.Homicide,
+                    s.Situation,
+                    s.VicAge,
+                    s.VicSex,
+                    s.VicRace,
+                    s.VicEthnic,
+                    s.OffAge,
+                    s.OffSex,
+                    s.OffRace,
+                    s.OffEthnic,
+                    s.Weapon,
+                    s.Relationship,
+                    s.Circumstance,
+                    s.Subcircum,
+                    s.VicCount,
+                    s.OffCount,
+                    s.FileDate,
+                    s.MSA,
+                    s.YearMonth,
+                    s.Victim
+                  FROM sqldb.shr s
+                  JOIN shr_cached sc
+                    ON CAST(s."index" AS VARCHAR) = CAST(sc.unique_id AS VARCHAR)
+                ),
+                shr_entity AS (
+                  SELECT
+                    CAST(unique_id_r AS VARCHAR) AS shr_uid,
+                    CAST(unique_id_l AS VARCHAR) AS entity_uid
+                  FROM shr_max_weight_matches
+                ),
+                entity_article_ids AS (
+                  SELECT
+                    CAST(ver.victim_entity_id AS VARCHAR) AS entity_uid,
+                    TRY_CAST(trim(t.article_id_str) AS BIGINT) AS article_id
+                  FROM victim_entity_reps_postadj_orphancluster ver
+                  CROSS JOIN UNNEST(
+                    string_split(COALESCE(ver.article_ids_csv, ''), ',')
+                  ) AS t(article_id_str)
+                  WHERE trim(t.article_id_str) <> ''
+                ),
+                assign_counts AS (
+                  SELECT
+                    entity_uid,
+                    COUNT(DISTINCT article_id) AS assign_count
+                  FROM entity_article_ids
+                  WHERE article_id IS NOT NULL
+                  GROUP BY entity_uid
+                ),
+                humanization AS (
+                  SELECT
+                    CAST(shr_uid AS VARCHAR) AS shr_uid,
+                    humanizing_binary,
+                    run_status
+                  FROM humanization_shr_result
+                )
+                SELECT
+                  ss."index" AS "index",
+                  ss.ID AS "ID",
+                  ss.CNTYFIPS AS "CNTYFIPS",
+                  ss.Ori AS "Ori",
+                  ss.State AS "State",
+                  ss.Agency AS "Agency",
+                  ss.Agentype AS "Agentype",
+                  ss.Source AS "Source",
+                  ss.Solved AS "Solved",
+                  ss.Year AS "Year",
+                  ss.StateName AS "StateName",
+                  ss.Month AS "Month",
+                  ss.Incident AS "Incident",
+                  ss.ActionType AS "ActionType",
+                  ss.Homicide AS "Homicide",
+                  ss.Situation AS "Situation",
+                  ss.VicAge AS "VicAge",
+                  ss.VicSex AS "VicSex",
+                  ss.VicRace AS "VicRace",
+                  ss.VicEthnic AS "VicEthnic",
+                  ss.OffAge AS "OffAge",
+                  ss.OffSex AS "OffSex",
+                  ss.OffRace AS "OffRace",
+                  ss.OffEthnic AS "OffEthnic",
+                  ss.Weapon AS "Weapon",
+                  ss.Relationship AS "Relationship",
+                  ss.Circumstance AS "Circumstance",
+                  ss.Subcircum AS "Subcircum",
+                  ss.VicCount AS "VicCount",
+                  ss.OffCount AS "OffCount",
+                  ss.FileDate AS "FileDate",
+                  ss.MSA AS "MSA",
+                  ss.YearMonth AS "YearMonth",
+                  ss.Victim AS "Victim",
+                  COALESCE(ac.assign_count, 0) AS "AssignCount",
+                  CASE
+                    WHEN COALESCE(ac.assign_count, 0) = 0 THEN NULL
+                    WHEN hz.humanizing_binary IN (0, 1) THEN hz.humanizing_binary
+                    ELSE NULL
+                  END AS "Humanized",
+                  ss.VicRace || '_' || ss.OffRace AS "VicRace_OffRace",
+                  (COALESCE(ac.assign_count, 0) < 2) AS "OneOrLess"
+                FROM shr_scope ss
+                LEFT JOIN shr_entity se
+                  ON CAST(ss."index" AS VARCHAR) = se.shr_uid
+                LEFT JOIN assign_counts ac
+                  ON se.entity_uid = ac.entity_uid
+                LEFT JOIN humanization hz
+                  ON se.shr_uid = hz.shr_uid
+                ORDER BY ss.YearMonth, ss.ID, ss.Incident, ss.Victim;
+                """
+            ),
+            filename,
+        )
+        ^ pure(filename)
+    )
+
+
 def _render_summary(
     run_id: str,
     requested_count: int,
     process_result: Either[StopRun[Any, ShrProcessResult], ProcessAcc[Any, ShrProcessResult]],
     elapsed_display: str,
-    export_path: str,
+    run_export_path: str,
+    analyze_export_path: str,
     export_rows: int,
 ) -> Run[NextStep]:
     match process_result:
@@ -1782,7 +1919,7 @@ def _render_summary(
                     reasoning_tokens=reasoning_tokens,
                     est_cost=est_cost,
                     elapsed_display=elapsed_display,
-                    export_path=export_path,
+                    export_path=f"run={run_export_path};analyze={analyze_export_path}",
                 )
                 ^ put_line(
                     "Humanization run summary (stopped early)\n"
@@ -1799,7 +1936,8 @@ def _render_summary(
                     f"reasoning tokens: {reasoning_tokens}\n"
                     f"estimated cost: ${est_cost:.4f}\n"
                     f"{elapsed_display}\n"
-                    f"Export: {export_path} (rows={export_rows})\n"
+                    f"Run export: {run_export_path} (rows={export_rows})\n"
+                    f"Analyze export: {analyze_export_path}\n"
                 )
                 ^ pure(NextStep.CONTINUE)
             )
@@ -1832,7 +1970,7 @@ def _render_summary(
                     reasoning_tokens=reasoning_tokens,
                     est_cost=est_cost,
                     elapsed_display=elapsed_display,
-                    export_path=export_path,
+                    export_path=f"run={run_export_path};analyze={analyze_export_path}",
                 )
                 ^ put_line(
                     "Humanization run summary\n"
@@ -1849,7 +1987,8 @@ def _render_summary(
                     f"reasoning tokens: {reasoning_tokens}\n"
                     f"estimated cost: ${est_cost:.4f}\n"
                     f"{elapsed_display}\n"
-                    f"Export: {export_path} (rows={export_rows})\n"
+                    f"Run export: {run_export_path} (rows={export_rows})\n"
+                    f"Analyze export: {analyze_export_path}\n"
                 )
                 ^ pure(NextStep.CONTINUE)
             )
@@ -1866,16 +2005,20 @@ def _process_queue_rows(run_id: str, rows: Array, requested_count: int) -> Run[N
         >> (
             lambda elapsed_maybe: _export_results(run_id)
             >> (
-                lambda export_path: sql_query(
-                    SQL("SELECT COUNT(*) AS n FROM humanization_shr_result;")
-                ) >> (
-                    lambda count_rows: _render_summary(
-                        run_id,
-                        requested_count,
-                        process_result,
-                        str(elapsed_maybe.a) if isinstance(elapsed_maybe, Just) else "Elapsed: n/a",
-                        export_path,
-                        int(_row_value(count_rows[0], "n", 0)) if len(count_rows) > 0 else 0,
+                lambda run_export_path: _export_analyze_compatible_csv()
+                >> (
+                    lambda analyze_export_path: sql_query(
+                        SQL("SELECT COUNT(*) AS n FROM humanization_shr_result;")
+                    ) >> (
+                        lambda count_rows: _render_summary(
+                            run_id,
+                            requested_count,
+                            process_result,
+                            str(elapsed_maybe.a) if isinstance(elapsed_maybe, Just) else "Elapsed: n/a",
+                            run_export_path,
+                            analyze_export_path,
+                            int(_row_value(count_rows[0], "n", 0)) if len(count_rows) > 0 else 0,
+                        )
                     )
                 )
             )
