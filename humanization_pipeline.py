@@ -1941,6 +1941,7 @@ def _render_summary(
             output_tokens = _sum_result_int(results, "output_tokens")
             reasoning_tokens = _sum_result_int(results, "reasoning_tokens")
             est_cost = _sum_result_float(results, "est_cost")
+            est_cost_display = est_cost / 1000.0
             return (
                 _write_run_history(
                     run_id=run_id,
@@ -1972,7 +1973,7 @@ def _render_summary(
                     f"cached tokens: {cached_tokens}\n"
                     f"output tokens: {output_tokens}\n"
                     f"reasoning tokens: {reasoning_tokens}\n"
-                    f"estimated cost: ${est_cost:.4f}\n"
+                    f"estimated cost: ${est_cost_display:.4f}\n"
                     f"{elapsed_display}\n"
                     f"Run export: {run_export_path} (rows={export_rows})\n"
                     f"Analyze export: {analyze_export_path}\n"
@@ -1992,6 +1993,7 @@ def _render_summary(
             output_tokens = _sum_result_int(results, "output_tokens")
             reasoning_tokens = _sum_result_int(results, "reasoning_tokens")
             est_cost = _sum_result_float(results, "est_cost")
+            est_cost_display = est_cost / 1000.0
             return (
                 _write_run_history(
                     run_id=run_id,
@@ -2023,7 +2025,7 @@ def _render_summary(
                     f"cached tokens: {cached_tokens}\n"
                     f"output tokens: {output_tokens}\n"
                     f"reasoning tokens: {reasoning_tokens}\n"
-                    f"estimated cost: ${est_cost:.4f}\n"
+                    f"estimated cost: ${est_cost_display:.4f}\n"
                     f"{elapsed_display}\n"
                     f"Run export: {run_export_path} (rows={export_rows})\n"
                     f"Analyze export: {analyze_export_path}\n"

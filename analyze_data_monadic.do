@@ -19,7 +19,7 @@ set more off, permanently
 clear all
 
 *Set directory
-cd "/Users/`c(username)'/Dropbox/Research/Race and Media Coverage of Homicide/Data Analysis/"
+cd "C:/Users/`c(username)'/Desktop"
 
 *Get unemployment data (disabled for monadic pipeline run; not used as covariate below)
 * import excel MAUR, cellrange(A11:B119) firstrow
