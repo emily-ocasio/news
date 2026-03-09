@@ -62,7 +62,9 @@ This project is a terminal-based tool for managing, analyzing, and interacting w
 - The main entry point is [runarticles.py](../runarticles.py). It establishes the main trampoline loop, where each iteration presents the main menu, and based on which selection, it invokes a corresponding controller.  All activity occurs within the context of a Run stack, using one or more of the eliminators in [pymonad/run.py](../pymonad/run.py), [pymonad/runsql.py](../pymonad/runsql.py), [pymonad/runopenai.py](../pymonad/runopenai.py), [pymonad/runsplink.py](../pymonad/runsplink.py), and [pymonad/dispatch.py](../pymonad/dispatch.py).
 
 ### 2.3. Controllers
-- Controllers run within Run effect context and usually follow a pattern where one or more articles are retrieved, then processed in some way (for example submitting them to OpenAI for analysis).
+- Controllers run within Run eliminator stack
+- Controllers have pure functional declarative code where functions are either purely computational helpers or return Run objects to declare side effects
+- Controller flow often follows a pattern where one or more articles are retrieved, then processed in some way (for example submitting them to OpenAI for analysis).
 
 ### 2.3.1 Menu Options and Controllers
 - The main menu in [mainmenu.py](../mainmenu.py) dispatches to specific controllers based on user choice:
@@ -137,3 +139,18 @@ The typical user workflow for analyzing news articles and crime data follows a s
 11. **Optional Fixes/Reviews**: Use FIX (F) for manual review/re-processing of individual articles. In particular, [G] in FIX supports single-article GPT re-extraction (commonly after extraction prompt tuning), followed by automatic single-article incident/geocode refresh and selective inactivation of impacted orphan adjudications.
 
 This workflow ensures data integrity through monadic composition, with all operations logged and validated via applicative validation.
+
+### 3. Coding Style and Best Practices
+- Follow the monadic functional programming style consistently across the codebase.
+- Use the Run monad for all side-effect management, including database operations, API calls, and IO.
+- All new and modified code in controllers should be purely functional, with side effects handled through Run effects, and sequencing managed through monadic chaining.
+- Use strong typing and type annotations - data passed between monadic contexts should be well-typed using basic types in the pymonad/ folder or custom types with semantic specificity. Preference for frozen dataclasses for product types and either Enums or Unions (using |) for sum types.
+- Do not use None or Optional - use explicit sum types and Maybe to explicitly handle cases where a value may be absent.
+- All side effects (database, API calls, IO) must be performed through the appropriate Run eliminators and declared in the controllers using smart constructors as appropriate.
+- If not already covered in a plan, warn and ask for confirmation before creating new intents
+- Do not use python tuples for data structures that are passed between monadic contexts - they should be well-typed using the types in the pymonad/ folder or custom types defined with semantic meaning.
+- Do not pass raw dictionaries or lists between monadic contexts - use well-typed data structures instead.
+- *Never* add a new run_base_effect eliminator in a controller - they all run inside the main run_base_effect in runarticles.py. 
+- If a try/except-like is needed for localized error handling within a portion of a controller flow, a new run_except context can be created for that portion. Avoid using try/except in controllers directly. The outer run_except in runarticles.py will catch any exceptions not handled by inner run_except contexts, log them, and return to the main menu.
+- Avoid using lists and stateful loops for processing multiple items. Use pymonad/Array and folding / sequencing / traversing instead to maintain the functional style and immutability.
+

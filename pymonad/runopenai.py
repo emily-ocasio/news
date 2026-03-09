@@ -276,15 +276,21 @@ def to_json(text_format: type[BaseModel]) -> str:
     schema['name'] = schema['title']
     schema['strict'] = True
     schema.pop('title')
+    properties = schema.get('properties', {})
+    required = schema.get('required', [])
+    if not isinstance(properties, dict):
+        properties = {}
+    if not isinstance(required, list):
+        required = []
     schema['schema'] = {
         'type': 'object',
-        'properties': schema['properties'],
-        'required': schema['required'],
+        'properties': properties,
+        'required': required,
         'additionalProperties': False
     }
-    schema.pop('properties')
-    schema.pop('type')
-    schema.pop('required')
+    schema.pop('properties', None)
+    schema.pop('type', None)
+    schema.pop('required', None)
     schema = replace_refs(schema, jsonschema=True, proxies=False)
     schema.pop('$defs', None) #type:ignore
     return json.dumps(schema, indent=2)

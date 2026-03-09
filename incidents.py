@@ -97,6 +97,7 @@ def display_extract_counts(rows: Array) -> Run[Unit]:
         return put_line(
             "No records ready for extraction (gptClass = M_PRELIM).\n"
         ) ^ pure(unit)
+    total_ready = sum(int(row["ReadyCount"]) for row in rows)
     lines = "\n".join(
         f"{row['PubYear']}: {row['ReadyCount']}"
         for row in rows
@@ -104,6 +105,7 @@ def display_extract_counts(rows: Array) -> Run[Unit]:
     return put_line(
         "Ready for extraction (gptClass = M_PRELIM) by year:\n"
         f"{lines}\n"
+        f"Total ready for extraction (all years): {total_ready}\n"
     ) ^ pure(unit)
 
 def retrieve_articles(num: int) -> Run[Articles]:

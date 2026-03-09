@@ -47,6 +47,7 @@ from pymonad import (
     with_duckdb,
 )
 from pymonad.traverse import array_traverse_run
+from orphan_adjudication_controller import E2E_CACHE_STAGE
 
 
 def _looks_like_missing_base_table_error(err: object) -> bool:
@@ -61,7 +62,8 @@ def _looks_like_missing_base_table_error(err: object) -> bool:
         "incidents_cached",
         "victims_cached",
         "victims_cached_enh",
-        "orphan_adjudication_overrides",
+        "llm_cache",
+        "orphan_adj_cache_readiness",
         "sqldb.articles_wp_subset",
     )
     return any(m in msg for m in missing_markers) and any(
@@ -692,7 +694,7 @@ def _purge_duckdb_for_non_m_article(record_id: int, run_id: str) -> Run[Unit]:
     return (
         put_line(
             f"[F] Article {record_id} no longer in CLASS_WP/M scope; "
-            "purging cached incident/geocode rows and invalidating adjudications."
+            "purging cached incident/geocode rows and invalidating adjudication caches."
         )
         ^ _delete_article_rows_if_exists("incidents_cached", record_id)
         ^ _delete_article_rows_if_exists("victims_cached", record_id)
@@ -725,122 +727,102 @@ def _invalidate_adjudications_for_article(record_id: int, run_id: str) -> Run[Un
 
     def _run_core() -> Run[Unit]:
         return (
-            put_line(f"[F] invalidation step: ensure history table ({record_id})")
+            put_line(f"[F] cache invalidation step: collect cache keys ({record_id})")
             ^ sql_exec(
                 SQL(
                     """
-                    CREATE TABLE IF NOT EXISTS orphan_adjudication_history (
-                      history_id BIGINT,
-                      run_id VARCHAR,
-                      orphan_id VARCHAR,
-                      prior_resolution_label VARCHAR,
-                      prior_resolved_entity_id VARCHAR,
-                      prior_confidence DOUBLE,
-                      new_resolution_label VARCHAR,
-                      new_resolved_entity_id VARCHAR,
-                      new_confidence DOUBLE,
-                      reason_summary VARCHAR,
-                      evidence_json JSON,
-                      analyst_mode VARCHAR,
-                      changed_at TIMESTAMP
-                    );
-                    """
-                )
-            )
-            ^ put_line(f"[F] invalidation step: collect candidates ({record_id})")
-            ^ sql_exec(
-                SQL(
-                    """
-                    CREATE OR REPLACE TEMP TABLE _invalidate_fixg AS
+                    CREATE OR REPLACE TEMP TABLE _invalidate_fixg_cache AS
+                    WITH from_readiness AS (
+                      SELECT DISTINCT
+                        orphan_id,
+                        pass1_idempotency_key AS cache_key
+                      FROM orphan_adj_cache_readiness
+                      WHERE article_id = ?
+                        AND orphan_id LIKE ?
+                        AND COALESCE(pass1_idempotency_key, '') <> ''
+                    ),
+                    from_cache_payload AS (
+                      SELECT DISTINCT
+                        CAST(json_extract_string(response_json, '$.orphan_id') AS VARCHAR) AS orphan_id,
+                        idempotency_key AS cache_key
+                      FROM llm_cache
+                      WHERE stage = ?
+                        AND CAST(json_extract_string(response_json, '$.orphan_id') AS VARCHAR) LIKE ?
+                    )
                     SELECT
-                      o.*,
-                      CASE
-                        WHEN o.orphan_id LIKE ? THEN 'fixarticle_G_reextract_orphan_anchor'
-                        WHEN o.resolved_entity_id IS NOT NULL
-                             AND o.resolved_entity_id LIKE ?
-                          THEN 'fixarticle_G_reextract_entity_anchor'
-                        ELSE NULL
-                      END AS invalidate_reason
-                    FROM orphan_adjudication_overrides o
-                    WHERE o.orphan_id LIKE ?
-                       OR (
-                           o.resolved_entity_id IS NOT NULL
-                           AND o.resolved_entity_id LIKE ?
-                       );
+                      orphan_id,
+                      cache_key,
+                      'fixarticle_G_reextract_orphan_anchor' AS invalidate_reason
+                    FROM (
+                      SELECT * FROM from_readiness
+                      UNION ALL
+                      SELECT * FROM from_cache_payload
+                    ) all_keys
+                    WHERE COALESCE(orphan_id, '') LIKE ?
+                      AND COALESCE(cache_key, '') <> '';
                     """
                 ),
-                SQLParams((rec_prefix, rec_prefix, rec_prefix, rec_prefix)),
+                SQLParams(
+                    (
+                        record_id,
+                        rec_prefix,
+                        String(E2E_CACHE_STAGE),
+                        rec_prefix,
+                        rec_prefix,
+                    )
+                ),
             )
-            ^ put_line(f"[F] invalidation step: count candidates ({record_id})")
+            ^ put_line(f"[F] cache invalidation step: count candidates ({record_id})")
             ^ sql_query(
                 SQL(
                     """
                     SELECT
-                      COUNT(*) AS n_all,
-                      COUNT(*) FILTER (WHERE invalidate_reason = 'fixarticle_G_reextract_orphan_anchor') AS n_orphan_anchor,
-                      COUNT(*) FILTER (WHERE invalidate_reason = 'fixarticle_G_reextract_entity_anchor') AS n_entity_anchor
-                    FROM _invalidate_fixg;
+                      COUNT(*) AS n_all
+                    FROM _invalidate_fixg_cache;
                     """
                 )
             )
             >> (
                 lambda rows: (
                     (
-                        put_line(f"[F] invalidation step: append history ({record_id})")
+                        put_line(f"[F] cache invalidation step: delete llm cache rows ({record_id})")
                         ^ sql_exec(
                             SQL(
-                                f"""
-                                INSERT INTO orphan_adjudication_history (
-                                  history_id,
-                                  run_id,
-                                  orphan_id,
-                                  prior_resolution_label,
-                                  prior_resolved_entity_id,
-                                  prior_confidence,
-                                  new_resolution_label,
-                                  new_resolved_entity_id,
-                                  new_confidence,
-                                  reason_summary,
-                                  evidence_json,
-                                  analyst_mode,
-                                  changed_at
-                                )
-                                SELECT
-                                  NULL,
-                                  '{run_id}',
-                                  orphan_id,
-                                  resolution_label,
-                                  resolved_entity_id,
-                                  confidence,
-                                  'invalidated',
-                                  NULL,
-                                  NULL,
-                                  invalidate_reason,
-                                  evidence_json,
-                                  'system_invalidation',
-                                  NOW()
-                                FROM _invalidate_fixg;
+                                """
+                                DELETE FROM llm_cache
+                                WHERE stage = ?
+                                  AND idempotency_key IN (
+                                    SELECT DISTINCT cache_key
+                                    FROM _invalidate_fixg_cache
+                                  );
                                 """
                             )
+                            ,
+                            SQLParams((String(E2E_CACHE_STAGE),))
                         )
-                        ^ put_line(f"[F] invalidation step: delete active overrides ({record_id})")
+                        ^ put_line(f"[F] cache invalidation step: delete readiness rows ({record_id})")
                         ^ sql_exec(
                             SQL(
                                 """
-                                DELETE FROM orphan_adjudication_overrides
-                                WHERE orphan_id IN (SELECT orphan_id FROM _invalidate_fixg);
+                                DELETE FROM orphan_adj_cache_readiness
+                                WHERE orphan_id IN (
+                                  SELECT DISTINCT orphan_id
+                                  FROM _invalidate_fixg_cache
+                                )
+                                  AND pass1_idempotency_key IN (
+                                    SELECT DISTINCT cache_key
+                                    FROM _invalidate_fixg_cache
+                                  );
                                 """
                             )
                         )
                         ^ put_line(
-                            "[F] Invalidated adjudications for article "
-                            f"{record_id}: total={rows[0]['n_all']}, "
-                            f"orphan_anchor={rows[0]['n_orphan_anchor']}, "
-                            f"entity_anchor={rows[0]['n_entity_anchor']}"
+                            "[F] Removed orphan adjudication caches after [F]->[G] for article "
+                            f"{record_id}: total={rows[0]['n_all']}, reason=fixarticle_G_reextract_orphan_anchor"
                         )
                     )
                     if rows[0]["n_all"] > 0
-                    else put_line(f"[F] No adjudications invalidated for article {record_id}.")
+                    else put_line(f"[F] No orphan adjudication caches removed for article {record_id}.")
                 )
                 ^ pure(unit)
             )
@@ -852,7 +834,7 @@ def _invalidate_adjudications_for_article(record_id: int, run_id: str) -> Run[Un
         >> (
             lambda res: (
                 (
-                    put_line("[F] Skipped adjudication invalidation: orphan_adjudication_overrides is missing or unavailable.")
+                    put_line("[F] Skipped adjudication cache invalidation: llm_cache/readiness tables are missing or unavailable.")
                     if isinstance(res, Left)
                     else pure(None)
                 )

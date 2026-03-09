@@ -653,6 +653,13 @@ DIST_STREET_TYPE = cllc.Or(
     cll.LiteralMatchLevel("address_type", "NO_RESULT_STREET_ONLY", "string", "right"),
 )
 
+DIST_STREET_ONLY_TYPE = cllc.Or(
+    cll.LiteralMatchLevel("address_type", "STREET_ONLY", "string", "left"),
+    cll.LiteralMatchLevel("address_type", "STREET_ONLY", "string", "right"),
+    cll.LiteralMatchLevel("address_type", "NO_SUCCESS_STREET_ONLY", "string", "left"),
+    cll.LiteralMatchLevel("address_type", "NO_SUCCESS_STREET_ONLY", "string", "right"),
+)
+
 DIST_PLACE_TYPE = cllc.Or(
     cll.LiteralMatchLevel("address_type", "NAMED_PLACE", "string", "left"),
     cll.LiteralMatchLevel("address_type", "NAMED_PLACE", "string", "right"),
@@ -701,6 +708,10 @@ DIST_COMP_NEW = cl.CustomComparison(
                 DIST_STREET_TYPE,
                 cll.JaroWinklerLevel( "geo_address_short", 0.90),
                 cll.DistanceInKMLevel("lat", "lon", 0.5)
+            ),
+            cllc.And(
+                DIST_STREET_ONLY_TYPE,
+                cll.JaroWinklerLevel( "geo_address_short", 0.90)
             ),
             cllc.And(
                 cllc.Or(

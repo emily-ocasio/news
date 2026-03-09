@@ -23,11 +23,15 @@ from special_case_review import review_special_cases
 from special_add import add_special_articles
 from vector_similarity import vector_similarity
 from orphan_adjudication_apply import apply_orphan_adjudications
+from orphan_adjudication_controller import adjudicate_orphans_controller
 from orphan_postadj_cluster import cluster_postadj_orphans
 from humanization_pipeline import humanization_shr
 from review_humanization_determinations import review_humanization_determinations
 
-MAIN_MENU_PROMPTS = mainmenu_prompts + ("Apply orphan adjudication [J]",)
+MAIN_MENU_PROMPTS = mainmenu_prompts + (
+    "Apply orphan adjudication [J]",
+    "Adjudicate unmatched orphans [K]",
+)
 
 
 class MainChoice(Enum):
@@ -52,6 +56,7 @@ class MainChoice(Enum):
     UNNAMED = MenuChoice("U")
     POSTADJ_ORPHAN_CLUSTER = MenuChoice("O")
     ADJUDICATION_APPLY = MenuChoice("J")
+    ADJUDICATION_CONTROLLER = MenuChoice("K")
     LINK = MenuChoice("L")
     SPECIAL = MenuChoice("P")
     SPECIAL_ADD = MenuChoice("Y")
@@ -111,6 +116,8 @@ def dispatch_from_main_menu(choice: MainChoice) -> Run[NextStep]:
             return cluster_postadj_orphans()
         case MainChoice.ADJUDICATION_APPLY:
             return apply_orphan_adjudications()
+        case MainChoice.ADJUDICATION_CONTROLLER:
+            return adjudicate_orphans_controller()
         case MainChoice.LINK:
             return match_article_to_shr_victims()
         case MainChoice.SPECIAL:

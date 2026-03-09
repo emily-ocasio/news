@@ -38,7 +38,7 @@ def _build_adjudication_candidates() -> Run[Unit]:
                   created_at,
                   updated_at
                 FROM orphan_adjudication_overrides
-                WHERE resolution_label = 'likely_missed_match'
+                WHERE resolution_label IN ('matched', 'likely_missed_match')
                   AND resolved_entity_id IS NOT NULL;
                 """
             )
@@ -848,18 +848,21 @@ def _build_orphan_matches_postadj_current() -> Run[Unit]:
             o.adjudication_confidence AS confidence,
             CASE
               WHEN o.entity_uid IS NOT NULL THEN 'adjudication_matched_orphan'
-              WHEN o.adjudication_label = 'unlikely' THEN 'left_behind_unlikely'
+              WHEN o.adjudication_label IN ('not_same_person', 'unlikely') THEN 'left_behind_not_same'
+              WHEN o.adjudication_label = 'insufficient_information' THEN 'left_behind_insufficient'
               ELSE 'left_behind_other'
             END AS display_category,
             CASE
               WHEN o.entity_uid IS NOT NULL THEN 2
-              WHEN o.adjudication_label = 'unlikely' THEN 3
+              WHEN o.adjudication_label IN ('not_same_person', 'unlikely') THEN 3
+              WHEN o.adjudication_label = 'insufficient_information' THEN 4
               ELSE 1
             END AS display_band_key,
             o.adjudication_label,
             CASE
               WHEN o.entity_uid IS NOT NULL THEN 'adjudication_applied'
-              WHEN o.adjudication_label = 'unlikely' THEN 'adjudication_unlikely'
+              WHEN o.adjudication_label IN ('not_same_person', 'unlikely') THEN 'adjudication_not_same'
+              WHEN o.adjudication_label = 'insufficient_information' THEN 'adjudication_insufficient'
               ELSE 'none'
             END AS adjudication_flag,
             o.adjudication_reason_summary AS reason_summary

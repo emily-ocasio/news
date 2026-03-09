@@ -4,10 +4,10 @@ Monadic controller for reviewing and making changes to a single article
 from enum import Enum
 from calculations import single_article_sql, latest_gptresults_sql
 from pymonad import Run, Namespace, with_namespace, to_prompts, put_line, \
-    pure, input_number, PromptKey, sql_query, SQL, SQLParams, throw, \
-    ErrorPayload, set_, with_models, String, bind_first, Tuple, GPTUsage, \
+    pure, input_number, PromptKey, sql_query, sql_exec, SQL, SQLParams, throw, \
+    ErrorPayload, set_, with_models, String, Tuple, GPTUsage, \
         GPTReasoning, Maybe, Just, _Nothing, gpt_usage_reasoning_from_rows, \
-        run_except, Left
+        run_except, Left, with_duckdb
 from appstate import prompt_key
 from article import Article, Articles, ArticleAppError
 from gpt_filtering import GPT_PROMPTS, GPT_MODELS, \
@@ -17,14 +17,21 @@ from incidents import process_all_articles as extract_process_all_articles, \
     GPT_PROMPTS as INCIDENTS_GPT_PROMPTS, PROMPT_KEY_STR as INCIDENTS_PROMPT_KEY_STR, \
     GPT_MODELS as INCIDENTS_GPT_MODELS
 from single_article_refresh import refresh_single_article_after_extract
+from orphan_adjudication_controller import E2E_CACHE_STAGE
 
 FIX_PROMPTS: dict[str, str | tuple[str,]] = {
     "record_id": "Please enter the record ID of the article you want to fix: ",
+    "delete_cache_entry_index": "Select orphan cache entry number to delete: ",
 }
 ARTICLE_PROMPT = ("Apply [S]econd filter via GPT",
                   "Extract incident via [G]PT",
                   "Select another article to [F]ix",
                   "Go back to [M]ain menu")
+ARTICLE_PROMPT_WITH_DELETE = ("Apply [S]econd filter via GPT",
+                              "Extract incident via [G]PT",
+                              "[D]elete orphan adjudication cache",
+                              "Select another article to [F]ix",
+                              "Go back to [M]ain menu")
 HUMANIZATION_PROMPT_KEYS = (
     "humanize_extract_incident",
     "humanize_deidentify",
@@ -37,6 +44,7 @@ class FixAction(Enum):
     """
     SECOND_FILTER = MenuChoice('S')
     EXTRACT_INCIDENTS = MenuChoice('G')
+    DELETE_ORPHAN_CACHE = MenuChoice('D')
     CONTINUE = MenuChoice('F')
     MAIN_MENU = MenuChoice('M')
     QUIT = MenuChoice('Q')
@@ -128,21 +136,174 @@ def _display_latest_gpt_response(article: Article) -> Run[Article]:
         )))) \
         >> after_query
 
-def _select_apply_action(article: Article) -> Run[NextStep]:
+def _cache_rows_for_article(article: Article) -> Run[tuple[dict, ...]]:
+    """
+    Return latest [K]-produced cache rows for this article keyed by orphan.
+    """
+    record_id = article.record_id or 0
+    if record_id <= 0:
+        return pure(tuple())
+
+    return with_duckdb(
+        sql_query(
+            SQL(
+                """
+                WITH readiness_latest AS (
+                  SELECT
+                    run_id,
+                    orphan_id,
+                    article_id,
+                    readiness_status,
+                    readiness_reason,
+                    pass1_idempotency_key,
+                    created_at,
+                    ROW_NUMBER() OVER (
+                      PARTITION BY orphan_id, pass1_idempotency_key
+                      ORDER BY created_at DESC, run_id DESC
+                    ) AS rn
+                  FROM orphan_adj_cache_readiness
+                  WHERE article_id = ?
+                    AND COALESCE(pass1_idempotency_key, '') <> ''
+                )
+                SELECT
+                  rl.run_id,
+                  rl.orphan_id,
+                  rl.article_id,
+                  rl.readiness_status,
+                  rl.readiness_reason,
+                  rl.pass1_idempotency_key AS cache_key,
+                  rl.created_at AS readiness_created_at,
+                  lc.model,
+                  lc.prompt_version,
+                  lc.updated_at AS cache_updated_at,
+                  CAST(lc.input_json AS VARCHAR) AS input_json_text,
+                  CAST(lc.response_json AS VARCHAR) AS response_json_text
+                FROM readiness_latest rl
+                JOIN llm_cache lc
+                  ON lc.stage = ?
+                 AND lc.idempotency_key = rl.pass1_idempotency_key
+                WHERE rl.rn = 1
+                ORDER BY rl.orphan_id;
+                """
+            ),
+            SQLParams((record_id, String(E2E_CACHE_STAGE))),
+        )
+    ) >> (lambda rows: pure(tuple(dict(r) for r in rows)))
+
+def _display_cache_rows(rows: tuple[dict, ...]) -> Run[None]:
+    """
+    Display the orphan adjudication cache content for this article.
+    """
+    if len(rows) == 0:
+        return pure(None)
+
+    def fmt(i: int, row: dict) -> str:
+        orphan_id = str(row.get("orphan_id") or "")
+        cache_key = str(row.get("cache_key") or "")
+        readiness_status = str(row.get("readiness_status") or "")
+        readiness_reason = str(row.get("readiness_reason") or "")
+        run_id = str(row.get("run_id") or "")
+        updated_at = str(row.get("cache_updated_at") or "")
+        model = str(row.get("model") or "")
+        prompt_version = str(row.get("prompt_version") or "")
+        input_json_text = str(row.get("input_json_text") or "")
+        response_json_text = str(row.get("response_json_text") or "")
+        return (
+            f"[F] [K] cache entry {i}\n"
+            f"  orphan_id: {orphan_id}\n"
+            f"  cache_key: {cache_key}\n"
+            f"  run_id: {run_id}\n"
+            f"  readiness_status: {readiness_status}\n"
+            f"  readiness_reason: {readiness_reason}\n"
+            f"  model: {model}\n"
+            f"  prompt_version: {prompt_version}\n"
+            f"  cache_updated_at: {updated_at}\n"
+            f"  input_json: {input_json_text}\n"
+            f"  response_json: {response_json_text}"
+        )
+
+    message = "[F] [K] orphan adjudication cache entries for this article:\n" + \
+        "\n\n".join(fmt(i, row) for i, row in enumerate(rows, start=1))
+    return put_line(message) ^ pure(None)
+
+def _choose_cache_entry(rows: tuple[dict, ...]) -> Run[dict]:
+    """
+    Select a specific orphan cache entry to delete.
+    """
+    if len(rows) == 1:
+        return pure(rows[0])
+
+    listing = "\n".join(
+        f"  {i}. orphan_id={str(row.get('orphan_id') or '')} "
+        f"cache_key={str(row.get('cache_key') or '')}"
+        for i, row in enumerate(rows, start=1)
+    )
+    return (
+        put_line("[F] Multiple orphan cache entries found. Choose one to delete:\n" + listing)
+        ^ input_number(PromptKey("delete_cache_entry_index"))
+    ) >> (
+        lambda selected: (
+            pure(rows[selected - 1])
+            if 1 <= selected <= len(rows)
+            else put_line("[F] Invalid orphan cache entry selection.") >> (lambda _: _choose_cache_entry(rows))
+        )
+    )
+
+def _delete_cache_entry(article: Article, row: dict) -> Run[None]:
+    """
+    Delete one selected orphan adjudication cache entry.
+    """
+    record_id = article.record_id or 0
+    orphan_id = str(row.get("orphan_id") or "")
+    cache_key = str(row.get("cache_key") or "")
+
+    return with_duckdb(
+        sql_exec(
+            SQL(
+                """
+                DELETE FROM llm_cache
+                WHERE stage = ?
+                  AND idempotency_key = ?;
+                """
+            ),
+            SQLParams((String(E2E_CACHE_STAGE), String(cache_key))),
+        )
+        ^ sql_exec(
+            SQL(
+                """
+                DELETE FROM orphan_adj_cache_readiness
+                WHERE article_id = ?
+                  AND orphan_id = ?
+                  AND pass1_idempotency_key = ?;
+                """
+            ),
+            SQLParams((record_id, String(orphan_id), String(cache_key))),
+        )
+        ^ put_line(
+            "[F] Removed orphan adjudication cache entry "
+            f"(article_id={record_id}, orphan_id={orphan_id}, cache_key={cache_key})."
+        )
+        ^ pure(None)
+    )
+
+def _select_apply_action(article: Article, allow_cache_delete: bool = True) -> Run[NextStep]:
     """
     Select the desired action to apply to the article.
     """
-    return (
-        input_desired_action()
-        >> bind_first(_apply_action, article)
+    return _cache_rows_for_article(article) >> (
+        lambda cache_rows: _display_cache_rows(cache_rows)
+        ^ input_desired_action(allow_cache_delete and len(cache_rows) > 0)
+        >> (lambda action: _apply_action(article, action, cache_rows, allow_cache_delete))
     )
 
-def input_desired_action() -> Run[FixAction]:
+def input_desired_action(include_delete_cache: bool = False) -> Run[FixAction]:
     """
     Prompt the user to input the desired action to apply to the article.
     """
     return (
-        FixAction & input_from_menu(MenuPrompts(ARTICLE_PROMPT))
+        FixAction & input_from_menu(
+            MenuPrompts(ARTICLE_PROMPT_WITH_DELETE if include_delete_cache else ARTICLE_PROMPT)
+        )
     )
 
 def second_filter(article: Article) -> Run[Article]:
@@ -155,7 +316,12 @@ def second_filter(article: Article) -> Run[Article]:
     )
 
 
-def _apply_action(article: Article, action: FixAction) -> Run[NextStep]:
+def _apply_action(
+    article: Article,
+    action: FixAction,
+    cache_rows: tuple[dict, ...],
+    allow_cache_delete: bool,
+) -> Run[NextStep]:
     """
     Apply the desired action to the article and continue.
     """
@@ -175,14 +341,20 @@ def _apply_action(article: Article, action: FixAction) -> Run[NextStep]:
                 put_line("Dispatching to second filter...") ^ \
                 set_(prompt_key, String(PROMPT_KEY_STR)) ^ \
                 pure(article) >> second_filter >> \
-                _select_apply_action
+                (lambda updated: _select_apply_action(updated, allow_cache_delete))
         case FixAction.EXTRACT_INCIDENTS:
             return (
                 set_(prompt_key, String(INCIDENTS_PROMPT_KEY_STR)) ^
                 extract_process_all_articles(Articles((article,)))
                 ^ _post_extract_refresh()
                 ^ pure(article)
-                >> _select_apply_action
+                >> (lambda updated: _select_apply_action(updated, allow_cache_delete))
+            )
+        case FixAction.DELETE_ORPHAN_CACHE:
+            return (
+                _choose_cache_entry(cache_rows)
+                >> (lambda selected: _delete_cache_entry(article, selected))
+                >> (lambda _: _select_apply_action(article, False))
             )
         case FixAction.QUIT:
             return pure(NextStep.QUIT)

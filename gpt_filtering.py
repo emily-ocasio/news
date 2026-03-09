@@ -115,6 +115,7 @@ def display_filter_counts(rows: Array) -> Run[Unit]:
         return put_line(
             "No records ready for filtering (gptClass IS NULL).\n"
         ) ^ pure(unit)
+    total_ready = sum(int(row["ReadyCount"]) for row in rows)
     lines = "\n".join(
         f"{row['PubYear']}: {row['ReadyCount']}"
         for row in rows
@@ -122,6 +123,7 @@ def display_filter_counts(rows: Array) -> Run[Unit]:
     return put_line(
         "Ready for filtering (AutoClass = M, gptClass IS NULL) by year:\n"
         f"{lines}\n"
+        f"Total ready for filtering (all years): {total_ready}\n"
     ) ^ pure(unit)
 
 def retrieve_articles(num: int) -> Run[Articles]:

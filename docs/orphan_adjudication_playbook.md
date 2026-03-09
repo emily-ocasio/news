@@ -57,7 +57,7 @@ Downstream expectation:
   4. `uid` ascending
 - Use unmatched rows from `orphan_matches_final_current` where `rec_type='orphan'`.
 - Queue eligibility must exclude previously adjudicated orphans with terminal decisions:
-  - exclude if `orphan_id` exists in `orphan_adjudication_overrides` with `resolution_label IN ('likely_missed_match','possible_but_weak','unlikely')`.
+  - exclude if `orphan_id` exists in `orphan_adjudication_overrides` with `resolution_label IN ('matched','not_same_person','insufficient_information')`.
   - allow retry only when prior `resolution_label = 'analysis_incomplete'`.
 - If `starting_after_orphan_id` is provided:
   - locate that orphan in the same ordering,
@@ -95,21 +95,22 @@ When `group_same_incident=true`, group consecutive unmatched orphans before deep
 - If one orphan clearly diverges, split it from the group and process separately.
 
 ## Decision Labels
-- `likely_missed_match`
-- `possible_but_weak`
-- `unlikely`
+- `matched`
+- `not_same_person`
+- `insufficient_information`
 - `analysis_incomplete` (non-terminal safeguard label; do not persist as final adjudication)
 
 ## Label Semantics
-- Use `unlikely` when required stages were completed but evidence remains non-specific, contradictory, or insufficient for defensible person-level linkage.
+- Use `not_same_person` when required stages were completed but evidence remains non-specific, contradictory, or insufficient for defensible person-level linkage.
+- Use `insufficient_information` when Pass-1 anchor extraction cannot produce sufficiently specific, validated incident anchors.
 - Use `analysis_incomplete` only for process failure conditions:
   - required stage not executed,
   - database/tooling failure,
   - missing required evidence due to execution failure (not due to inherently vague source narrative).
-- For composite or high-level narrative articles with no unique incident anchors after fallback review, prefer `unlikely` with reason code `insufficient_incident_specificity_after_fallback`.
+- For composite or high-level narrative articles with no unique incident anchors after Pass-1 validation, prefer `insufficient_information` with reason code `insufficient_incident_specificity_after_pass1`.
 
 ## Prohibited Shortcuts
-- Do not assign `unlikely` solely because `orphan_entity_pairs` has zero rows.
+- Do not assign `not_same_person` solely because `orphan_entity_pairs` has zero rows.
 - Do not end analysis after proving an orphan is unmatched; that is precondition context, not adjudication evidence.
 - Do not use token-overlap-only, lexical-intersection-only, regex-only, or single-score heuristics as the sole basis for a terminal label.
 - Do not generate one bulk script to auto-label all cases with terminal outcomes unless the user explicitly requests `batch_scoring`.
@@ -143,7 +144,7 @@ When all conditions below are true, allow a strong group-level resolution:
 3. Orphans in the subgroup are indistinguishable from each other (no reliable differentiating attributes).
 
 Then:
-- Assign each orphan in the subgroup as `likely_missed_match`.
+- Assign each orphan in the subgroup as `matched`.
 - Use a one-to-one arbitrary bijection across the matched entity subgroup (never many-to-one).
 - Record explicit provenance in evidence output:
   - `assignment_mode = group_level_arbitrary_bijection`
@@ -151,13 +152,9 @@ Then:
   - `individual_identity_confidence = low`
 
 ## Required Analysis Stages
-Before a terminal label (`likely_missed_match`, `possible_but_weak`, `unlikely`) is allowed, complete and report the following stages per orphan/group.
+Before a terminal label (`matched`, `not_same_person`, `insufficient_information`) is allowed, complete and report the following stages per orphan/group unless Pass-1 directly yields `insufficient_information`.
 
-1. Stage A: baseline candidate check
-- Query existing `orphan_entity_pairs`/`orphan_entity_pairs_top1` for context only.
-- If zero rows, continue to Stage B (never finalize here).
-
-2. Stage B: fallback candidate generation (mandatory when Stage A has zero rows)
+1. Stage B: fallback candidate generation
 - Query `entity_link_input` using recall-first constraints:
   - same city (or nearest compatible city context),
   - year/date proximity windows,
@@ -171,13 +168,13 @@ Before a terminal label (`likely_missed_match`, `possible_but_weak`, `unlikely`)
     - if source narrative is secondary/reference style or orphan fields are sparse (`unknown`/`NULL` location, age, sex, weapon, or weak date precision), minimum `LIMIT` is `125`.
     - agent must record chosen Stage B `LIMIT` and rationale in the stage trace.
 
-3. Stage C: relaxed expansion (mandatory when Stage B is sparse/empty)
+2. Stage C: relaxed expansion (mandatory when Stage B is sparse/empty)
 - Widen date and location tolerances.
 - Include MAR-corrected/normalized address compatibility.
 - Preserve obvious hard contradictions (for example, extreme method mismatch unless source/extraction error evidence exists).
 
-3b. Stage C2: text-led candidate expansion (mandatory trigger conditions)
-- Run article-text retrieval before any terminal `unlikely` when one or more conditions hold:
+3. Stage C2: text-led candidate expansion (mandatory trigger conditions)
+- Run article-text retrieval before any terminal `not_same_person` when one or more conditions hold:
   - source narrative is secondary/reference style (for example, commentary, roundup, retrospective),
   - structured orphan fields are sparse (`unknown`/`NULL` location, age, sex, or weak date precision),
   - Stage B/C produced weak or generic candidate sets with no strong anchor fit.
@@ -193,7 +190,7 @@ Before a terminal label (`likely_missed_match`, `possible_but_weak`, `unlikely`)
   - `low_certainty` (retrospective/range phrasing such as "since 1978", "over recent years", multi-year recap): use lower-bound-to-pub-year when available; otherwise default to `pub_year-5` to `pub_year`.
   - Record chosen certainty level and window rationale in stage trace.
 
-4. Stage D: narrative anchor comparison (always required before terminal `unlikely`)
+4. Stage D: narrative anchor comparison (always required before terminal `not_same_person`)
 - Compare source-article anchors against top fallback candidates using article text as the primary evidence source.
 - In Stage D and beyond, treat structured fields as secondary aids:
   - mainly for victim/incident indexing in multi-victim articles,
@@ -213,15 +210,15 @@ Before a terminal label (`likely_missed_match`, `possible_but_weak`, `unlikely`)
   - assign `analysis_incomplete`,
   - report missing stage(s),
   - do not persist as final adjudication.
-- A terminal `likely_missed_match` or `possible_but_weak` requires explicit fact-level correspondence, not score-only similarity.
-- A terminal `unlikely` requires explicit conflict analysis (date/location/weapon/circumstance) and narrative-anchor review.
-- For `low_certainty` date contexts, date mismatch alone is insufficient for terminal `unlikely`; require additional contradiction on anchors/circumstance/location/method.
-- If anchor evidence is missing because the source is inherently non-specific after required stages, assign `unlikely` with an explicit specificity-based reason code.
+- A terminal `matched` requires explicit fact-level correspondence, not score-only similarity.
+- A terminal `not_same_person` requires explicit conflict analysis (date/location/weapon/circumstance) and narrative-anchor review.
+- For `low_certainty` date contexts, date mismatch alone is insufficient for terminal `not_same_person`; require additional contradiction on anchors/circumstance/location/method.
+- If anchor evidence is missing because the source is inherently non-specific after required stages, assign `insufficient_information` with an explicit specificity-based reason code.
 - If anchor evidence is missing because analysis steps failed to run, assign `analysis_incomplete`.
 - Terminal decisions must satisfy the Multi-Victim Constraint.
-- A terminal `unlikely` is invalid if Stage C2 trigger conditions were present but Stage C2 was not executed.
-- A terminal `unlikely` is invalid if Stage C2 lacked an auditable retrieval rationale (queries used, why chosen, and why alternatives were rejected).
-- Any terminal label (`likely_missed_match`, `possible_but_weak`, `unlikely`) is invalid if its explanation is generic/templated and does not cite case-specific facts.
+- A terminal `not_same_person` is invalid if Stage C2 trigger conditions were present but Stage C2 was not executed.
+- A terminal `not_same_person` is invalid if Stage C2 lacked an auditable retrieval rationale (queries used, why chosen, and why alternatives were rejected).
+- Any terminal label (`matched`, `not_same_person`, `insufficient_information`) is invalid if its explanation is generic/templated and does not cite case-specific facts.
 
 ## Persistence Contract
 Use DuckDB direct writes unless `dry_run=true`.
@@ -245,14 +242,14 @@ Use DuckDB direct writes unless `dry_run=true`.
   - include the strongest candidate-side supporting or contradicting facts from article text,
   - explicitly explain why those facts indicate same-person plausibility or non-match,
   - make the causal chain explicit (supports, contradictions/uncertainty, then decision).
-- These requirements apply to all terminal labels (`likely_missed_match`, `possible_but_weak`, `unlikely`).
+- These requirements apply to all terminal labels (`matched`, `not_same_person`, `insufficient_information`).
 - Do not use templated headings/sections in `reason_summary` (for example: "Orphan facts:", "Candidate facts:", "Decision:").
 - Generic phrases such as "partial anchor agreement" are allowed only as lead-in language; they are insufficient unless followed by concrete facts.
 - Place detailed telemetry and long field dumps (for example day gaps, exhaustive alternates, bulk attribute lists) in `evidence_json`, not `reason_summary`.
 - Label-specific focus for `reason_summary`:
-  - `likely_missed_match`: emphasize the key text anchor(s) that link orphan and entity; mention only uncertainty that does not overturn linkage.
-  - `unlikely`: emphasize key text-level incompatibilities that reject linkage (for example different event setting, method narrative, or actor/victim context), not generic "insufficient specificity" language.
-  - `possible_but_weak`: explicitly balance what is textually close and what is textually different, then justify why evidence remains intermediate.
+  - `matched`: emphasize the key text anchor(s) that link orphan and entity; mention only uncertainty that does not overturn linkage.
+  - `not_same_person`: emphasize key text-level incompatibilities that reject linkage (for example different event setting, method narrative, or actor/victim context), not generic language.
+  - `insufficient_information`: emphasize why validated incident anchors could not be established from source narrative.
 - Before persistence, apply a reviewer-confidence check:
   - If an independent reader could not understand and defend the decision from `reason_summary`, revise it before writing.
 

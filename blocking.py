@@ -114,7 +114,7 @@ class BlockComp(StrEnum):
         "AND l.lon IS NOT NULL AND r.lon IS NOT NULL"
     )
     CLOSE_LONG_LAT = "abs(l.lat - r.lat) <= 0.0045 AND abs(l.lon - r.lon) <= 0.0055"
-    CLOSE_SUMMARY = "array_cosine_similarity(l.summary_vec, r.summary_vec) >= 0.5"
+    CLOSE_SUMMARY = "array_cosine_similarity(l.summary_vec, r.summary_vec) >= 0.7"
     RIGHT_NOT_EARLIER = "r.year >= l.year"
 
 
@@ -256,6 +256,15 @@ class DedupBlockRule(StrEnum):
         BlockComp.EXACT_YEAR,
         BlockComp.SAME_AGE_SEX
     )
+    YEAR2_AGE_SEX = _block_from_comps(
+        BlockComp.YEAR_DIFF_2,
+        BlockComp.SAME_AGE_SEX
+    )
+    YEAR2_AGE_WEAPON = _block_from_comps(
+        BlockComp.YEAR_DIFF_2,
+        BlockComp.SAME_AGE,
+        BlockComp.SAME_WEAPON
+    )
     SAME_NAMES_30DAYS = _block_from_comps(
         BlockComp.SAME_NAMES, BlockComp.MIDPOINT_30DAYS)
     DATE_LOCATION_AGE_SEX = _block_from_comps(
@@ -275,6 +284,7 @@ class DedupBlockRule(StrEnum):
         BlockComp.SAME_AGE,
         BlockComp.SAME_WEAPON
     )
+    SUMMARY = _block_from_comps(BlockComp.CLOSE_SUMMARY)
 
 
 # Backwards-compatible aliases for refactors still in flight.
@@ -317,9 +327,10 @@ ORPHAN_VICTIM_BLOCKS = [
     DedupBlockRule.YEAR_MONTH,
     DedupBlockRule.DATE_LOCATION,
     DedupBlockRule.DATE_LOCATION_SHIFTED,
-    DedupBlockRule.AGE_SEX,
-    DedupBlockRule.AGE_WEAPON,
-    DedupBlockRule.OFFENDER_AGE_SEX
+    DedupBlockRule.YEAR2_AGE_SEX,
+    DedupBlockRule.YEAR2_AGE_WEAPON,
+    DedupBlockRule.OFFENDER_AGE_SEX,
+    DedupBlockRule.SUMMARY,
 ]
 
 ORPHAN_DETERMINISTIC_BLOCKS = [
