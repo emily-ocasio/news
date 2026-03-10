@@ -211,7 +211,6 @@ class TFComparisonLevel(ComparisonLevel):
     tf_adjustment_weight: float = 1.0
     tf_minimum_u_value: float = 0.001
 
-
 NAME_COMP = cl.CustomComparison(
     output_column_name="victim_name",
     comparison_levels=[
@@ -268,6 +267,20 @@ NAME_COMP = cl.CustomComparison(
     ]
 )
 
+DAY_PRECISION = cll.LiteralMatchLevel("date_precision", "day", "string")
+
+NOT_DAY_PRECISION = cll.Not(DAY_PRECISION)
+
+YEAR_PRECISION = cll.Or(
+    cll.LiteralMatchLevel("date_precision", "year", "string", "left"),
+    cll.LiteralMatchLevel("date_precision", "year", "string", "right")
+)
+
+MONTH_PRECISION = cll.And(
+    NOT_DAY_PRECISION,
+    cll.Not(YEAR_PRECISION)
+)
+
 DATE_COMP = cl.CustomComparison(
     output_column_name="incident_date",
     comparison_levels=[
@@ -281,41 +294,54 @@ DATE_COMP = cl.CustomComparison(
             cll.Or(
                 cll.And(
                     cll.ExactMatchLevel("midpoint_day"),
-                    cll.LiteralMatchLevel("date_precision", "day", "string")
+                    DAY_PRECISION
                 ),
-                cll.LiteralMatchLevel("date_precision", "month", "string", "left"),
-                cll.LiteralMatchLevel("date_precision", "month", "string", "right")
+                MONTH_PRECISION
             ),
         ).configure(label_for_charts="exact date / month precision match"),
         cllc.Or(
             cllc.And(
-                cll.ExactMatchLevel("year"),
-                cll.ExactMatchLevel("month")
-            ),
-            cllc.And(
                 cll.AbsoluteDifferenceLevel("midpoint_day", 2),
-                cll.LiteralMatchLevel("date_precision", "day", "string")
+                DAY_PRECISION
             ),
             cllc.And(
-                cllc.Or(
-                    cll.LiteralMatchLevel("date_precision", "year", "string", "left"),
-                    cll.LiteralMatchLevel("date_precision", "year", "string", "right")
-                ),
-                cll.ExactMatchLevel("year")
-            )
-        ).configure(
-            label_for_charts="exact yr/mon or within 2 days or year precision match"
+                cll.AbsoluteDifferenceLevel("midpoint_day", 60),
+                MONTH_PRECISION
             ),
-        ComparisonLevel(
-            "midpoint within 7 months",
-            _clause_from_comps(
-                ComparisonComp.MIDPOINT_EXISTS,
-                ComparisonComp.MIDPOINT_7MONTH,
-                ComparisonComp.YEAR_PRECISION
-            )
-        ).to_dict(),
-        cll.AbsoluteDifferenceLevel("midpoint_day", 370).configure(
-            label_for_charts="within a year"
+            cllc.And(
+                cll.ExactMatchLevel("year"),
+                YEAR_PRECISION
+            ),
+        ).configure(label_for_charts="2d day prec or 2m month prec or year prec match"),
+        cll.Or(
+            cll.And(
+                cll.AbsoluteDifferenceLevel("midpoint_day", 15),
+                DAY_PRECISION
+            ),
+            cll.And(
+                cll.AbsoluteDifferenceLevel("midpoint_day", 90),
+                MONTH_PRECISION
+            ),
+            cll.And(
+                cll.AbsoluteDifferenceLevel("year", 2),
+                YEAR_PRECISION
+            ),
+            # ComparisonLevel(
+            #     "midpoint within 7 months",
+            #     _clause_from_comps(
+            #         ComparisonComp.MIDPOINT_EXISTS,
+            #         ComparisonComp.MIDPOINT_7MONTH,
+            #         ComparisonComp.YEAR_PRECISION
+            #     )
+            # ).to_dict(),
+        ).configure(label_for_charts="15d day prec or 3m prec or 2yr year prec"),
+        cll.And(
+            NOT_DAY_PRECISION,
+            cll.AbsoluteDifferenceLevel("midpoint_day", 740).configure(
+                label_for_charts="within 2 years"
+            ),
+        ).configure(
+            label_for_charts="within about 2 years month or year precision"
         ),
         cll.ElseLevel()
     ]
@@ -683,7 +709,7 @@ DIST_COMP_NEW = cl.CustomComparison(
         ),
         cllc.Or(
             cllc.And(
-                cll.DistanceInKMLevel("lat", "lon", 0.0001),
+                cll.DistanceInKMLevel("lat", "lon", 0.0005),
                 cllc.Or(
                     cll.LiteralMatchLevel("address_type", "ADDRESS", "string"),
                     cll.LiteralMatchLevel("address_type", "INTERSECTION", "string"),
@@ -1017,6 +1043,14 @@ SUMMARY_COMP = cl.CustomComparison(
         cll.CosineSimilarityLevel(
             col_name="summary_vec",
             similarity_threshold=0.50
+        ),
+        cll.CosineSimilarityLevel(
+            col_name="summary_vec",
+            similarity_threshold=0.45
+        ),
+        cll.CosineSimilarityLevel(
+            col_name="summary_vec",
+            similarity_threshold=0.40
         ),
         cll.ElseLevel()
     ]

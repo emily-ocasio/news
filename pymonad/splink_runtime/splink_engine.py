@@ -94,6 +94,7 @@ def _init_splink_dedupe_context(job: SplinkDedupeJob) -> Run[Unit]:
             em_min_runs=job.em_min_runs,
             em_stop_delta=job.em_stop_delta,
             capture_blocked_edges=capture_blocked_edges,
+            inference_only=job.inference_only,
             do_not_link_left_col=job.do_not_link_left_col,
             do_not_link_right_col=job.do_not_link_right_col,
         )

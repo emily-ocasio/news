@@ -15,7 +15,7 @@ from ..array import Array
 from ..hashset import HashSet
 from ..maybe import Just
 from ..monad import Unit, unit
-from ..run import Run, fold_run, pure
+from ..run import ErrorPayload, Run, fold_run, pure, throw
 from ..runsql import SQL, sql_exec
 from ..tuple import Tuple
 from .splink_cluster import diagnostic_cluster_blocked_edges_run, resolve_pair_id_cols_from_table_step
@@ -326,6 +326,45 @@ def _build_linker_from_ctx(ctx: SplinkContext, db_api: DuckDBAPI, plan: PredictP
     )
 
 
+def _validate_inference_only_settings(ctx: SplinkContext) -> Run[Unit]:
+    if not ctx.inference_only:
+        return pure(unit)
+
+    settings = ctx.settings
+    lambda_ok = settings.get("probability_two_random_records_match") is not None
+    comparisons = settings.get("comparisons")
+    comparisons_ok = isinstance(comparisons, list) and len(comparisons) > 0
+    level_probs_ok = False
+
+    if comparisons_ok:
+        comparisons_list = cast(list[Any], comparisons)
+        for comparison in comparisons_list:
+            if not isinstance(comparison, dict):
+                continue
+            levels = comparison.get("comparison_levels")
+            if not isinstance(levels, list):
+                continue
+            for level in levels:
+                if not isinstance(level, dict):
+                    continue
+                if level.get("m_probability") is not None or level.get("u_probability") is not None:
+                    level_probs_ok = True
+                    break
+            if level_probs_ok:
+                break
+
+    if lambda_ok and comparisons_ok and level_probs_ok:
+        return pure(unit)
+
+    return throw(
+        ErrorPayload(
+            "Inference-only Splink prediction requires saved model JSON settings "
+            "with probability_two_random_records_match and trained comparison "
+            "level probabilities."
+        )
+    )
+
+
 def _filter_pairs_table_do_not_link_step(ctx: SplinkContext) -> Run[Unit]:
     pairs_table = ctx.tables.get_required(PairsTableName)
     do_not_link_table = ctx.tables.get_required(DoNotLinkTableName)
@@ -398,6 +437,14 @@ def _predict_pairs_step(_: SplinkContext) -> Run[Unit]:
 def splink_predict_pairs_from_ctx(_: SplinkContext):
     """Run the full prediction pipeline and return the resulting pair metadata."""
     def _with_ctx(ctx: SplinkContext):
+        if ctx.inference_only:
+            return (
+                with_splink_context(_validate_inference_only_settings)
+                ^ with_splink_context(_set_final_plan)
+                ^ _with_splink_context_api_plan(_build_linker_from_ctx)
+                ^ with_splink_context(_predict_pairs_step)
+                ^ _with_splink_context_linker_plan(predict_result_from_ctx)
+            )
         if ctx.capture_blocked_edges:
             return (
                 with_splink_context(_set_diagnostic_plan)

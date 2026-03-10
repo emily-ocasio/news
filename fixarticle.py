@@ -138,7 +138,7 @@ def _display_latest_gpt_response(article: Article) -> Run[Article]:
 
 def _cache_rows_for_article(article: Article) -> Run[tuple[dict, ...]]:
     """
-    Return latest [K]-produced cache rows for this article keyed by orphan.
+    Return current [K]-produced cache rows for this article directly from llm_cache.
     """
     record_id = article.record_id or 0
     if record_id <= 0:
@@ -148,45 +148,21 @@ def _cache_rows_for_article(article: Article) -> Run[tuple[dict, ...]]:
         sql_query(
             SQL(
                 """
-                WITH readiness_latest AS (
-                  SELECT
-                    run_id,
-                    orphan_id,
-                    article_id,
-                    readiness_status,
-                    readiness_reason,
-                    pass1_idempotency_key,
-                    created_at,
-                    ROW_NUMBER() OVER (
-                      PARTITION BY orphan_id, pass1_idempotency_key
-                      ORDER BY created_at DESC, run_id DESC
-                    ) AS rn
-                  FROM orphan_adj_cache_readiness
-                  WHERE article_id = ?
-                    AND COALESCE(pass1_idempotency_key, '') <> ''
-                )
                 SELECT
-                  rl.run_id,
-                  rl.orphan_id,
-                  rl.article_id,
-                  rl.readiness_status,
-                  rl.readiness_reason,
-                  rl.pass1_idempotency_key AS cache_key,
-                  rl.created_at AS readiness_created_at,
                   lc.model,
                   lc.prompt_version,
                   lc.updated_at AS cache_updated_at,
+                  lc.idempotency_key AS orphan_id,
+                  lc.idempotency_key AS cache_key,
                   CAST(lc.input_json AS VARCHAR) AS input_json_text,
                   CAST(lc.response_json AS VARCHAR) AS response_json_text
-                FROM readiness_latest rl
-                JOIN llm_cache lc
-                  ON lc.stage = ?
-                 AND lc.idempotency_key = rl.pass1_idempotency_key
-                WHERE rl.rn = 1
-                ORDER BY rl.orphan_id;
+                FROM llm_cache lc
+                WHERE lc.stage = ?
+                  AND lc.idempotency_key LIKE ?
+                ORDER BY lc.idempotency_key;
                 """
             ),
-            SQLParams((record_id, String(E2E_CACHE_STAGE))),
+            SQLParams((String(E2E_CACHE_STAGE), String(f"{record_id}:%"))),
         )
     ) >> (lambda rows: pure(tuple(dict(r) for r in rows)))
 
@@ -200,9 +176,6 @@ def _display_cache_rows(rows: tuple[dict, ...]) -> Run[None]:
     def fmt(i: int, row: dict) -> str:
         orphan_id = str(row.get("orphan_id") or "")
         cache_key = str(row.get("cache_key") or "")
-        readiness_status = str(row.get("readiness_status") or "")
-        readiness_reason = str(row.get("readiness_reason") or "")
-        run_id = str(row.get("run_id") or "")
         updated_at = str(row.get("cache_updated_at") or "")
         model = str(row.get("model") or "")
         prompt_version = str(row.get("prompt_version") or "")
@@ -212,9 +185,6 @@ def _display_cache_rows(rows: tuple[dict, ...]) -> Run[None]:
             f"[F] [K] cache entry {i}\n"
             f"  orphan_id: {orphan_id}\n"
             f"  cache_key: {cache_key}\n"
-            f"  run_id: {run_id}\n"
-            f"  readiness_status: {readiness_status}\n"
-            f"  readiness_reason: {readiness_reason}\n"
             f"  model: {model}\n"
             f"  prompt_version: {prompt_version}\n"
             f"  cache_updated_at: {updated_at}\n"
@@ -253,7 +223,6 @@ def _delete_cache_entry(article: Article, row: dict) -> Run[None]:
     """
     Delete one selected orphan adjudication cache entry.
     """
-    record_id = article.record_id or 0
     orphan_id = str(row.get("orphan_id") or "")
     cache_key = str(row.get("cache_key") or "")
 
@@ -268,20 +237,9 @@ def _delete_cache_entry(article: Article, row: dict) -> Run[None]:
             ),
             SQLParams((String(E2E_CACHE_STAGE), String(cache_key))),
         )
-        ^ sql_exec(
-            SQL(
-                """
-                DELETE FROM orphan_adj_cache_readiness
-                WHERE article_id = ?
-                  AND orphan_id = ?
-                  AND pass1_idempotency_key = ?;
-                """
-            ),
-            SQLParams((record_id, String(orphan_id), String(cache_key))),
-        )
         ^ put_line(
             "[F] Removed orphan adjudication cache entry "
-            f"(article_id={record_id}, orphan_id={orphan_id}, cache_key={cache_key})."
+            f"(orphan_id={orphan_id}, cache_key={cache_key})."
         )
         ^ pure(None)
     )

@@ -9,7 +9,7 @@ Start every chat response to questions about this program with the following tex
 ## Runtime Environment
 
 - The application is run under the Conda environment `news`.
-- For Python compile checks, debugging, and troubleshooting, use the `news` environment interpreter/tools (for example `/Users/wendell/miniforge3/envs/news/bin/python`, `dmypy`, `pyright`) rather than system Python.
+- For Python compile checks, linting, debugging, and troubleshooting, use the `news` environment interpreter/tools (for example `/Users/wendell/miniforge3/envs/news/bin/python`, `dmypy`, `pyright`, `pylint`) rather than system Python.
 - If running interactively in shell, activate first: `conda activate news`.
 
 ## Mypy (dmypy) Type Checking
@@ -45,6 +45,19 @@ After any code changes:
 /Users/wendell/miniforge3/envs/news/bin/pyright --project pyrightconfig.cli.json
 
 2. If any type errors are reported (non-zero exit status or output with errors), treat them as failures and fix them before completing the change.
+
+## Pylint
+
+After any code changes:
+
+1. Run Pylint from the `news` environment using the Conda environment Python executable and the required CLI overrides:
+
+/Users/wendell/miniforge3/envs/news/bin/python -m pylint
+--max-line-length=88
+--extension-pkg-allow-list=fasttext
+.
+
+2. Treat any reported errors, warnings, or other issues as failures and fix them before completing the change.
 
 
 ## 1. Project Overview
@@ -153,4 +166,3 @@ This workflow ensures data integrity through monadic composition, with all opera
 - *Never* add a new run_base_effect eliminator in a controller - they all run inside the main run_base_effect in runarticles.py. 
 - If a try/except-like is needed for localized error handling within a portion of a controller flow, a new run_except context can be created for that portion. Avoid using try/except in controllers directly. The outer run_except in runarticles.py will catch any exceptions not handled by inner run_except contexts, log them, and return to the main menu.
 - Avoid using lists and stateful loops for processing multiple items. Use pymonad/Array and folding / sequencing / traversing instead to maintain the functional style and immutability.
-

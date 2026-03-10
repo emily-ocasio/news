@@ -31,7 +31,7 @@
   - Re-attach after query completion using `LOAD sqlite_scanner; ATTACH '<sqlite_path>' AS sqldb (TYPE SQLITE);`.
   - Reason: attached SQLite can cause severe catalog-query stalls even when normal attached data reads are fast.
 - When displaying orphan IDs, avoid editor line/column auto-link rendering by inserting a zero-width space after each colon.
-  - Use display like `100168529:\u200b0:\u200b0`.
+  - Use display like `100168529:\u200b0:\u200b0` when in regular text mode or `100168529:0:0` only inside code quote mode.
   - Do not render these as line/column references (for example, avoid phrasing like `line 0, column 0`).
 
 ## Mode: General Development

@@ -501,6 +501,7 @@ class SplinkContext:
     em_min_runs: int = 1
     em_stop_delta: float = 0.002
     capture_blocked_edges: bool = False
+    inference_only: bool = False
     do_not_link_left_col: BlockedIdLeftColumnName = BlockedIdLeftColumnName("id_l")
     do_not_link_right_col: BlockedIdRightColumnName = BlockedIdRightColumnName("id_r")
 
@@ -602,3 +603,4 @@ class SplinkDedupeJob:
     blocked_pairs_out: BlockedPairsTableName = BlockedPairsTableName("")
     capture_blocked_edges: bool = True
     u_estimation_max_pairs: int = 100_000_000
+    inference_only: bool = False

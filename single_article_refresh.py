@@ -732,42 +732,18 @@ def _invalidate_adjudications_for_article(record_id: int, run_id: str) -> Run[Un
                 SQL(
                     """
                     CREATE OR REPLACE TEMP TABLE _invalidate_fixg_cache AS
-                    WITH from_readiness AS (
-                      SELECT DISTINCT
-                        orphan_id,
-                        pass1_idempotency_key AS cache_key
-                      FROM orphan_adj_cache_readiness
-                      WHERE article_id = ?
-                        AND orphan_id LIKE ?
-                        AND COALESCE(pass1_idempotency_key, '') <> ''
-                    ),
-                    from_cache_payload AS (
-                      SELECT DISTINCT
-                        CAST(json_extract_string(response_json, '$.orphan_id') AS VARCHAR) AS orphan_id,
-                        idempotency_key AS cache_key
-                      FROM llm_cache
-                      WHERE stage = ?
-                        AND CAST(json_extract_string(response_json, '$.orphan_id') AS VARCHAR) LIKE ?
-                    )
                     SELECT
-                      orphan_id,
-                      cache_key,
+                      idempotency_key AS orphan_id,
+                      idempotency_key AS cache_key,
                       'fixarticle_G_reextract_orphan_anchor' AS invalidate_reason
-                    FROM (
-                      SELECT * FROM from_readiness
-                      UNION ALL
-                      SELECT * FROM from_cache_payload
-                    ) all_keys
-                    WHERE COALESCE(orphan_id, '') LIKE ?
-                      AND COALESCE(cache_key, '') <> '';
+                    FROM llm_cache
+                    WHERE stage = ?
+                      AND idempotency_key LIKE ?;
                     """
                 ),
                 SQLParams(
                     (
-                        record_id,
-                        rec_prefix,
                         String(E2E_CACHE_STAGE),
-                        rec_prefix,
                         rec_prefix,
                     )
                 ),
@@ -800,22 +776,6 @@ def _invalidate_adjudications_for_article(record_id: int, run_id: str) -> Run[Un
                             ,
                             SQLParams((String(E2E_CACHE_STAGE),))
                         )
-                        ^ put_line(f"[F] cache invalidation step: delete readiness rows ({record_id})")
-                        ^ sql_exec(
-                            SQL(
-                                """
-                                DELETE FROM orphan_adj_cache_readiness
-                                WHERE orphan_id IN (
-                                  SELECT DISTINCT orphan_id
-                                  FROM _invalidate_fixg_cache
-                                )
-                                  AND pass1_idempotency_key IN (
-                                    SELECT DISTINCT cache_key
-                                    FROM _invalidate_fixg_cache
-                                  );
-                                """
-                            )
-                        )
                         ^ put_line(
                             "[F] Removed orphan adjudication caches after [F]->[G] for article "
                             f"{record_id}: total={rows[0]['n_all']}, reason=fixarticle_G_reextract_orphan_anchor"
@@ -829,7 +789,7 @@ def _invalidate_adjudications_for_article(record_id: int, run_id: str) -> Run[Un
         )
 
     return (
-        put_line(f"[F] invalidation entry for article {record_id}.")
+        put_line(f"[F] invalidation entry for article {record_id} (run_id={run_id}).")
         ^ run_except(_run_core())
         >> (
             lambda res: (
