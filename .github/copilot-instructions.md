@@ -59,6 +59,32 @@ After any code changes:
 
 2. Treat any reported errors, warnings, or other issues as failures and fix them before completing the change.
 
+3. Pylint suppressions are allowed only for structural/design findings where a local fix would create disproportionate churn or require a broader refactor than the task calls for. The default expectation is still to fix the issue rather than suppress it.
+
+4. The allowed suppression categories are limited to:
+   - `too-many-lines`
+   - `too-few-public-methods`
+   - `too-many-instance-attributes`
+   - `too-many-return-statements`
+   - `too-many-locals`
+   - `too-many-arguments`
+   - `too-many-positional-arguments`
+
+5. Suppressions should not be used for concrete, localized issues that should be fixed directly, including for example:
+   - unused imports
+   - line length violations
+   - unnecessary lambda calls
+   - missing docstrings
+   - broad exception handling
+   - correctness, typing, SQL, or runtime issues
+
+6. When adding any suppression, explicitly mention it in the final response and state:
+   - which suppression was added
+   - where it was added
+   - why suppression was chosen instead of a direct fix
+
+7. Keep suppressions as narrow as practical. Prefer a local suppression over a module-wide suppression when a local suppression is sufficient.
+
 
 ## 1. Project Overview
 
@@ -166,3 +192,5 @@ This workflow ensures data integrity through monadic composition, with all opera
 - *Never* add a new run_base_effect eliminator in a controller - they all run inside the main run_base_effect in runarticles.py. 
 - If a try/except-like is needed for localized error handling within a portion of a controller flow, a new run_except context can be created for that portion. Avoid using try/except in controllers directly. The outer run_except in runarticles.py will catch any exceptions not handled by inner run_except contexts, log them, and return to the main menu.
 - Avoid using lists and stateful loops for processing multiple items. Use pymonad/Array and folding / sequencing / traversing instead to maintain the functional style and immutability.
+- pymonad folder contains generic monadic abstractions and helper functions not specific to any domain. Use these where appropriate to maintain consistency in the functional programming style.
+- anything imported from pymonad/ should be imported from the top-level pymonad namespace (for example, `from pymonad import Array, Maybe, V` rather than `from pymonad.validation import V`). Expose anything that is intended for use outside of the pymonad/ folder in the top-level __init__.py of pymonad.

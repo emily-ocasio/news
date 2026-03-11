@@ -2,26 +2,20 @@
 Controller [K]: Orphan adjudication replacement flow with deterministic staging,
 LLM-assisted anchor extraction/ranking, and idempotent caching.
 """
+# pylint: disable=too-many-lines,too-few-public-methods,too-many-instance-attributes,too-many-return-statements,too-many-locals,too-many-arguments,too-many-positional-arguments
 
 from __future__ import annotations
 
 import hashlib
 import json
 import re
-import sqlite3
-import threading
-import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal, cast
 
-import duckdb
-from openai import OpenAI
-from openai.types.responses import ResponsePromptParam
-from openai.types.responses.response_prompt_param import Variables
 from pydantic import BaseModel, ConfigDict, RootModel
-from splink import DuckDBAPI, Linker
 
 from article import Article
 from menuprompts import NextStep
@@ -33,8 +27,7 @@ from pymonad import (SQL, DbBackend, EnvKey, ErrorPayload, InputPrompt, Left,
                      to_gpt_tuple, to_json, to_prompts, with_duckdb,
                      with_models, with_namespace)
 from pymonad.array import Array
-from pymonad.openai import (GPTModel, GPTPromptTemplate, GPTResponseTuple,
-                            GPTUsage)
+from pymonad.openai import GPTModel, GPTResponseTuple
 from pymonad.run import fold_run
 from pymonad.runsplink import PairsTableName, PredictionInputTableNames
 from pymonad.traverse import array_traverse_run
@@ -66,21 +59,27 @@ ORPHAN_ADJ_PROMPTS: dict[str, str | tuple[str, str] | tuple[str]] = {
 
 
 class WordSet(RootModel[list[str]]):
-    pass
+    """A list of related search tokens for one retrieval variant."""
 
 
 class Anchor(BaseModel):
+    """A validated anchor theme and its retrieval variants from API 1."""
+
     model_config = ConfigDict(extra="forbid")
     anchor_theme: str
     variants: list[WordSet]
 
 
 class Pass1Response(BaseModel):
+    """Structured API 1 response containing candidate retrieval anchors."""
+
     model_config = ConfigDict(extra="forbid")
     anchors: list[Anchor]
 
 
 class RankResponse(BaseModel):
+    """Structured API 2 response containing the final candidate choice."""
+
     model_config = ConfigDict(extra="forbid")
     match_result: Literal["match", "no_match", "insufficient_information"]
     matched_entity_uid: str | None
@@ -88,6 +87,8 @@ class RankResponse(BaseModel):
 
 @dataclass(frozen=True)
 class CacheReadinessRow:
+    """Run-scoped readiness snapshot for one adjudication target."""
+
     orphan_id: str
     article_id: int | None
     city_id: str
@@ -112,6 +113,7 @@ class CacheReadinessRow:
         pass1_idempotency_key: str,
         rank_idempotency_key: str,
     ) -> "CacheReadinessRow":
+        """Return a copy updated with the computed cache-readiness state."""
         return CacheReadinessRow(
             orphan_id=self.orphan_id,
             article_id=self.article_id,
@@ -131,6 +133,7 @@ class CacheReadinessRow:
         )
 
     def with_group(self, group_id: str) -> "CacheReadinessRow":
+        """Return a copy assigned to a run-local processing group."""
         return CacheReadinessRow(
             orphan_id=self.orphan_id,
             article_id=self.article_id,
@@ -152,6 +155,8 @@ class CacheReadinessRow:
 
 @dataclass(frozen=True)
 class Dossier:
+    """Normalized source facts for one adjudication target."""
+
     orphan_id: str
     article_id: int | None
     city_id: str
@@ -174,7 +179,30 @@ class Dossier:
 
 
 @dataclass(frozen=True)
+class GroupDossier:
+    """Shared article/incident context for one same-incident orphan group."""
+
+    group_key: str
+    orphan_ids: tuple[str, ...]
+    article_id: int | None
+    incident_idx: int | None
+    city_id: str
+    year: int | None
+    month: int | None
+    midpoint_day: float | None
+    incident_date: str
+    victim_count: str
+    incident_location: str
+    incident_summary: str
+    article_title: str
+    article_text: str
+    article_pub_date: str
+
+
+@dataclass(frozen=True)
 class Pass1Request:
+    """Prompt payload for API 1 anchor generation."""
+
     article_title: str
     article_text: str
     article_date: str
@@ -184,6 +212,7 @@ class Pass1Request:
     incident_summary: str
 
     def to_prompt_variables(self) -> dict[str, str]:
+        """Serialize the request into stored-prompt variables."""
         return {
             "article_title": self.article_title,
             "article_text": self.article_text,
@@ -195,17 +224,33 @@ class Pass1Request:
         }
 
     def to_cache_payload(self) -> dict[str, Any]:
+        """Serialize the request for diagnostic cache storage."""
         return self.to_prompt_variables()
+
+    def to_display_payload(self) -> dict[str, Any]:
+        """Serialize the request for display-only logging."""
+        return {
+            "article_title": self.article_title,
+            "article_text": _truncate_article_text_for_display(self.article_text),
+            "article_date": self.article_date,
+            "incident_date": self.incident_date,
+            "incident_location": self.incident_location,
+            "victim_count": self.victim_count,
+            "incident_summary": self.incident_summary,
+        }
 
 
 @dataclass(frozen=True)
 class ValidatedAnchor:
+    """Anchor that passed deterministic validation and FTS checks."""
+
     anchor_text: str
     variants: tuple[str, ...]
     variant_word_sets: tuple[tuple[str, ...], ...]
     doc_freq: int
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize the anchor for evidence and table storage."""
         return {
             "anchor_text": self.anchor_text,
             "anchor_type": "phrase",
@@ -218,9 +263,20 @@ class ValidatedAnchor:
 
 
 @dataclass(frozen=True)
+class C2QuerySpec:
+    """Display text plus safe SQLite FTS expression for one token bundle."""
+
+    display_text: str
+    fts_query: str
+
+
+@dataclass(frozen=True)
 class C2Candidate:
+    """Entity candidate retrieved from the C2 full-text stage."""
+
     entity_uid: str
     source_article_id: int | None
+    source_incident_idx: int | None
     midpoint_day: float | None
     day_gap: float
     compat_count: int
@@ -230,10 +286,12 @@ class C2Candidate:
     splink_match_weight: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize the candidate for persistence and logging."""
         return {
             "entity_uid": self.entity_uid,
             "source_article_id": self.source_article_id,
             "article_id": self.source_article_id,
+            "source_incident_idx": self.source_incident_idx,
             "midpoint_day": self.midpoint_day,
             "day_gap": self.day_gap,
             "compat_count": self.compat_count,
@@ -247,6 +305,8 @@ class C2Candidate:
 
 @dataclass(frozen=True)
 class MergedCandidate:
+    """Entity-level candidate merged across retrieval hits."""
+
     entity_uid: str
     det_score: float
     midpoint_day: float | None
@@ -263,6 +323,7 @@ class MergedCandidate:
     rows: tuple[dict[str, Any], ...]
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize the merged candidate for logging and evidence."""
         return {
             "entity_uid": self.entity_uid,
             "det_score": self.det_score,
@@ -282,7 +343,43 @@ class MergedCandidate:
 
 
 @dataclass(frozen=True)
+class IncidentRepresentativeCandidate:
+    """One API-2 candidate representing a single candidate incident."""
+
+    entity_uid: str
+    source_article_id: int | None
+    source_incident_idx: int | None
+    midpoint_day: float | None
+    day_gap: float
+    summary_cosine: float
+    det_score: float
+    anchor_hit_count: int
+    query_variant: str
+    query_variants: tuple[str, ...]
+    eligible_entity_uids: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize the incident representative for logging and evidence."""
+        return {
+            "entity_uid": self.entity_uid,
+            "source_article_id": self.source_article_id,
+            "article_id": self.source_article_id,
+            "source_incident_idx": self.source_incident_idx,
+            "midpoint_day": self.midpoint_day,
+            "day_gap": self.day_gap,
+            "summary_cosine": self.summary_cosine,
+            "det_score": self.det_score,
+            "anchor_hit_count": self.anchor_hit_count,
+            "query_variant": self.query_variant,
+            "query_variants": list(self.query_variants),
+            "eligible_entity_uids": list(self.eligible_entity_uids),
+        }
+
+
+@dataclass(frozen=True)
 class RankCandidateContext:
+    """Candidate article context presented to API 2."""
+
     entity_uid: str
     article_title: str
     article_text: str
@@ -293,6 +390,7 @@ class RankCandidateContext:
     incident_summary: str
 
     def to_prompt_payload(self) -> dict[str, Any]:
+        """Serialize one candidate context for stored-prompt input."""
         return {
             "entity_uid": self.entity_uid,
             "article_title": self.article_title,
@@ -304,9 +402,24 @@ class RankCandidateContext:
             "incident_summary": self.incident_summary,
         }
 
+    def to_display_payload(self) -> dict[str, Any]:
+        """Serialize one candidate context for display-only logging."""
+        return {
+            "entity_uid": self.entity_uid,
+            "article_title": self.article_title,
+            "article_text": _truncate_article_text_for_display(self.article_text),
+            "article_date": self.article_date,
+            "incident_date": self.incident_date,
+            "incident_location": self.incident_location,
+            "victim_count": self.victim_count,
+            "incident_summary": self.incident_summary,
+        }
+
 
 @dataclass(frozen=True)
 class RankRequest:
+    """Prompt payload for API 2 direct candidate ranking."""
+
     article_title: str
     article_text: str
     article_date: str
@@ -317,6 +430,7 @@ class RankRequest:
     candidates: tuple[RankCandidateContext, ...]
 
     def to_prompt_variables(self) -> dict[str, str]:
+        """Serialize the request into stored-prompt variables."""
         return _stringify_prompt_vars(
             {
                 "target_article_title": self.article_title,
@@ -333,22 +447,25 @@ class RankRequest:
         )
 
     def to_display_payload(self) -> dict[str, Any]:
+        """Serialize the request into a log-friendly structure."""
         return {
             "article_title": self.article_title,
-            "article_text": self.article_text,
+            "article_text": _truncate_article_text_for_display(self.article_text),
             "article_date": self.article_date,
             "incident_date": self.incident_date,
             "incident_location": self.incident_location,
             "victim_count": self.victim_count,
             "incident_summary": self.incident_summary,
             "candidates": [
-                candidate.to_prompt_payload() for candidate in self.candidates
+                candidate.to_display_payload() for candidate in self.candidates
             ],
         }
 
 
 @dataclass(frozen=True)
 class RunSummary:
+    """Aggregate controller outcomes for one [K] run."""
+
     needs_api_total: int
     selected_needs_api: int
     decision_ready_from_cache: int
@@ -364,6 +481,8 @@ class RunSummary:
 
 @dataclass(frozen=True)
 class KParams:
+    """Interactive execution parameters for controller [K]."""
+
     limit: int
     starting_after_orphan_id: str
     group_same_incident: bool
@@ -373,6 +492,8 @@ class KParams:
 
 @dataclass
 class CaseDecision:
+    """Final adjudication decision for one target article-victim row."""
+
     orphan_id: str
     article_id: int | None
     label: str
@@ -384,6 +505,8 @@ class CaseDecision:
 
 @dataclass
 class OrphanWork:
+    """Intermediate per-target work product before final group assignment."""
+
     orphan_id: str
     article_id: int | None
     insufficient: bool
@@ -395,12 +518,6 @@ class OrphanWork:
     ranked_candidates: list[dict[str, Any]]
     provisional_reason: str
 
-
-@dataclass(frozen=True)
-class KRuntimeDeps:
-    duck_con: duckdb.DuckDBPyConnection
-    sqlite_con: sqlite3.Connection
-    openai_client: OpenAI
 
 
 def _utc_now() -> str:
@@ -482,35 +599,81 @@ def _as_int(v: Any, default: int) -> int:
         return default
 
 
-def _log_k(message: str) -> None:
-    print(message, flush=True)
 
 
-def _with_elapsed_timer(fn: Any) -> Any:
-    stop = threading.Event()
-    start = time.monotonic()
-
-    def tick() -> None:
-        while not stop.wait(1):
-            elapsed = int(time.monotonic() - start)
-            minutes, seconds = divmod(elapsed, 60)
-            print(f"\rElapsed time: {minutes:02d}:{seconds:02d}", end="", flush=True)
-
-    thread = threading.Thread(target=tick, daemon=True)
-    print("\rElapsed time: 00:00", end="", flush=True)
-    thread.start()
-    try:
-        return fn()
-    finally:
-        stop.set()
-        thread.join()
-        elapsed = int(time.monotonic() - start)
-        minutes, seconds = divmod(elapsed, 60)
-        print(f"\rElapsed time: {minutes:02d}:{seconds:02d}")
 
 
 def _pretty_json(payload: dict[str, Any]) -> str:
     return json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=True)
+
+
+def _format_pass1_response_for_display(response: Pass1Response) -> str:
+    lines = ['{', '  "anchors": [']
+    anchors = response.anchors
+    for index, anchor in enumerate(anchors):
+        lines.append("    {")
+        lines.append(
+            '      "anchor_theme": '
+            + json.dumps(anchor.anchor_theme, ensure_ascii=True)
+            + ","
+        )
+        lines.append('      "variants": [')
+        variants = anchor.variants
+        for variant_index, word_set in enumerate(variants):
+            suffix = "," if variant_index < len(variants) - 1 else ""
+            lines.append(
+                "        "
+                + json.dumps(word_set.root, ensure_ascii=True)
+                + suffix
+            )
+        lines.append("      ]")
+        anchor_suffix = "," if index < len(anchors) - 1 else ""
+        lines.append("    }" + anchor_suffix)
+    lines.append("  ]")
+    lines.append("}")
+    return "\n".join(lines)
+
+
+def _truncate_article_text_for_display(text: str, *, limit: int = 100) -> str:
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "..."
+
+
+def _normalize_fts_bundle_token(token: str) -> str:
+    cleaned = re.sub(r"\s+", " ", _safe_text(token)).strip()
+    if cleaned == "":
+        return ""
+    return cleaned.replace('"', '""')
+
+
+def _build_fts_query_from_word_set(word_set: tuple[str, ...]) -> str:
+    tokens = [
+        normalized
+        for normalized in (_normalize_fts_bundle_token(token) for token in word_set)
+        if normalized != ""
+    ]
+    if len(tokens) == 0:
+        return ""
+    return " AND ".join(f'"{token}"' for token in tokens)
+
+
+def _query_specs_from_validated_anchors(
+    valid_anchors: Array[ValidatedAnchor],
+) -> Array[C2QuerySpec]:
+    seen: dict[str, C2QuerySpec] = {}
+    for anchor in valid_anchors:
+        for word_set in anchor.variant_word_sets:
+            display_text = " ".join(word_set).strip()
+            fts_query = _build_fts_query_from_word_set(word_set)
+            if display_text == "" or fts_query == "":
+                continue
+            if display_text not in seen:
+                seen[display_text] = C2QuerySpec(
+                    display_text=display_text,
+                    fts_query=fts_query,
+                )
+    return Array.make(tuple(seen.values()))
 
 
 def _norm(s: str) -> str:
@@ -608,6 +771,16 @@ def _incident_idx_from_orphan_uid(uid: str) -> int | None:
         return None
 
 
+def _article_id_from_uid(uid: str) -> int | None:
+    parts = _safe_text(uid).split(":")
+    if len(parts) < 1:
+        return None
+    try:
+        return int(parts[0])
+    except ValueError:
+        return None
+
+
 def _parse_month_year(raw: Any) -> tuple[int, int] | None:
     text = _safe_text(raw).strip()
     if text == "":
@@ -693,306 +866,18 @@ def _format_incident_date(raw: Any, *, year: Any = None, month: Any = None) -> s
     return ""
 
 
-def _duck_query(
-    duck_con: duckdb.DuckDBPyConnection, sql: str, params: tuple[Any, ...] = ()
-) -> list[dict[str, Any]]:
-    cur = duck_con.execute(sql, params)
-    cols = [c[0] for c in (cur.description or [])]
-    return [dict(zip(cols, row)) for row in cur.fetchall()]
 
 
-def _duck_exec(
-    duck_con: duckdb.DuckDBPyConnection, sql: str, params: tuple[Any, ...] = ()
-) -> None:
-    duck_con.execute(sql, params)
 
 
-def _sqlite_query(
-    sqlite_con: sqlite3.Connection, sql: str, params: tuple[Any, ...] = ()
-) -> list[dict[str, Any]]:
-    cur = sqlite_con.execute(sql, params)
-    cols = [c[0] for c in (cur.description or [])]
-    return [dict(zip(cols, row)) for row in cur.fetchall()]
 
 
-def _ensure_tables(duck_con: duckdb.DuckDBPyConnection) -> None:
-    _duck_exec(
-        duck_con,
-        """
-        CREATE TABLE IF NOT EXISTS orphan_adj_run (
-          run_id VARCHAR PRIMARY KEY,
-          started_at TIMESTAMP,
-          finished_at TIMESTAMP,
-          requested_limit INTEGER,
-          processed_count INTEGER,
-          grouped_count INTEGER,
-          matched_count INTEGER,
-          not_same_person_count INTEGER,
-          insufficient_information_count INTEGER,
-          analysis_incomplete_count INTEGER,
-          dry_run BOOLEAN,
-          full_backfill BOOLEAN,
-          status VARCHAR,
-          error_message VARCHAR
-        );
-        """,
-    )
-    _duck_exec(
-        duck_con,
-        """
-        CREATE TABLE IF NOT EXISTS orphan_adj_case_state (
-          run_id VARCHAR,
-          group_id VARCHAR,
-          orphan_id VARCHAR,
-          article_id BIGINT,
-          case_status VARCHAR,
-          stage_completed VARCHAR,
-          decision_label VARCHAR,
-          resolved_entity_id VARCHAR,
-          decision_hash VARCHAR,
-          error_message VARCHAR,
-          updated_at TIMESTAMP,
-          PRIMARY KEY (run_id, orphan_id)
-        );
-        """,
-    )
-    _duck_exec(
-        duck_con,
-        """
-        CREATE TABLE IF NOT EXISTS orphan_adj_queue_run (
-          run_id VARCHAR,
-          queue_pos INTEGER,
-          group_id VARCHAR,
-          orphan_id VARCHAR,
-          article_id BIGINT,
-          city_id BIGINT,
-          year BIGINT,
-          month BIGINT,
-          midpoint_day DOUBLE,
-          created_at TIMESTAMP DEFAULT NOW()
-        );
-        """,
-    )
-    _duck_exec(
-        duck_con,
-        """
-        CREATE TABLE IF NOT EXISTS orphan_adj_cache_readiness (
-          run_id VARCHAR,
-          queue_pos INTEGER,
-          orphan_id VARCHAR,
-          article_id BIGINT,
-          year BIGINT,
-          readiness_status VARCHAR,
-          readiness_reason VARCHAR,
-          pass1_idempotency_key VARCHAR,
-          rank_idempotency_key VARCHAR,
-          created_at TIMESTAMP DEFAULT NOW()
-        );
-        """,
-    )
-    _duck_exec(
-        duck_con,
-        """
-        CREATE TABLE IF NOT EXISTS orphan_adj_candidates_bc (
-          run_id VARCHAR,
-          group_id VARCHAR,
-          orphan_id VARCHAR,
-          stage_name VARCHAR,
-          entity_uid VARCHAR,
-          det_score DOUBLE,
-          features_json JSON,
-          created_at TIMESTAMP DEFAULT NOW()
-        );
-        """,
-    )
-    _duck_exec(
-        duck_con,
-        """
-        CREATE TABLE IF NOT EXISTS orphan_adj_candidates_c2 (
-          run_id VARCHAR,
-          group_id VARCHAR,
-          orphan_id VARCHAR,
-          entity_uid VARCHAR,
-          source_article_id BIGINT,
-          query_variant VARCHAR,
-          det_score DOUBLE,
-          splink_match_weight DOUBLE,
-          features_json JSON,
-          created_at TIMESTAMP DEFAULT NOW()
-        );
-        """,
-    )
-    _duck_exec(
-        duck_con,
-        """
-        CREATE TABLE IF NOT EXISTS orphan_adj_candidates_merged (
-          run_id VARCHAR,
-          group_id VARCHAR,
-          orphan_id VARCHAR,
-          entity_uid VARCHAR,
-          det_score DOUBLE,
-          splink_match_weight DOUBLE,
-          source_stages VARCHAR,
-          features_json JSON,
-          created_at TIMESTAMP DEFAULT NOW()
-        );
-        """,
-    )
-    _duck_exec(
-        duck_con,
-        """
-        CREATE TABLE IF NOT EXISTS orphan_adj_stage_metrics (
-          run_id VARCHAR,
-          group_id VARCHAR,
-          orphan_id VARCHAR,
-          stage_name VARCHAR,
-          query_id VARCHAR,
-          row_count BIGINT,
-          notes VARCHAR,
-          recorded_at TIMESTAMP DEFAULT NOW()
-        );
-        """,
-    )
-    _duck_exec(
-        duck_con,
-        "ALTER TABLE orphan_adj_candidates_c2 ADD COLUMN IF NOT EXISTS"
-        " splink_match_weight DOUBLE;",
-    )
-    _duck_exec(
-        duck_con,
-        "ALTER TABLE orphan_adj_candidates_merged ADD COLUMN IF NOT EXISTS"
-        " splink_match_weight DOUBLE;",
-    )
-    _duck_exec(
-        duck_con,
-        """
-        CREATE TABLE IF NOT EXISTS llm_cache (
-          stage VARCHAR,
-          idempotency_key VARCHAR,
-          model VARCHAR,
-          prompt_version VARCHAR,
-          input_json JSON,
-          response_json JSON,
-          created_at TIMESTAMP DEFAULT NOW(),
-          updated_at TIMESTAMP DEFAULT NOW(),
-          PRIMARY KEY(stage, idempotency_key)
-        );
-        """,
-    )
-    _duck_exec(
-        duck_con,
-        """
-        CREATE TABLE IF NOT EXISTS orphan_adjudication_history (
-          history_id BIGINT,
-          run_id VARCHAR,
-          orphan_id VARCHAR,
-          prior_resolution_label VARCHAR,
-          prior_resolved_entity_id VARCHAR,
-          prior_confidence DOUBLE,
-          new_resolution_label VARCHAR,
-          new_resolved_entity_id VARCHAR,
-          new_confidence DOUBLE,
-          reason_summary VARCHAR,
-          evidence_json JSON,
-          analyst_mode VARCHAR,
-          changed_at TIMESTAMP
-        );
-        """,
-    )
 
 
-def _migrate_legacy_labels(duck_con: duckdb.DuckDBPyConnection) -> None:
-    _duck_exec(
-        duck_con,
-        """
-        UPDATE orphan_adjudication_overrides
-        SET resolution_label = 'matched',
-            updated_at = NOW()
-        WHERE resolution_label = 'likely_missed_match';
-        """,
-    )
-    _duck_exec(
-        duck_con,
-        """
-        UPDATE orphan_adjudication_overrides
-        SET resolution_label = 'not_same_person',
-            updated_at = NOW()
-        WHERE resolution_label = 'unlikely';
-        """,
-    )
-    _duck_exec(
-        duck_con,
-        """
-        UPDATE orphan_adjudication_overrides
-        SET resolution_label = 'analysis_incomplete',
-            updated_at = NOW()
-        WHERE resolution_label = 'possible_but_weak';
-        """,
-    )
 
 
-def _queue_universe_rows(duck_con: duckdb.DuckDBPyConnection) -> list[dict[str, Any]]:
-    return _duck_query(
-        duck_con,
-        """
-        WITH queue_base AS (
-          SELECT
-            o.uid AS orphan_id,
-            o.article_id,
-            o.city_id,
-            o.year,
-            o.month,
-            o.midpoint_day,
-            o.weapon,
-            o.circumstance,
-            o.match_id
-          FROM orphan_matches_final_current o
-          WHERE o.rec_type = 'orphan'
-            AND o.match_id LIKE 'orphan_%'
-        )
-        SELECT
-          qb.*,
-          ROW_NUMBER() OVER (
-            ORDER BY
-              qb.midpoint_day NULLS LAST,
-              qb.match_id,
-              qb.orphan_id
-          ) AS queue_pos
-        FROM queue_base qb
-        ORDER BY queue_pos;
-        """,
-    )
 
 
-def _materialize_cache_readiness(
-    duck_con: duckdb.DuckDBPyConnection,
-    run_id: str,
-    rows: list[dict[str, Any]],
-) -> None:
-    _duck_exec(
-        duck_con, "DELETE FROM orphan_adj_cache_readiness WHERE run_id = ?;", (run_id,)
-    )
-    for r in rows:
-        _duck_exec(
-            duck_con,
-            """
-            INSERT INTO orphan_adj_cache_readiness (
-              run_id, queue_pos, orphan_id, article_id, year, readiness_status, readiness_reason,
-              pass1_idempotency_key, rank_idempotency_key, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW());
-            """,
-            (
-                run_id,
-                r.get("queue_pos"),
-                _safe_text(r.get("orphan_id")),
-                r.get("article_id"),
-                r.get("year"),
-                _safe_text(r.get("readiness_status")),
-                _safe_text(r.get("readiness_reason")),
-                _safe_text(r.get("pass1_idempotency_key")),
-                _safe_text(r.get("rank_idempotency_key")),
-            ),
-        )
 
 
 def _count_by_year(
@@ -1045,92 +930,31 @@ def _select_needs_api_rows(
 
     if params.full_backfill:
         return needs_rows
-    return needs_rows[: params.limit]
+    selected = needs_rows[: params.limit]
+    if len(selected) == 0:
+        return selected
 
-
-def _precompute_cache_readiness(
-    duck_con: duckdb.DuckDBPyConnection,
-    sqlite_con: sqlite3.Connection,
-) -> tuple[list[dict[str, Any]], int]:
-    _ensure_tables(duck_con)
-    universe = _queue_universe_rows(duck_con)
-    out_rows: list[dict[str, Any]] = []
-
-    for base in universe:
-        orphan_id = _safe_text(base.get("orphan_id"))
-        try:
-            dossier = _load_orphan_dossier(duck_con, sqlite_con, orphan_id)
-            e2e_key = _adjudication_cache_key(dossier)
-            e2e_cached = _llm_cache_get(duck_con, E2E_CACHE_STAGE, e2e_key)
-            if e2e_cached is None:
-                out_rows.append(
-                    {
-                        **base,
-                        "readiness_status": "needs_api",
-                        "readiness_reason": "missing_e2e_cache",
-                        "pass1_idempotency_key": e2e_key,
-                        "rank_idempotency_key": "",
-                    }
-                )
-                continue
-
-            out_rows.append(
-                {
-                    **base,
-                    "readiness_status": "decision_ready_from_cache",
-                    "readiness_reason": "e2e_cache_ready",
-                    "pass1_idempotency_key": e2e_key,
-                    "rank_idempotency_key": "",
-                }
-            )
-        except Exception as ex:  # noqa: BLE001
-            out_rows.append(
-                {
-                    **base,
-                    "readiness_status": "needs_api",
-                    "readiness_reason": f"readiness_error:{_safe_text(ex)[:160]}",
-                    "pass1_idempotency_key": "",
-                    "rank_idempotency_key": "",
-                }
-            )
-
-    preview_run_id = (
-        f"k_preview_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
+    boundary_group_key = _incident_group_key_from_orphan_id(
+        _safe_text(selected[-1].get("orphan_id"))
     )
-    _materialize_cache_readiness(duck_con, preview_run_id, out_rows)
-    needs_total = sum(
-        1 for r in out_rows if _safe_text(r.get("readiness_status")) == "needs_api"
-    )
-    return out_rows, needs_total
+    boundary_queue_pos = int(selected[-1].get("queue_pos") or 0)
+    trailing_group_rows = [
+        row
+        for row in needs_rows
+        if int(row.get("queue_pos") or 0) > boundary_queue_pos
+        and _incident_group_key_from_orphan_id(_safe_text(row.get("orphan_id")))
+        == boundary_group_key
+    ]
+    return selected + trailing_group_rows
 
 
-def _incident_compatible(prev_row: dict[str, Any], row: dict[str, Any]) -> bool:
-    if prev_row.get("article_id") == row.get("article_id"):
-        return True
-    if prev_row.get("city_id") != row.get("city_id"):
-        return False
 
-    p_year = prev_row.get("year")
-    r_year = row.get("year")
-    if p_year is not None and r_year is not None and abs(int(p_year) - int(r_year)) > 1:
-        return False
 
-    p_mid = prev_row.get("midpoint_day")
-    r_mid = row.get("midpoint_day")
-    if p_mid is not None and r_mid is not None and abs(float(p_mid) - float(r_mid)) > 7:
-        return False
-
-    p_weapon = _norm(_safe_text(prev_row.get("weapon")))
-    r_weapon = _norm(_safe_text(row.get("weapon")))
-    if p_weapon and r_weapon and p_weapon != r_weapon:
-        return False
-
-    p_circ = _norm(_safe_text(prev_row.get("circumstance")))
-    r_circ = _norm(_safe_text(row.get("circumstance")))
-    if p_circ and r_circ and p_circ != r_circ:
-        return False
-
-    return True
+def _incident_group_key_from_orphan_id(orphan_id: str) -> str:
+    parts = _safe_text(orphan_id).split(":")
+    if len(parts) >= 2 and parts[0] != "" and parts[1] != "":
+        return f"{parts[0]}:{parts[1]}"
+    return _safe_text(orphan_id)
 
 
 def _build_groups(
@@ -1141,15 +965,18 @@ def _build_groups(
     if len(rows) == 0:
         return []
 
-    grouped: list[list[dict[str, Any]]] = []
-    current: list[dict[str, Any]] = [rows[0]]
-    for row in rows[1:]:
-        if _incident_compatible(current[-1], row):
-            current.append(row)
-        else:
-            grouped.append(current)
-            current = [row]
-    grouped.append(current)
+    grouped_by_key: dict[str, list[dict[str, Any]]] = {}
+    group_order: list[str] = []
+    for row in rows:
+        group_key = _incident_group_key_from_orphan_id(
+            _safe_text(row.get("orphan_id"))
+        )
+        if group_key not in grouped_by_key:
+            grouped_by_key[group_key] = []
+            group_order.append(group_key)
+        grouped_by_key[group_key].append(row)
+
+    grouped = [grouped_by_key[group_key] for group_key in group_order]
 
     for i, grp in enumerate(grouped, start=1):
         gid = f"{run_id}_G{i:04d}"
@@ -1158,176 +985,14 @@ def _build_groups(
     return grouped
 
 
-def _insert_queue_rows(
-    duck_con: duckdb.DuckDBPyConnection, run_id: str, groups: list[list[dict[str, Any]]]
-) -> None:
-    for grp in groups:
-        for r in grp:
-            _duck_exec(
-                duck_con,
-                """
-                INSERT INTO orphan_adj_queue_run (
-                  run_id, queue_pos, group_id, orphan_id, article_id, city_id, year, month, midpoint_day
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
-                """,
-                (
-                    run_id,
-                    r.get("queue_pos"),
-                    r.get("group_id"),
-                    r.get("orphan_id"),
-                    r.get("article_id"),
-                    r.get("city_id"),
-                    r.get("year"),
-                    r.get("month"),
-                    r.get("midpoint_day"),
-                ),
-            )
-            _duck_exec(
-                duck_con,
-                """
-                INSERT INTO orphan_adj_case_state (
-                  run_id, group_id, orphan_id, article_id,
-                  case_status, stage_completed, decision_label, resolved_entity_id,
-                  decision_hash, error_message, updated_at
-                ) VALUES (?, ?, ?, ?, 'queued', '', NULL, NULL, NULL, NULL, NOW())
-                ON CONFLICT(run_id, orphan_id) DO UPDATE SET
-                  group_id = EXCLUDED.group_id,
-                  article_id = EXCLUDED.article_id,
-                  case_status = 'queued',
-                  stage_completed = '',
-                  error_message = NULL,
-                  updated_at = NOW();
-                """,
-                (
-                    run_id,
-                    r.get("group_id"),
-                    r.get("orphan_id"),
-                    r.get("article_id"),
-                ),
-            )
 
 
-def _set_case_state(
-    duck_con: duckdb.DuckDBPyConnection,
-    run_id: str,
-    orphan_id: str,
-    *,
-    case_status: str,
-    stage_completed: str,
-    decision_label: str | None = None,
-    resolved_entity_id: str | None = None,
-    decision_hash: str | None = None,
-    error_message: str | None = None,
-) -> None:
-    _duck_exec(
-        duck_con,
-        """
-        UPDATE orphan_adj_case_state
-        SET case_status = ?,
-            stage_completed = ?,
-            decision_label = ?,
-            resolved_entity_id = ?,
-            decision_hash = ?,
-            error_message = ?,
-            updated_at = NOW()
-        WHERE run_id = ?
-          AND orphan_id = ?;
-        """,
-        (
-            case_status,
-            stage_completed,
-            decision_label,
-            resolved_entity_id,
-            decision_hash,
-            error_message,
-            run_id,
-            orphan_id,
-        ),
-    )
 
 
-def _log_stage_metric(
-    duck_con: duckdb.DuckDBPyConnection,
-    run_id: str,
-    group_id: str,
-    orphan_id: str,
-    stage_name: str,
-    query_id: str,
-    row_count: int,
-    notes: str,
-) -> None:
-    _duck_exec(
-        duck_con,
-        """
-        INSERT INTO orphan_adj_stage_metrics (
-          run_id, group_id, orphan_id, stage_name, query_id, row_count, notes, recorded_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, NOW());
-        """,
-        (run_id, group_id, orphan_id, stage_name, query_id, row_count, notes),
-    )
 
 
-def _llm_cache_get(
-    duck_con: duckdb.DuckDBPyConnection,
-    stage: str,
-    idempotency_key: str,
-) -> dict[str, Any] | None:
-    rows = _duck_query(
-        duck_con,
-        """
-        SELECT response_json
-        FROM llm_cache
-        WHERE stage = ?
-          AND idempotency_key = ?
-        LIMIT 1;
-        """,
-        (stage, idempotency_key),
-    )
-    if len(rows) == 0:
-        return None
-    raw = rows[0].get("response_json")
-    if raw is None:
-        return None
-    if isinstance(raw, dict):
-        return raw
-    try:
-        return json.loads(str(raw))
-    except json.JSONDecodeError:
-        return None
 
 
-def _llm_cache_put(
-    duck_con: duckdb.DuckDBPyConnection,
-    *,
-    stage: str,
-    idempotency_key: str,
-    model: str,
-    prompt_version: str,
-    input_payload: dict[str, Any],
-    response_payload: dict[str, Any],
-) -> None:
-    _duck_exec(
-        duck_con,
-        """
-        INSERT INTO llm_cache (
-          stage, idempotency_key, model, prompt_version, input_json, response_json, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?::JSON, ?::JSON, NOW(), NOW())
-        ON CONFLICT(stage, idempotency_key) DO UPDATE SET
-          model = EXCLUDED.model,
-          prompt_version = EXCLUDED.prompt_version,
-          input_json = EXCLUDED.input_json,
-          response_json = EXCLUDED.response_json,
-          updated_at = NOW();
-        """,
-        (
-            stage,
-            idempotency_key,
-            model,
-            prompt_version,
-            _canonical_json(input_payload),
-            _canonical_json(response_payload),
-        ),
-    )
 
 
 def _case_fingerprint(
@@ -1340,9 +1005,6 @@ def _case_fingerprint(
     )
 
 
-def _adjudication_cache_key(dossier: dict[str, Any]) -> str:
-    orphan_id = _safe_text(dossier.get("unique_id") or dossier.get("orphan_id"))
-    return orphan_id
 
 
 def _decision_to_cache_payload(decision: CaseDecision) -> dict[str, Any]:
@@ -1355,6 +1017,93 @@ def _decision_to_cache_payload(decision: CaseDecision) -> dict[str, Any]:
         "reason_summary": decision.reason_summary,
         "evidence_json": decision.evidence_json,
     }
+
+
+def _candidate_source_article_id(row: dict[str, Any]) -> int | None:
+    source_article_id = row.get("source_article_id")
+    if source_article_id is not None:
+        try:
+            return int(source_article_id)
+        except (TypeError, ValueError):
+            pass
+
+    article_ids = row.get("source_article_ids")
+    if isinstance(article_ids, list):
+        for value in article_ids:
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                continue
+
+    rows = row.get("rows")
+    if isinstance(rows, list):
+        for child in rows:
+            if not isinstance(child, dict):
+                continue
+            value = child.get("source_article_id") or child.get("article_id")
+            try:
+                return int(value) if value is not None else None
+            except (TypeError, ValueError):
+                continue
+
+    return None
+
+
+def _source_incident_idx_from_entity_uid_for_article(
+    entity_uid: str, source_article_id: int | None
+) -> int | None:
+    uid_article_id = _article_id_from_uid(entity_uid)
+    if (
+        uid_article_id is None
+        or source_article_id is None
+        or uid_article_id != source_article_id
+    ):
+        return None
+    return _incident_idx_from_orphan_uid(entity_uid)
+
+
+def _incident_key_from_candidate(
+    source_article_id: int | None, source_incident_idx: int | None
+) -> str:
+    article_part = "" if source_article_id is None else str(source_article_id)
+    incident_part = "" if source_incident_idx is None else str(source_incident_idx)
+    return f"{article_part}:{incident_part}"
+
+
+def _group_dossier_from_dossier(
+    group_key: str, orphan_ids: tuple[str, ...], dossier: Dossier
+) -> GroupDossier:
+    return GroupDossier(
+        group_key=group_key,
+        orphan_ids=orphan_ids,
+        article_id=dossier.article_id,
+        incident_idx=_incident_idx_from_orphan_uid(dossier.orphan_id),
+        city_id=dossier.city_id,
+        year=dossier.year,
+        month=dossier.month,
+        midpoint_day=dossier.midpoint_day,
+        incident_date=_format_incident_date(
+            dossier.incident_date, year=dossier.year, month=dossier.month
+        ),
+        victim_count=dossier.victim_count,
+        incident_location=dossier.geo_address_norm,
+        incident_summary=dossier.incident_summary_gpt,
+        article_title=dossier.article_title,
+        article_text=dossier.article_text,
+        article_pub_date=dossier.article_pub_date,
+    )
+
+
+def _build_pass1_request_for_group_v2(group: GroupDossier) -> Pass1Request:
+    return Pass1Request(
+        article_title=group.article_title,
+        article_text=group.article_text,
+        article_date=_format_article_date(group.article_pub_date),
+        incident_date=group.incident_date,
+        incident_location=group.incident_location,
+        victim_count=group.victim_count,
+        incident_summary=group.incident_summary,
+    )
 
 
 def _decision_from_cache_payload(
@@ -1380,98 +1129,6 @@ def _decision_from_cache_payload(
     )
 
 
-def _load_orphan_dossier(
-    duck_con: duckdb.DuckDBPyConnection,
-    sqlite_con: sqlite3.Connection,
-    orphan_id: str,
-) -> dict[str, Any]:
-    def _incident_idx_from_orphan_uid(uid: str) -> int | None:
-        parts = uid.split(":")
-        if len(parts) < 2:
-            return None
-        try:
-            return int(parts[1])
-        except ValueError:
-            return None
-
-    rows = _duck_query(
-        duck_con,
-        """
-        SELECT
-          unique_id,
-          article_id,
-          city_id,
-          year,
-          month,
-          midpoint_day,
-          date_precision,
-          incident_date,
-          victim_sex,
-          victim_age,
-          victim_count,
-          offender_count,
-          weapon,
-          circumstance,
-          geo_address_norm,
-          geo_address_short,
-          geo_address_short_2,
-          relationship,
-          summary_vec
-        FROM orphan_link_input
-        WHERE unique_id = ?
-        LIMIT 1;
-        """,
-        (orphan_id,),
-    )
-    if len(rows) == 0:
-        return {"orphan_id": orphan_id}
-    row = dict(rows[0])
-    row["incident_summary_gpt"] = ""
-    article_id = row.get("article_id")
-    if article_id is None:
-        row["article_text"] = ""
-        row["article_title"] = ""
-        return row
-
-    incident_idx = _incident_idx_from_orphan_uid(_safe_text(row.get("unique_id")))
-    if incident_idx is not None:
-        sum_rows = _duck_query(
-            duck_con,
-            """
-            SELECT summary
-            FROM incidents_cached
-            WHERE article_id = ?
-              AND incident_idx = ?
-            LIMIT 1;
-            """,
-            (int(article_id), incident_idx),
-        )
-        if len(sum_rows) > 0:
-            row["incident_summary_gpt"] = _safe_text(sum_rows[0].get("summary"))
-
-    text_rows = _sqlite_query(
-        sqlite_con,
-        """
-        SELECT Title, FullText, PubDate
-        FROM articles
-        WHERE RecordId = ?
-          AND Dataset = 'CLASS_WP'
-          AND gptClass = 'M'
-        LIMIT 1;
-        """,
-        (int(article_id),),
-    )
-    if len(text_rows) == 0:
-        row["article_text"] = ""
-        row["article_title"] = ""
-        row["article_pub_date"] = ""
-    else:
-        row["article_title"] = _safe_text(text_rows[0].get("Title"))
-        row["article_text"] = _safe_text(text_rows[0].get("FullText"))[
-            :MAX_FULLTEXT_CHARS
-        ]
-        row["article_pub_date"] = _safe_text(text_rows[0].get("PubDate"))
-    return row
 
 
 def _stringify_prompt_vars(payload: dict[str, Any]) -> dict[str, str]:
@@ -1488,60 +1145,8 @@ def _stringify_prompt_vars(payload: dict[str, Any]) -> dict[str, str]:
     return out
 
 
-def _call_pass1_api(
-    client: OpenAI,
-    payload: dict[str, Any],
-    prompt_template: GPTPromptTemplate,
-) -> tuple[Pass1Response, Any]:
-    prompt_vars = {
-        k: cast(Variables, v) for k, v in _stringify_prompt_vars(payload).items()
-    }
-    prompt_dict = ResponsePromptParam(id=prompt_template.id, variables=prompt_vars)
-    if prompt_template.version is not None:
-        prompt_dict["version"] = prompt_template.version
-
-    response = _with_elapsed_timer(
-        lambda: client.responses.parse(
-            model=PASS1_MODEL,
-            prompt=prompt_dict,
-            text_format=Pass1Response,
-            reasoning={"effort": "medium", "summary": "auto"},
-            text={"verbosity": "low"},
-            timeout=300.0,
-        )
-    )
-    parsed = response.output_parsed
-    if parsed is None:
-        return Pass1Response(anchors=[]), response
-    return parsed, response
 
 
-def _call_rank_api(
-    client: OpenAI,
-    payload: dict[str, Any],
-    prompt_template: GPTPromptTemplate,
-) -> tuple[RankResponse, Any]:
-    prompt_vars = {
-        k: cast(Variables, v) for k, v in _stringify_prompt_vars(payload).items()
-    }
-    prompt_dict = ResponsePromptParam(id=prompt_template.id, variables=prompt_vars)
-    if prompt_template.version is not None:
-        prompt_dict["version"] = prompt_template.version
-
-    response = _with_elapsed_timer(
-        lambda: client.responses.parse(
-            model=RANK_MODEL,
-            prompt=prompt_dict,
-            text_format=RankResponse,
-            reasoning={"effort": "medium", "summary": "auto"},
-            text={"verbosity": "low"},
-            timeout=300.0,
-        )
-    )
-    parsed = response.output_parsed
-    if parsed is None:
-        return RankResponse(match_result="no_match", matched_entity_uid=None), response
-    return parsed, response
 
 
 def _structured_echo_terms(dossier: dict[str, Any]) -> list[str]:
@@ -1560,105 +1165,8 @@ def _structured_echo_terms(dossier: dict[str, Any]) -> list[str]:
     return cleaned
 
 
-def _anchor_doc_frequency(sqlite_con: sqlite3.Connection, anchor_text: str) -> int:
-    text = anchor_text.strip()
-    if text == "":
-        return 0
-    rows = _sqlite_query(
-        sqlite_con,
-        """
-        SELECT COUNT(*) AS n
-        FROM articles
-        WHERE Dataset='CLASS_WP'
-          AND gptClass='M'
-          AND FullText LIKE ?;
-        """,
-        (f"%{text}%",),
-    )
-    if len(rows) == 0:
-        return 0
-    return int(rows[0].get("n") or 0)
 
 
-def _validate_anchors(
-    sqlite_con: sqlite3.Connection,
-    pass1: Pass1Response,
-) -> tuple[list[dict[str, Any]], list[str], list[str]]:
-    valid_anchors: list[dict[str, Any]] = []
-    rejected_reasons: list[str] = []
-
-    for a in pass1.anchors:
-        anchor_text = _safe_text(a.anchor_theme).strip()
-        norm_anchor = _norm(anchor_text)
-        if norm_anchor == "":
-            rejected_reasons.append("empty_anchor")
-            continue
-
-        doc_freq = _anchor_doc_frequency(sqlite_con, anchor_text)
-        if doc_freq > HIGH_FREQ_ANCHOR_DOC_THRESHOLD:
-            rejected_reasons.append(f"high_freq_anchor:{anchor_text[:40]}:{doc_freq}")
-            continue
-
-        variant_word_sets: list[list[str]] = []
-        for ws in a.variants:
-            words = [
-                _safe_text(w).strip() for w in ws.root if _safe_text(w).strip() != ""
-            ]
-            if len(words) == 0:
-                continue
-            variant_word_sets.append(words)
-
-        # Canonicalize variant word-sets to keep idempotency stable.
-        seen_word_sets: set[tuple[str, ...]] = set()
-        deduped_word_sets: list[list[str]] = []
-        for words in variant_word_sets:
-            signature = tuple(_norm(w) for w in words if _norm(w) != "")
-            if len(signature) == 0 or signature in seen_word_sets:
-                continue
-            seen_word_sets.add(signature)
-            deduped_word_sets.append(words)
-
-        filtered_variants: list[str] = []
-        for words in deduped_word_sets:
-            v = " ".join(words).strip()
-            nv = _norm(v)
-            if nv == "":
-                continue
-            filtered_variants.append(v)
-
-        filtered_variant_word_sets = deduped_word_sets
-        if len(filtered_variants) == 0:
-            filtered_variants = [anchor_text]
-            filtered_variant_word_sets = [[anchor_text]]
-
-        valid_anchors.append(
-            {
-                "anchor_text": anchor_text,
-                "anchor_type": "phrase",
-                "source_span": "",
-                "incident_link_reason": "",
-                "variants": filtered_variants,
-                "variant_word_sets": filtered_variant_word_sets,
-                "doc_freq": doc_freq,
-            }
-        )
-
-    anchor_types = {
-        a["anchor_type"]
-        for a in valid_anchors
-        if _safe_text(a.get("anchor_type")) != ""
-    }
-    all_variants = list(dict.fromkeys(v for a in valid_anchors for v in a["variants"]))
-
-    gate_failures: list[str] = []
-    if len(valid_anchors) < 1:
-        gate_failures.append("no_valid_anchors")
-    if len(anchor_types) < 1:
-        gate_failures.append("insufficient_anchor_diversity")
-    if len(all_variants) < 1:
-        gate_failures.append("no_query_variants")
-
-    return valid_anchors, all_variants, rejected_reasons + gate_failures
 
 
 def _pass1_gate_failed(
@@ -1673,316 +1181,14 @@ def _pass1_gate_failed(
     )
 
 
-def _candidate_rows_bc(
-    duck_con: duckdb.DuckDBPyConnection,
-    orphan_id: str,
-    stage_name: str,
-    year_window: int,
-    limit_n: int,
-) -> list[dict[str, Any]]:
-    rows = _duck_query(
-        duck_con,
-        """
-        WITH o AS (
-          SELECT *
-          FROM orphan_link_input
-          WHERE unique_id = ?
-        )
-        SELECT
-          e.unique_id AS entity_uid,
-          e.article_ids_csv,
-          e.city_id,
-          e.year,
-          e.midpoint_day,
-          e.victim_sex,
-          e.weapon,
-          e.circumstance,
-          e.summary_vec,
-          ABS(COALESCE(CAST(e.midpoint_day AS DOUBLE), 0) - COALESCE(o.midpoint_day, 0)) AS day_gap,
-          CASE WHEN e.victim_sex = o.victim_sex THEN 1 ELSE 0 END AS sex_match,
-          CASE WHEN e.weapon = o.weapon THEN 1 ELSE 0 END AS weapon_match,
-          CASE WHEN e.circumstance = o.circumstance THEN 1 ELSE 0 END AS circumstance_match,
-          array_cosine_similarity(e.summary_vec, o.summary_vec) AS summary_cosine
-        FROM entity_link_input e
-        CROSS JOIN o
-        WHERE e.city_id = o.city_id
-          AND ABS(COALESCE(e.year, 0) - COALESCE(o.year, 0)) <= ?
-        ORDER BY
-          (CASE WHEN e.circumstance = o.circumstance THEN 1 ELSE 0 END
-           + CASE WHEN e.victim_sex = o.victim_sex THEN 1 ELSE 0 END
-           + CASE WHEN e.weapon = o.weapon THEN 1 ELSE 0 END) DESC,
-          ABS(COALESCE(CAST(e.midpoint_day AS DOUBLE), 0) - COALESCE(o.midpoint_day, 0)) ASC,
-          e.unique_id
-        LIMIT ?;
-        """,
-        (
-            orphan_id,
-            year_window,
-            limit_n,
-        ),
-    )
-    for r in rows:
-        compat = (
-            _as_int(r.get("sex_match"), 0)
-            + _as_int(r.get("weapon_match"), 0)
-            + _as_int(r.get("circumstance_match"), 0)
-        )
-        cosine = _as_float(r.get("summary_cosine"), 0.0)
-        day_gap = _as_float(r.get("day_gap"), 9999.0)
-        r["stage_name"] = stage_name
-        r["compat_count"] = compat
-        r["det_score"] = 0.8 * compat + 1.5 * cosine - 0.01 * day_gap
-    return rows
 
 
-def _fts_article_hits(
-    sqlite_con: sqlite3.Connection, query_variant: str, limit_n: int = 50
-) -> list[int]:
-    q = query_variant.strip()
-    if q == "":
-        return []
-
-    def _run(match_q: str) -> list[int]:
-        rows = _sqlite_query(
-            sqlite_con,
-            """
-            SELECT a.RecordId
-            FROM articles_wp_m_fts f
-            JOIN articles a
-              ON a.RecordId = f.rowid
-            WHERE a.Dataset='CLASS_WP'
-              AND a.gptClass='M'
-              AND articles_wp_m_fts MATCH ?
-            LIMIT ?;
-            """,
-            (match_q, limit_n),
-        )
-        ids = [int(r["RecordId"]) for r in rows if r.get("RecordId") is not None]
-        # Stable dedupe/order so cache key generation is deterministic across runs.
-        return sorted(dict.fromkeys(ids))
-
-    try:
-        return _run(q)
-    except sqlite3.OperationalError:
-        # Fallback to a strict phrase query when free-form syntax is invalid for FTS5.
-        phrase_q = '"' + re.sub(r"\s+", " ", q).replace('"', '""').strip() + '"'
-        try:
-            return _run(phrase_q)
-        except sqlite3.OperationalError:
-            return []
 
 
-def _entities_for_articles(
-    duck_con: duckdb.DuckDBPyConnection,
-    article_ids: list[int],
-    orphan_id: str,
-) -> list[dict[str, Any]]:
-    if len(article_ids) == 0:
-        return []
-    values_sql = ",".join("(?)" for _ in article_ids)
-    params: list[Any] = [*article_ids, orphan_id]
-    rows = _duck_query(
-        duck_con,
-        f"""
-        WITH hits(article_id) AS (
-          SELECT * FROM (VALUES {values_sql})
-        ),
-        o AS (
-          SELECT *
-          FROM orphan_link_input
-          WHERE unique_id = ?
-        )
-        SELECT DISTINCT
-          e.unique_id AS entity_uid,
-          h.article_id AS source_article_id,
-          e.article_ids_csv,
-          e.midpoint_day AS midpoint_day,
-          ABS(COALESCE(CAST(e.midpoint_day AS DOUBLE), 0) - COALESCE(o.midpoint_day, 0)) AS day_gap,
-          CASE WHEN e.victim_sex = o.victim_sex THEN 1 ELSE 0 END AS sex_match,
-          CASE WHEN e.weapon = o.weapon THEN 1 ELSE 0 END AS weapon_match,
-          CASE WHEN e.circumstance = o.circumstance THEN 1 ELSE 0 END AS circumstance_match,
-          array_cosine_similarity(e.summary_vec, o.summary_vec) AS summary_cosine
-        FROM hits h
-        JOIN entity_link_input e
-          ON list_contains(string_split(COALESCE(e.article_ids_csv, ''), ','), CAST(h.article_id AS VARCHAR))
-        CROSS JOIN o
-        WHERE NOT list_contains(
-          string_split(COALESCE(e.article_ids_csv, ''), ','),
-          CAST(o.article_id AS VARCHAR)
-        );
-        """,
-        tuple(params),
-    )
-    for r in rows:
-        compat = (
-            _as_int(r.get("sex_match"), 0)
-            + _as_int(r.get("weapon_match"), 0)
-            + _as_int(r.get("circumstance_match"), 0)
-        )
-        cosine = _as_float(r.get("summary_cosine"), 0.0)
-        day_gap = _as_float(r.get("day_gap"), 9999.0)
-        r["stage_name"] = "C2"
-        r["compat_count"] = compat
-        r["det_score"] = 1.2 + 0.8 * compat + 1.7 * cosine - 0.01 * day_gap
-    rows.sort(
-        key=lambda r: (
-            _safe_text(r.get("entity_uid")),
-            _as_int(r.get("source_article_id"), 0),
-            -_as_float(r.get("det_score"), 0.0),
-        )
-    )
-    return rows
 
 
-def _score_c2_candidate_weights(
-    duck_con: duckdb.DuckDBPyConnection,
-    orphan_id: str,
-    c2_rows: list[dict[str, Any]],
-) -> dict[str, float]:
-    candidate_ids = sorted(
-        {
-            _safe_text(r.get("entity_uid"))
-            for r in c2_rows
-            if _safe_text(r.get("entity_uid")) != ""
-        }
-    )
-    if len(candidate_ids) == 0:
-        return {}
-
-    settings = _settings_for_c2_weight_scoring(_load_dedupe_model_settings())
-    suffix = _sha256(f"{orphan_id}|{'|'.join(candidate_ids)}")[:12]
-    left_table = _sanitize_sql_identifier(f"adj_c2_left_{suffix}", prefix="tmp")
-    right_table = _sanitize_sql_identifier(f"adj_c2_right_{suffix}", prefix="tmp")
-    placeholders = ", ".join("?" for _ in candidate_ids)
-    prediction_table = ""
-    rows: list[dict[str, Any]] = []
-    try:
-        _duck_exec(
-            duck_con,
-            f"""
-            CREATE OR REPLACE TEMP TABLE {left_table} AS
-            SELECT *
-            FROM entity_link_input
-            WHERE unique_id IN ({placeholders});
-            """,
-            tuple(candidate_ids),
-        )
-        _duck_exec(
-            duck_con,
-            f"""
-            CREATE OR REPLACE TEMP TABLE {right_table} AS
-            SELECT *
-            FROM orphan_link_input
-            WHERE unique_id = ?;
-            """,
-            (orphan_id,),
-        )
-
-        db_api = DuckDBAPI(connection=duck_con)
-        linker = Linker(
-            [left_table, right_table],
-            settings
-            | {
-                "retain_intermediate_calculation_columns": True,
-                "max_iterations": 100,
-                "blocking_rules_to_generate_predictions": ["1=1"],
-            },
-            db_api=db_api,
-        )
-        adj_model_key = str(SplinkType.ORPHAN_ADJ_SCORE).replace("/", "_")
-        adj_model_path = Path("splink_models") / f"splink_model_{adj_model_key}.json"
-        adj_model_path.parent.mkdir(parents=True, exist_ok=True)
-        linker.misc.save_model_to_json(str(adj_model_path), overwrite=True)
-        prediction_table = _safe_text(
-            linker.inference.predict(threshold_match_probability=0.0).physical_name
-        )
-        rows = _duck_query(
-            duck_con,
-            f"""
-            SELECT
-              CAST(unique_id_l AS VARCHAR) AS entity_uid,
-              match_weight
-            FROM {prediction_table}
-            WHERE CAST(unique_id_r AS VARCHAR) = ?;
-            """,
-            (orphan_id,),
-        )
-    except Exception as exc:  # noqa: BLE001
-        raise RuntimeError(f"splink_c2_weight_scoring_failed: {exc}") from exc
-    finally:
-        if prediction_table != "":
-            _duck_exec(duck_con, f"DROP TABLE IF EXISTS {prediction_table};")
-        _duck_exec(duck_con, f"DROP TABLE IF EXISTS {left_table};")
-        _duck_exec(duck_con, f"DROP TABLE IF EXISTS {right_table};")
-
-    weights: dict[str, float] = {}
-    for row in rows:
-        entity_uid = _safe_text(row.get("entity_uid"))
-        if entity_uid == "":
-            continue
-        weight_raw = row.get("match_weight")
-        if weight_raw is None:
-            continue
-        weight_val = _as_float(weight_raw, 0.0)
-        current = weights.get(entity_uid)
-        if current is None or weight_val > current:
-            weights[entity_uid] = weight_val
-    return weights
 
 
-def _insert_candidates(
-    duck_con: duckdb.DuckDBPyConnection,
-    run_id: str,
-    group_id: str,
-    orphan_id: str,
-    table_name: str,
-    rows: list[dict[str, Any]],
-) -> None:
-    if table_name == "bc":
-        for r in rows:
-            _duck_exec(
-                duck_con,
-                """
-                INSERT INTO orphan_adj_candidates_bc (
-                  run_id, group_id, orphan_id, stage_name, entity_uid, det_score, features_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?::JSON);
-                """,
-                (
-                    run_id,
-                    group_id,
-                    orphan_id,
-                    _safe_text(r.get("stage_name")),
-                    _safe_text(r.get("entity_uid")),
-                    float(r.get("det_score") or 0.0),
-                    _canonical_json(r),
-                ),
-            )
-    elif table_name == "c2":
-        for r in rows:
-            _duck_exec(
-                duck_con,
-                """
-                INSERT INTO orphan_adj_candidates_c2 (
-                  run_id, group_id, orphan_id, entity_uid, source_article_id, query_variant,
-                  det_score, splink_match_weight, features_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?::JSON);
-                """,
-                (
-                    run_id,
-                    group_id,
-                    orphan_id,
-                    _safe_text(r.get("entity_uid")),
-                    r.get("source_article_id"),
-                    _safe_text(r.get("query_variant")),
-                    float(r.get("det_score") or 0.0),
-                    (
-                        _as_float(r.get("splink_match_weight"), 0.0)
-                        if r.get("splink_match_weight") is not None
-                        else None
-                    ),
-                    _canonical_json(r),
-                ),
-            )
 
 
 def _merge_candidates(
@@ -2104,36 +1310,6 @@ def _merge_candidates(
     return merged[:MAX_MERGED_CANDIDATES_FOR_API2]
 
 
-def _insert_merged_candidates(
-    duck_con: duckdb.DuckDBPyConnection,
-    run_id: str,
-    group_id: str,
-    orphan_id: str,
-    merged: list[dict[str, Any]],
-) -> None:
-    for r in merged:
-        _duck_exec(
-            duck_con,
-            """
-            INSERT INTO orphan_adj_candidates_merged (
-              run_id, group_id, orphan_id, entity_uid, det_score, splink_match_weight, source_stages, features_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?::JSON);
-            """,
-            (
-                run_id,
-                group_id,
-                orphan_id,
-                _safe_text(r.get("entity_uid")),
-                float(r.get("det_score") or 0.0),
-                (
-                    _as_float(r.get("splink_match_weight"), 0.0)
-                    if r.get("splink_match_weight") is not None
-                    else None
-                ),
-                ",".join(r.get("source_stages") or []),
-                _canonical_json(r),
-            ),
-        )
 
 
 def _validate_rank_output(
@@ -2169,347 +1345,30 @@ def _validate_rank_output(
     ]
 
 
-def _build_pass1_input(dossier: dict[str, Any]) -> dict[str, Any]:
-    incident_summary = _safe_text(dossier.get("incident_summary_gpt"))
-    return {
-        "article_title": _safe_text(dossier.get("article_title")),
-        "article_text": _safe_text(dossier.get("article_text")),
-        "article_date": _format_article_date(dossier.get("article_pub_date")),
-        "incident_date": _format_incident_date(
-            dossier.get("incident_date"),
-            year=dossier.get("year"),
-            month=dossier.get("month"),
-        ),
-        "incident_location": _safe_text(dossier.get("geo_address_norm")),
-        "victim_count": _safe_text(dossier.get("victim_count")),
-        "incident_summary": incident_summary,
-    }
 
 
-def _candidate_source_article_id(merged_row: dict[str, Any]) -> int | None:
-    direct_src = merged_row.get("source_article_id")
-    if direct_src is not None:
-        try:
-            return int(_safe_text(direct_src))
-        except (TypeError, ValueError):
-            pass
-
-    src_ids = merged_row.get("source_article_ids")
-    if isinstance(src_ids, list):
-        parsed_ids: list[int] = []
-        for raw in src_ids:
-            try:
-                parsed_ids.append(int(_safe_text(raw)))
-            except (TypeError, ValueError):
-                continue
-        if len(parsed_ids) > 0:
-            return min(parsed_ids)
-
-    rows = merged_row.get("rows")
-    if isinstance(rows, list):
-        parsed_row_ids: list[int] = []
-        for r in rows:
-            if isinstance(r, dict) and r.get("source_article_id") is not None:
-                try:
-                    src_id = r.get("source_article_id")
-                    if src_id is None:
-                        continue
-                    parsed_row_ids.append(int(_safe_text(src_id)))
-                except (TypeError, ValueError):
-                    continue
-        if len(parsed_row_ids) > 0:
-            return min(parsed_row_ids)
-    return None
 
 
-def _candidate_article_context(
-    sqlite_con: sqlite3.Connection, article_id: int | None
-) -> dict[str, Any]:
-    if article_id is None:
-        return {
-            "article_title": "",
-            "article_text": "",
-            "article_date": "",
-        }
-    rows = _sqlite_query(
-        sqlite_con,
-        """
-        SELECT RecordId, Title, FullText, PubDate
-        FROM articles
-        WHERE RecordId = ?
-          AND Dataset = 'CLASS_WP'
-          AND gptClass = 'M'
-        LIMIT 1;
-        """,
-        (article_id,),
-    )
-    if len(rows) == 0:
-        return {
-            "article_title": "",
-            "article_text": "",
-            "article_date": "",
-        }
-    return {
-        "article_title": _safe_text(rows[0].get("Title")),
-        "article_text": _safe_text(rows[0].get("FullText"))[:MAX_FULLTEXT_CHARS],
-        "article_date": _format_article_date(rows[0].get("PubDate")),
-    }
 
 
-def _candidate_incident_context(
-    duck_con: duckdb.DuckDBPyConnection,
-    entity_uid: str,
-    source_article_id: int | None,
-) -> dict[str, Any]:
-    rows = _duck_query(
-        duck_con,
-        """
-        SELECT
-          unique_id,
-          incident_date,
-          year,
-          month,
-          geo_address_norm,
-          victim_count,
-          circumstance,
-          relationship
-        FROM entity_link_input
-        WHERE unique_id = ?
-        LIMIT 1;
-        """,
-        (entity_uid,),
-    )
-    if len(rows) == 0:
-        return {
-            "incident_date": "",
-            "incident_location": "",
-            "victim_count": "",
-            "incident_summary": "",
-        }
-    row = rows[0]
-    summary = ""
-    if source_article_id is not None:
-        sum_rows = _duck_query(
-            duck_con,
-            """
-            SELECT i.summary
-            FROM incidents_cached i
-            LEFT JOIN entity_link_input e
-              ON e.unique_id = ?
-            WHERE i.article_id = ?
-            ORDER BY
-              CASE
-                WHEN i.summary_vec IS NOT NULL AND e.summary_vec IS NOT NULL
-                  THEN array_cosine_similarity(i.summary_vec, e.summary_vec)
-                ELSE -1
-              END DESC,
-              i.incident_idx ASC
-            LIMIT 1;
-            """,
-            (entity_uid, int(source_article_id)),
-        )
-        if len(sum_rows) > 0:
-            summary = _safe_text(sum_rows[0].get("summary"))
-    if summary.strip() == "":
-        summary = " | ".join(
-            part
-            for part in [
-                _safe_text(row.get("circumstance")),
-                _safe_text(row.get("relationship")),
-            ]
-            if part.strip() != ""
-        )
-    return {
-        "incident_date": _format_incident_date(
-            row.get("incident_date"),
-            year=row.get("year"),
-            month=row.get("month"),
-        ),
-        "incident_location": _safe_text(row.get("geo_address_norm")),
-        "victim_count": _safe_text(row.get("victim_count")),
-        "incident_summary": summary,
-    }
 
 
-def _build_rank_input(
-    duck_con: duckdb.DuckDBPyConnection,
-    sqlite_con: sqlite3.Connection,
-    dossier: dict[str, Any],
-    merged: list[dict[str, Any]],
-) -> dict[str, Any]:
-    target_summary = _safe_text(dossier.get("incident_summary_gpt"))
-    candidates_payload: list[dict[str, Any]] = []
-    for r in merged:
-        entity_uid = _safe_text(r.get("entity_uid"))
-        src_article_id = _candidate_source_article_id(r)
-        candidates_payload.append(
-            {
-                "entity_uid": entity_uid,
-                **_candidate_article_context(sqlite_con, src_article_id),
-                **_candidate_incident_context(duck_con, entity_uid, src_article_id),
-            }
-        )
-    return {
-        "target_article_title": _safe_text(dossier.get("article_title")),
-        "target_article_text": _safe_text(dossier.get("article_text")),
-        "target_article_date": _format_article_date(dossier.get("article_pub_date")),
-        "target_incident_date": _format_incident_date(
-            dossier.get("incident_date"),
-            year=dossier.get("year"),
-            month=dossier.get("month"),
-        ),
-        "target_incident_location": _safe_text(dossier.get("geo_address_norm")),
-        "target_victim_count": _safe_text(dossier.get("victim_count")),
-        "target_incident_summary": target_summary,
-        "candidates": candidates_payload,
-    }
 
 
-def _display_article_for_orphan(
-    sqlite_con: sqlite3.Connection, dossier: dict[str, Any]
-) -> None:
-    orphan_id = _safe_text(dossier.get("unique_id") or dossier.get("orphan_id"))
-    article_id = dossier.get("article_id")
-    if article_id is None:
-        _log_k(f"[K][{orphan_id}] No article_id available for display.")
-        return
-
-    rows = _sqlite_query(
-        sqlite_con,
-        """
-        SELECT
-          RecordId,
-          Title,
-          Publication,
-          PubDate,
-          FullText,
-          Status AS status,
-          AssignStatus AS assignstatus,
-          gptClass AS GPTClass,
-          gptVictimJson,
-          Notes
-        FROM articles
-        WHERE RecordId = ?
-          AND Dataset = 'CLASS_WP'
-          AND gptClass = 'M'
-        LIMIT 1;
-        """,
-        (int(article_id),),
-    )
-    if len(rows) == 0:
-        title = _safe_text(dossier.get("article_title"))
-        body = _safe_text(dossier.get("article_text"))
-        _log_k(f"[K][{orphan_id}] Article context")
-        _log_k(f"[K][{orphan_id}] article_id={article_id} title={title}")
-        _log_k(f"[K][{orphan_id}] full_text:\n{body if body != '' else '[empty]'}")
-        return
-
-    try:
-        article_obj = Article(rows[0], current=0, total=1)
-        _log_k(f"[K][{orphan_id}] Retrieved article:\n {article_obj}")
-    except Exception as ex:  # noqa: BLE001
-        _log_k(f"[K][{orphan_id}] display_article render failed: {_safe_text(ex)}")
-        title = _safe_text(dossier.get("article_title"))
-        body = _safe_text(dossier.get("article_text"))
-        _log_k(f"[K][{orphan_id}] article_id={article_id} title={title}")
-        _log_k(f"[K][{orphan_id}] full_text:\n{body if body != '' else '[empty]'}")
 
 
-def _reasoning_summary_text(response: Any) -> str:
-    outputs = getattr(response, "output", None)
-    if not isinstance(outputs, list):
-        return "[no reasoning summary]"
-    lines: list[str] = []
-    for item in outputs:
-        if getattr(item, "type", None) != "reasoning":
-            continue
-        summaries = getattr(item, "summary", None) or []
-        for summary in summaries:
-            text = _safe_text(getattr(summary, "text", ""))
-            if text.strip() != "":
-                lines.append(text.strip())
-    return "\n".join(lines) if len(lines) > 0 else "[no reasoning summary]"
 
 
-def _usage_summary_text(response: Any) -> str:
-    usage = getattr(response, "usage", None)
-    model_name = _safe_text(getattr(response, "model", ""))
-    if usage is None:
-        return (
-            f"GPT Usage for this response:\nModel: {model_name or 'None'}, \nNo usage"
-            " data.\n"
-        )
-
-    input_tokens = _as_int(getattr(usage, "input_tokens", 0), 0)
-    output_tokens = _as_int(getattr(usage, "output_tokens", 0), 0)
-    total_tokens = _as_int(
-        getattr(usage, "total_tokens", input_tokens + output_tokens),
-        input_tokens + output_tokens,
-    )
-    input_details = getattr(usage, "input_tokens_details", None)
-    output_details = getattr(usage, "output_tokens_details", None)
-    cached_tokens = _as_int(getattr(input_details, "cached_tokens", 0), 0)
-    reasoning_tokens = _as_int(getattr(output_details, "reasoning_tokens", 0), 0)
-    model_enum = GPTModel.from_string(model_name) if model_name else None
-    return str(
-        GPTUsage(
-            input_tokens=input_tokens,
-            cached_tokens=cached_tokens,
-            output_tokens=output_tokens,
-            reasoning_tokens=reasoning_tokens,
-            total_tokens=total_tokens,
-            model_used=model_enum,
-        )
-    )
 
 
-def _log_api_usage_and_reasoning(orphan_id: str, stage: str, response: Any) -> None:
-    _log_k(f"[K][{orphan_id}] {stage} usage/cost:")
-    _log_k(_usage_summary_text(response))
-    _log_k(f"[K][{orphan_id}] {stage} GPT reasoning summary:")
-    _log_k(_reasoning_summary_text(response))
 
 
-def _log_pass1_api_result(
-    orphan_id: str, payload: dict[str, Any], cached: bool, response: Any | None = None
-) -> None:
-    mode = "cache_hit" if cached else "api_call"
-    _log_k(f"[K][{orphan_id}] pass1_result ({mode}):")
-    _log_k(_pretty_json(payload))
-    if not cached and response is not None:
-        _log_api_usage_and_reasoning(orphan_id, "pass1", response)
-    elif cached:
-        _log_k(f"[K][{orphan_id}] pass1 usage/cost: [cache_hit: no live API call]")
-        _log_k(
-            f"[K][{orphan_id}] pass1 GPT reasoning summary: [cache_hit: no live API"
-            " response]"
-        )
 
 
-def _log_rank_api_result(
-    orphan_id: str, payload: dict[str, Any], cached: bool, response: Any | None = None
-) -> None:
-    mode = "cache_hit" if cached else "api_call"
-    _log_k(f"[K][{orphan_id}] rank_result ({mode}):")
-    _log_k(_pretty_json(payload))
-    if not cached and response is not None:
-        _log_api_usage_and_reasoning(orphan_id, "rank", response)
-    elif cached:
-        _log_k(f"[K][{orphan_id}] rank usage/cost: [cache_hit: no live API call]")
-        _log_k(
-            f"[K][{orphan_id}] rank GPT reasoning summary: [cache_hit: no live API"
-            " response]"
-        )
 
 
-def _log_rank_api_input(orphan_id: str, payload: dict[str, Any]) -> None:
-    _log_k(f"[K][{orphan_id}] rank_input_variables:")
-    _log_k(_pretty_json(payload))
 
 
-def _log_pass1_api_input(orphan_id: str, payload: dict[str, Any]) -> None:
-    _log_k(f"[K][{orphan_id}] pass1_input_variables:")
-    _log_k(_pretty_json(payload))
 
 
 def _compact_candidate_view(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -2620,386 +1479,10 @@ def _format_c2_candidates_table(
     return "\n".join(lines)
 
 
-def _log_anchor_and_candidates(
-    orphan_id: str,
-    *,
-    valid_anchors: list[dict[str, Any]],
-    variants_used: list[str],
-    b_rows: list[dict[str, Any]],
-    c_rows: list[dict[str, Any]],
-    c2_rows: list[dict[str, Any]],
-    merged: list[dict[str, Any]],
-    ranked: list[dict[str, Any]],
-) -> None:
-    _log_k(f"[K][{orphan_id}] anchor_usage:")
-    _log_k(f"[K][{orphan_id}] C2 text-phrase criteria count={len(variants_used)}")
-    _log_k(_pretty_json({"c2_text_phrases": variants_used}))
-    _log_k(
-        _pretty_json(
-            {
-                "anchors": [
-                    {
-                        "anchor_text": _safe_text(a.get("anchor_text")),
-                        "variants": a.get("variants") or [],
-                    }
-                    for a in valid_anchors
-                ]
-            }
-        )
-    )
-    _log_k(f"[K][{orphan_id}] candidates_B count={len(b_rows)}")
-    _log_k(_pretty_json({"candidates_B": _compact_candidate_view(b_rows)}))
-    _log_k(f"[K][{orphan_id}] candidates_C count={len(c_rows)}")
-    _log_k(_pretty_json({"candidates_C": _compact_candidate_view(c_rows)}))
-    _log_k(f"[K][{orphan_id}] candidates_C2 count={len(c2_rows)}")
-    _log_k(_format_c2_candidates_table(c2_rows))
-    _log_k(f"[K][{orphan_id}] candidates_merged count={len(merged)}")
-    _log_k(_format_c2_candidates_table(merged, include_anchor_hit_count=True))
-    _log_k(f"[K][{orphan_id}] candidates_ranked count={len(ranked)}")
-    _log_k(_pretty_json({"candidates_ranked": _compact_candidate_view(ranked)}))
 
 
-def _upsert_decision(
-    duck_con: duckdb.DuckDBPyConnection,
-    run_id: str,
-    decision: CaseDecision,
-    *,
-    dry_run: bool,
-) -> tuple[bool, str]:
-    decision_payload = {
-        "label": decision.label,
-        "resolved_entity_id": decision.resolved_entity_id,
-        "reason_summary": decision.reason_summary,
-        "evidence_digest": {
-            "top_candidates": decision.evidence_json.get("top_candidates"),
-            "reason_code": decision.evidence_json.get("reason_code"),
-        },
-    }
-    decision_hash = _sha256(_canonical_json(decision_payload))
-
-    _set_case_state(
-        duck_con,
-        run_id,
-        decision.orphan_id,
-        case_status=(
-            "completed" if decision.label != "analysis_incomplete" else "failed"
-        ),
-        stage_completed="decision",
-        decision_label=decision.label,
-        resolved_entity_id=decision.resolved_entity_id,
-        decision_hash=decision_hash,
-        error_message=None,
-    )
-
-    if decision.label == "analysis_incomplete" or dry_run:
-        return False, decision_hash
-
-    prior_rows = _duck_query(
-        duck_con,
-        """
-        SELECT orphan_id, resolution_label, resolved_entity_id, confidence, reason_summary, evidence_json
-        FROM orphan_adjudication_overrides
-        WHERE orphan_id = ?
-        LIMIT 1;
-        """,
-        (decision.orphan_id,),
-    )
-    prior = prior_rows[0] if len(prior_rows) > 0 else None
-
-    prior_hash = None
-    if prior is not None:
-        ev = prior.get("evidence_json")
-        if isinstance(ev, dict):
-            prior_hash = _safe_text(ev.get("decision_hash"))
-        else:
-            try:
-                prior_obj = json.loads(_safe_text(ev))
-                if isinstance(prior_obj, dict):
-                    prior_hash = _safe_text(prior_obj.get("decision_hash"))
-            except json.JSONDecodeError:
-                prior_hash = None
-
-    changed = prior_hash != decision_hash
-    if not changed:
-        return False, decision_hash
-
-    prior_label = prior.get("resolution_label") if prior else None
-    prior_entity = prior.get("resolved_entity_id") if prior else None
-    prior_conf = prior.get("confidence") if prior else None
-
-    _duck_exec(
-        duck_con,
-        """
-        INSERT INTO orphan_adjudication_history (
-          history_id,
-          run_id,
-          orphan_id,
-          prior_resolution_label,
-          prior_resolved_entity_id,
-          prior_confidence,
-          new_resolution_label,
-          new_resolved_entity_id,
-          new_confidence,
-          reason_summary,
-          evidence_json,
-          analyst_mode,
-          changed_at
-        ) VALUES (
-          NULL,
-          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::JSON, 'interactive_agent_k', NOW()
-        );
-        """,
-        (
-            run_id,
-            decision.orphan_id,
-            prior_label,
-            prior_entity,
-            prior_conf,
-            decision.label,
-            decision.resolved_entity_id,
-            decision.confidence,
-            decision.reason_summary,
-            _canonical_json({**decision.evidence_json, "decision_hash": decision_hash}),
-        ),
-    )
-
-    _duck_exec(
-        duck_con,
-        """
-        INSERT INTO orphan_adjudication_overrides (
-          orphan_id,
-          resolution_label,
-          resolved_entity_id,
-          confidence,
-          reason_summary,
-          evidence_json,
-          analyst_mode,
-          created_at,
-          updated_at
-        ) VALUES (
-          ?, ?, ?, ?, ?, ?::JSON, 'interactive_agent_k', NOW(), NOW()
-        )
-        ON CONFLICT(orphan_id) DO UPDATE SET
-          resolution_label = EXCLUDED.resolution_label,
-          resolved_entity_id = EXCLUDED.resolved_entity_id,
-          confidence = EXCLUDED.confidence,
-          reason_summary = EXCLUDED.reason_summary,
-          evidence_json = EXCLUDED.evidence_json,
-          analyst_mode = EXCLUDED.analyst_mode,
-          updated_at = NOW();
-        """,
-        (
-            decision.orphan_id,
-            decision.label,
-            decision.resolved_entity_id,
-            decision.confidence,
-            decision.reason_summary,
-            _canonical_json({**decision.evidence_json, "decision_hash": decision_hash}),
-        ),
-    )
-
-    return True, decision_hash
 
 
-def _process_single_orphan(
-    duck_con: duckdb.DuckDBPyConnection,
-    sqlite_con: sqlite3.Connection,
-    client: OpenAI,
-    run_id: str,
-    group_id: str,
-    orphan_id: str,
-    pass1_prompt_template: GPTPromptTemplate,
-    rank_prompt_template: GPTPromptTemplate,
-    *,
-    allow_api_calls: bool = True,
-) -> OrphanWork:
-    stage_trace: list[dict[str, Any]] = []
-
-    dossier = _load_orphan_dossier(duck_con, sqlite_con, orphan_id)
-    _display_article_for_orphan(sqlite_con, dossier)
-    article_id = dossier.get("article_id")
-
-    pass1_input = _build_pass1_input(dossier)
-    if not allow_api_calls:
-        raise RuntimeError("api_calls_disabled_for_needs_api_orphan")
-    _log_pass1_api_input(orphan_id, pass1_input)
-    _log_k(f"[K][{orphan_id}] pass1_api_call: start")
-    pass1_resp, pass1_raw = _call_pass1_api(client, pass1_input, pass1_prompt_template)
-    _log_k(f"[K][{orphan_id}] pass1_api_call: completed")
-    _log_api_usage_and_reasoning(orphan_id, "pass1", pass1_raw)
-    pass1_obj = json.loads(pass1_resp.model_dump_json())
-    _log_pass1_api_result(orphan_id, pass1_obj, cached=False, response=None)
-
-    valid_anchors, variants, anchor_failures = _validate_anchors(
-        sqlite_con, pass1_resp
-    )
-    pass1_gate_failed = _pass1_gate_failed(valid_anchors, anchor_failures)
-    stage_trace.append(
-        {
-            "stage": "pass1",
-            "row_count": len(valid_anchors),
-            "gate": "fail" if pass1_gate_failed else "pass",
-            "anchor_failures": anchor_failures,
-        }
-    )
-    _log_stage_metric(
-        duck_con,
-        run_id,
-        group_id,
-        orphan_id,
-        "pass1",
-        "anchor_validation",
-        len(valid_anchors),
-        ";".join(anchor_failures),
-    )
-
-    if pass1_gate_failed:
-        _log_k(
-            f"[K][{orphan_id}] rank_result (skipped): pass1 anchor validation failed; "
-            f"reasons={';'.join(anchor_failures)}"
-        )
-        _log_anchor_and_candidates(
-            orphan_id,
-            valid_anchors=valid_anchors,
-            variants_used=[],
-            b_rows=[],
-            c_rows=[],
-            c2_rows=[],
-            merged=[],
-            ranked=[],
-        )
-        return OrphanWork(
-            orphan_id=orphan_id,
-            article_id=int(article_id) if article_id is not None else None,
-            insufficient=True,
-            insufficient_reason="pass1",
-            stage_trace=stage_trace,
-            anchors=valid_anchors,
-            valid_variants=variants,
-            merged_candidates=[],
-            ranked_candidates=[],
-            provisional_reason="insufficient anchors from pass1",
-        )
-
-    _log_stage_metric(
-        duck_con, run_id, group_id, orphan_id, "B", "bypassed", 0, "bypassed_focus_c2"
-    )
-    _log_stage_metric(
-        duck_con, run_id, group_id, orphan_id, "C", "bypassed", 0, "bypassed_focus_c2"
-    )
-    stage_trace.append({"stage": "B", "row_count": 0, "gate": "bypassed"})
-    stage_trace.append({"stage": "C", "row_count": 0, "gate": "bypassed"})
-
-    variants_used = variants
-    c2_rows: list[dict[str, Any]] = []
-    for variant in variants_used:
-        article_hits = _fts_article_hits(sqlite_con, variant, limit_n=60)
-        mapped = _entities_for_articles(duck_con, article_hits, orphan_id)
-        for m in mapped:
-            m["query_variant"] = variant
-            c2_rows.append(m)
-
-    splink_weights = _score_c2_candidate_weights(duck_con, orphan_id, c2_rows)
-    for row in c2_rows:
-        entity_uid = _safe_text(row.get("entity_uid"))
-        row["splink_match_weight"] = splink_weights.get(entity_uid)
-    missing_splink_weights = sum(
-        1 for row in c2_rows if row.get("splink_match_weight") is None
-    )
-    _log_k(
-        f"[K][{orphan_id}] splink_c2_weight_scoring:"
-        f" requested_candidates={len({ _safe_text(r.get('entity_uid')) for r in c2_rows if _safe_text(r.get('entity_uid')) != '' })},"
-        f" scored_candidates={len(splink_weights)},"
-        f" unscored_candidates={missing_splink_weights}"
-    )
-    _log_stage_metric(
-        duck_con,
-        run_id,
-        group_id,
-        orphan_id,
-        "splink_c2_weight",
-        "candidate_entity_vs_orphan",
-        len(splink_weights),
-        f"missing={missing_splink_weights}",
-    )
-    stage_trace.append(
-        {"stage": "splink_c2_weight", "row_count": len(splink_weights), "gate": "pass"}
-    )
-
-    _insert_candidates(duck_con, run_id, group_id, orphan_id, "c2", c2_rows)
-    _log_stage_metric(
-        duck_con,
-        run_id,
-        group_id,
-        orphan_id,
-        "C2",
-        "fts_variant_union",
-        len(c2_rows),
-        f"variants={len(variants)}",
-    )
-    stage_trace.append({"stage": "C2", "row_count": len(c2_rows), "gate": "pass"})
-
-    merged = _merge_candidates([], c2_rows)
-    _insert_merged_candidates(duck_con, run_id, group_id, orphan_id, merged)
-    _log_stage_metric(
-        duck_con,
-        run_id,
-        group_id,
-        orphan_id,
-        "merge",
-        "candidate_merge",
-        len(merged),
-        f"top{MAX_MERGED_CANDIDATES_FOR_API2}",
-    )
-    _log_anchor_and_candidates(
-        orphan_id,
-        valid_anchors=valid_anchors,
-        variants_used=variants_used,
-        b_rows=[],
-        c_rows=[],
-        c2_rows=c2_rows,
-        merged=merged,
-        ranked=[],
-    )
-
-    rank_input = _build_rank_input(duck_con, sqlite_con, dossier, merged)
-    _log_rank_api_input(orphan_id, rank_input)
-    _log_k(f"[K][{orphan_id}] rank_api_call: start")
-    rank_resp, rank_raw = _call_rank_api(client, rank_input, rank_prompt_template)
-    _log_k(f"[K][{orphan_id}] rank_api_call: completed")
-    _log_api_usage_and_reasoning(orphan_id, "rank", rank_raw)
-    rank_obj = json.loads(rank_resp.model_dump_json())
-    _log_rank_api_result(orphan_id, rank_obj, cached=False, response=None)
-
-    rank_insufficient = rank_resp.match_result == "insufficient_information"
-    ranked = _validate_rank_output(rank_resp, merged)
-    _log_stage_metric(
-        duck_con,
-        run_id,
-        group_id,
-        orphan_id,
-        "rank",
-        "rank_validate",
-        len(ranked),
-        "direct_ranker",
-    )
-    stage_trace.append({"stage": "rank", "row_count": len(ranked), "gate": "pass"})
-    return OrphanWork(
-        orphan_id=orphan_id,
-        article_id=int(article_id) if article_id is not None else None,
-        insufficient=rank_insufficient,
-        insufficient_reason="rank" if rank_insufficient else None,
-        stage_trace=stage_trace,
-        anchors=valid_anchors,
-        valid_variants=variants,
-        merged_candidates=merged,
-        ranked_candidates=ranked,
-        provisional_reason=(
-            "insufficient information from rank api"
-            if rank_insufficient
-            else "ranked candidates available"
-        ),
-    )
 
 
 def _assign_group(work_items: list[OrphanWork]) -> dict[str, dict[str, Any]]:
@@ -3085,21 +1568,49 @@ def _decision_from_work(
 
     top = work.ranked_candidates[:3]
     if assigned_candidate is None:
+        reason_code = "no_valid_winner_after_rank_and_constraints"
+        reason_summary = (
+            "Candidate generation and ranking were completed, but no entity passed"
+            " the deterministic one-to-one and conflict gates. Reviewed candidates"
+            " lacked sufficient identity-level correspondence to support a"
+            " defensible match."
+        )
+        conflict_analysis = "no candidate passed deterministic assignment gates"
+        if work.provisional_reason == "no matching incident from rank api":
+            reason_code = "no_matching_incident_after_group_rank"
+            reason_summary = (
+                "The group-level ranking step reviewed incident-deduplicated"
+                " candidates and did not identify any candidate incident as the"
+                " same homicide incident."
+            )
+            conflict_analysis = "no candidate incident matched the target incident"
+        elif (
+            work.provisional_reason
+            == "matched incident selected but orphan unassigned"
+        ):
+            reason_code = "matched_incident_but_orphan_unassigned_after_matching"
+            reason_summary = (
+                "A candidate incident was selected, but this orphan was not part of"
+                " the best one-to-one assignment after same-article exclusion and"
+                " Splink-based within-incident matching."
+            )
+            conflict_analysis = (
+                "matched incident selected, but this orphan was not in the optimal"
+                " allowed assignment"
+            )
         evidence = {
             "stage_trace": work.stage_trace,
             "narrative_evidence": {
                 "orphan_anchors": work.anchors,
                 "candidate_anchors": top,
-                "conflict_analysis": (
-                    "no candidate passed deterministic assignment gates"
-                ),
+                "conflict_analysis": conflict_analysis,
             },
             "top_candidates": [
                 _safe_text(c.get("entity_uid"))
                 for c in top
                 if _safe_text(c.get("entity_uid")) != ""
             ],
-            "reason_code": "no_valid_winner_after_rank_and_constraints",
+            "reason_code": reason_code,
             "execution_audit": {
                 "query_mode": "interactive_sql",
                 "fts_used": len(work.valid_variants) > 0,
@@ -3116,12 +1627,7 @@ def _decision_from_work(
             label="not_same_person",
             resolved_entity_id=None,
             confidence=None,
-            reason_summary=(
-                "Candidate generation and ranking were completed, but no entity passed"
-                " the deterministic one-to-one and conflict gates. Reviewed candidates"
-                " lacked sufficient identity-level correspondence to support a"
-                " defensible match."
-            ),
+            reason_summary=reason_summary,
             evidence_json=evidence,
         )
 
@@ -3149,7 +1655,7 @@ def _decision_from_work(
         "policy_enforcement": {
             "one_to_one_mapping": True,
             "same_article_entity_uniqueness": True,
-            "assignment_mode": "individual_or_bijective_greedy",
+            "assignment_mode": "maximum_weight_matching",
         },
     }
     return CaseDecision(
@@ -3169,129 +1675,6 @@ def _decision_from_work(
     )
 
 
-def _process_group(
-    duck_con: duckdb.DuckDBPyConnection,
-    sqlite_con: sqlite3.Connection,
-    client: OpenAI,
-    run_id: str,
-    group_rows: list[dict[str, Any]],
-    allow_api_by_orphan: dict[str, bool],
-    pass1_prompt_template: GPTPromptTemplate,
-    rank_prompt_template: GPTPromptTemplate,
-) -> list[CaseDecision]:
-    group_id = _safe_text(group_rows[0].get("group_id"))
-    work_items: list[OrphanWork] = []
-
-    for r in group_rows:
-        orphan_id = _safe_text(r.get("orphan_id"))
-        _set_case_state(
-            duck_con,
-            run_id,
-            orphan_id,
-            case_status="in_progress",
-            stage_completed="start",
-        )
-        try:
-            work = _process_single_orphan(
-                duck_con,
-                sqlite_con,
-                client,
-                run_id,
-                group_id,
-                orphan_id,
-                pass1_prompt_template,
-                rank_prompt_template,
-                allow_api_calls=allow_api_by_orphan.get(orphan_id, True),
-            )
-            work_items.append(work)
-            _set_case_state(
-                duck_con,
-                run_id,
-                orphan_id,
-                case_status="in_progress",
-                stage_completed="rank",
-            )
-        except Exception as ex:  # noqa: BLE001
-            _log_k(f"[K][{orphan_id}] processing_error: {_safe_text(ex)}")
-            _log_stage_metric(
-                duck_con,
-                run_id,
-                group_id,
-                orphan_id,
-                "error",
-                "exception",
-                0,
-                _safe_text(ex)[:500],
-            )
-            work_items.append(
-                OrphanWork(
-                    orphan_id=orphan_id,
-                    article_id=(
-                        int(r["article_id"])
-                        if r.get("article_id") is not None
-                        else None
-                    ),
-                    insufficient=False,
-                    insufficient_reason=None,
-                    stage_trace=[
-                        {
-                            "stage": "error",
-                            "row_count": 0,
-                            "gate": "fail",
-                            "error": _safe_text(ex),
-                        }
-                    ],
-                    anchors=[],
-                    valid_variants=[],
-                    merged_candidates=[],
-                    ranked_candidates=[],
-                    provisional_reason="processing error",
-                )
-            )
-            _set_case_state(
-                duck_con,
-                run_id,
-                orphan_id,
-                case_status="failed",
-                stage_completed="error",
-                decision_label="analysis_incomplete",
-                error_message=_safe_text(ex)[:800],
-            )
-
-    assigned = _assign_group(work_items)
-    decisions: list[CaseDecision] = []
-    for w in work_items:
-        if (
-            len(w.stage_trace) > 0
-            and _safe_text(w.stage_trace[0].get("stage")) == "error"
-        ):
-            evidence = {
-                "stage_trace": w.stage_trace,
-                "reason_code": "execution_failure",
-                "execution_audit": {
-                    "query_mode": "interactive_sql",
-                    "fts_used": False,
-                    "fts_query_list": [],
-                },
-            }
-            decisions.append(
-                CaseDecision(
-                    orphan_id=w.orphan_id,
-                    article_id=w.article_id,
-                    label="analysis_incomplete",
-                    resolved_entity_id=None,
-                    confidence=None,
-                    reason_summary=(
-                        "Required adjudication stages failed due to execution error and"
-                        " the case must be retried."
-                    ),
-                    evidence_json=evidence,
-                )
-            )
-            continue
-
-        decisions.append(_decision_from_work(w, assigned.get(w.orphan_id)))
-    return decisions
 
 
 def _decision_hash_for_case(decision: CaseDecision) -> str:
@@ -3307,49 +1690,8 @@ def _decision_hash_for_case(decision: CaseDecision) -> str:
     return _sha256(_canonical_json(payload))
 
 
-def _cache_terminal_decision(
-    duck_con: duckdb.DuckDBPyConnection,
-    sqlite_con: sqlite3.Connection,
-    decision: CaseDecision,
-) -> None:
-    if decision.label not in {"matched", "not_same_person", "insufficient_information"}:
-        return
-    dossier = _load_orphan_dossier(duck_con, sqlite_con, decision.orphan_id)
-    pass1_input = _build_pass1_input(dossier)
-    cache_key = _adjudication_cache_key(dossier)
-    _llm_cache_put(
-        duck_con,
-        stage=E2E_CACHE_STAGE,
-        idempotency_key=cache_key,
-        model=f"{PASS1_MODEL}|{RANK_MODEL}",
-        prompt_version=f"{PASS1_PROMPT_VERSION}|{RANK_PROMPT_VERSION}|e2e_v1",
-        input_payload=pass1_input,
-        response_payload=_decision_to_cache_payload(decision),
-    )
 
 
-def _cached_decisions_from_readiness(
-    duck_con: duckdb.DuckDBPyConnection,
-    readiness_rows: list[dict[str, Any]],
-    excluded_orphan_ids: set[str],
-) -> list[CaseDecision]:
-    out: list[CaseDecision] = []
-    for row in readiness_rows:
-        orphan_id = _safe_text(row.get("orphan_id"))
-        if orphan_id in excluded_orphan_ids:
-            continue
-        if _safe_text(row.get("readiness_status")) != "decision_ready_from_cache":
-            continue
-        cache_key = _safe_text(row.get("pass1_idempotency_key"))
-        if cache_key == "":
-            continue
-        cached = _llm_cache_get(duck_con, E2E_CACHE_STAGE, cache_key)
-        if cached is None:
-            continue
-        decision = _decision_from_cache_payload(cached, orphan_id)
-        if decision.label in {"matched", "not_same_person", "insufficient_information"}:
-            out.append(decision)
-    return out
 
 
 def _prior_decision_hash(row: dict[str, Any] | None) -> str | None:
@@ -3369,478 +1711,22 @@ def _prior_decision_hash(row: dict[str, Any] | None) -> str | None:
     return None
 
 
-def _rebuild_overrides_table(
-    duck_con: duckdb.DuckDBPyConnection,
-    run_id: str,
-    decisions: list[CaseDecision],
-    *,
-    dry_run: bool,
-) -> int:
-    terminal = [
-        d
-        for d in decisions
-        if d.label in {"matched", "not_same_person", "insufficient_information"}
-    ]
-    if dry_run:
-        return len(terminal)
-
-    prior_rows = _duck_query(
-        duck_con,
-        """
-        SELECT orphan_id, resolution_label, resolved_entity_id, confidence, reason_summary, evidence_json
-        FROM orphan_adjudication_overrides;
-        """,
-    )
-    prior_by_orphan = {_safe_text(r.get("orphan_id")): r for r in prior_rows}
-
-    _duck_exec(
-        duck_con,
-        "CREATE TEMP TABLE orphan_adj_overrides_next_tmp AS SELECT * FROM"
-        " orphan_adjudication_overrides WHERE 1=0;",
-    )
-
-    for d in terminal:
-        dec_hash = _decision_hash_for_case(d)
-        evidence_with_hash = {**d.evidence_json, "decision_hash": dec_hash}
-        prior = prior_by_orphan.get(d.orphan_id)
-        prior_hash = _prior_decision_hash(prior)
-        if prior_hash != dec_hash:
-            _duck_exec(
-                duck_con,
-                """
-                INSERT INTO orphan_adjudication_history (
-                  history_id,
-                  run_id,
-                  orphan_id,
-                  prior_resolution_label,
-                  prior_resolved_entity_id,
-                  prior_confidence,
-                  new_resolution_label,
-                  new_resolved_entity_id,
-                  new_confidence,
-                  reason_summary,
-                  evidence_json,
-                  analyst_mode,
-                  changed_at
-                ) VALUES (
-                  NULL,
-                  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::JSON, 'interactive_agent_k', NOW()
-                );
-                """,
-                (
-                    run_id,
-                    d.orphan_id,
-                    prior.get("resolution_label") if prior else None,
-                    prior.get("resolved_entity_id") if prior else None,
-                    prior.get("confidence") if prior else None,
-                    d.label,
-                    d.resolved_entity_id,
-                    d.confidence,
-                    d.reason_summary,
-                    _canonical_json(evidence_with_hash),
-                ),
-            )
-
-        _duck_exec(
-            duck_con,
-            """
-            INSERT INTO orphan_adj_overrides_next_tmp (
-              orphan_id,
-              resolution_label,
-              resolved_entity_id,
-              confidence,
-              reason_summary,
-              evidence_json,
-              analyst_mode,
-              created_at,
-              updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?::JSON, 'interactive_agent_k', NOW(), NOW());
-            """,
-            (
-                d.orphan_id,
-                d.label,
-                d.resolved_entity_id,
-                d.confidence,
-                d.reason_summary,
-                _canonical_json(evidence_with_hash),
-            ),
-        )
-
-    _duck_exec(duck_con, "BEGIN TRANSACTION;")
-    try:
-        _duck_exec(duck_con, "DELETE FROM orphan_adjudication_overrides;")
-        _duck_exec(
-            duck_con,
-            """
-            INSERT INTO orphan_adjudication_overrides
-            SELECT *
-            FROM orphan_adj_overrides_next_tmp;
-            """,
-        )
-        _duck_exec(duck_con, "COMMIT;")
-    except Exception:  # noqa: BLE001
-        _duck_exec(duck_con, "ROLLBACK;")
-        raise
-
-    _duck_exec(duck_con, "DROP TABLE orphan_adj_overrides_next_tmp;")
-    return len(terminal)
 
 
-def _run_pipeline(
-    duck_con: duckdb.DuckDBPyConnection,
-    sqlite_con: sqlite3.Connection,
-    client: OpenAI,
-    params: KParams,
-    readiness_rows: list[dict[str, Any]],
-    pass1_prompt_template: GPTPromptTemplate,
-    rank_prompt_template: GPTPromptTemplate,
-) -> dict[str, int]:
-    _ensure_tables(duck_con)
-    _migrate_legacy_labels(duck_con)
-
-    run_id = f"k_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
-    _duck_exec(
-        duck_con,
-        """
-        INSERT INTO orphan_adj_run (
-          run_id, started_at, requested_limit, processed_count, grouped_count,
-          matched_count, not_same_person_count, insufficient_information_count,
-          analysis_incomplete_count, dry_run, full_backfill, status
-        ) VALUES (?, NOW(), ?, 0, 0, 0, 0, 0, 0, ?, ?, 'running');
-        """,
-        (
-            run_id,
-            params.limit,
-            params.dry_run,
-            params.full_backfill,
-        ),
-    )
-
-    selected_needs_api = _select_needs_api_rows(readiness_rows, params)
-    selected_needs_ids = {_safe_text(r.get("orphan_id")) for r in selected_needs_api}
-    rows_to_process = sorted(
-        selected_needs_api,
-        key=lambda r: (int(r.get("queue_pos") or 0), _safe_text(r.get("orphan_id"))),
-    )
-
-    groups = _build_groups(rows_to_process, params.group_same_incident, run_id)
-    _insert_queue_rows(duck_con, run_id, groups)
-    allow_api_by_orphan = {
-        _safe_text(r.get("orphan_id")): True for r in rows_to_process
-    }
-    processed = 0
-    matched = 0
-    not_same = 0
-    insuff = 0
-    incomplete = 0
-    decisions_new: list[CaseDecision] = []
-
-    try:
-        for grp in groups:
-            decisions = _process_group(
-                duck_con,
-                sqlite_con,
-                client,
-                run_id,
-                grp,
-                allow_api_by_orphan,
-                pass1_prompt_template,
-                rank_prompt_template,
-            )
-            for d in decisions:
-                dec_hash = _decision_hash_for_case(d)
-                decision_error_message = None
-                if d.label == "analysis_incomplete":
-                    stage_trace = d.evidence_json.get("stage_trace")
-                    if (
-                        isinstance(stage_trace, list)
-                        and len(stage_trace) > 0
-                        and isinstance(stage_trace[0], dict)
-                    ):
-                        decision_error_message = (
-                            _safe_text(stage_trace[0].get("error"))[:800] or None
-                        )
-                _set_case_state(
-                    duck_con,
-                    run_id,
-                    d.orphan_id,
-                    case_status=(
-                        "completed" if d.label != "analysis_incomplete" else "failed"
-                    ),
-                    stage_completed="decision",
-                    decision_label=d.label,
-                    resolved_entity_id=d.resolved_entity_id,
-                    decision_hash=dec_hash,
-                    error_message=decision_error_message,
-                )
-                decisions_new.append(d)
-                _cache_terminal_decision(duck_con, sqlite_con, d)
-                processed += 1
-                if d.label == "matched":
-                    matched += 1
-                elif d.label == "not_same_person":
-                    not_same += 1
-                elif d.label == "insufficient_information":
-                    insuff += 1
-                else:
-                    incomplete += 1
-
-        cached_decisions = _cached_decisions_from_readiness(
-            duck_con,
-            readiness_rows,
-            excluded_orphan_ids=selected_needs_ids,
-        )
-
-        rebuilt_terminal_rows = _rebuild_overrides_table(
-            duck_con,
-            run_id,
-            cached_decisions + decisions_new,
-            dry_run=params.dry_run,
-        )
-
-        _duck_exec(
-            duck_con,
-            """
-            UPDATE orphan_adj_run
-            SET
-              finished_at = NOW(),
-              processed_count = ?,
-              grouped_count = ?,
-              matched_count = ?,
-              not_same_person_count = ?,
-              insufficient_information_count = ?,
-              analysis_incomplete_count = ?,
-              status = 'completed',
-              error_message = NULL
-            WHERE run_id = ?;
-            """,
-            (
-                processed,
-                len(groups),
-                matched,
-                not_same,
-                insuff,
-                incomplete,
-                run_id,
-            ),
-        )
-
-    except Exception as ex:  # noqa: BLE001
-        _duck_exec(
-            duck_con,
-            """
-            UPDATE orphan_adj_run
-            SET
-              finished_at = NOW(),
-              processed_count = ?,
-              grouped_count = ?,
-              matched_count = ?,
-              not_same_person_count = ?,
-              insufficient_information_count = ?,
-              analysis_incomplete_count = ?,
-              status = 'failed',
-              error_message = ?
-            WHERE run_id = ?;
-            """,
-            (
-                processed,
-                len(groups),
-                matched,
-                not_same,
-                insuff,
-                incomplete,
-                _safe_text(ex)[:1000],
-                run_id,
-            ),
-        )
-        raise
-
-    needs_api_total = sum(
-        1
-        for r in readiness_rows
-        if _safe_text(r.get("readiness_status")) == "needs_api"
-    )
-    decision_ready_total = sum(
-        1
-        for r in readiness_rows
-        if _safe_text(r.get("readiness_status")) == "decision_ready_from_cache"
-    )
-
-    return {
-        "requested_limit": params.limit,
-        "needs_api_total": needs_api_total,
-        "selected_needs_api": len(selected_needs_api),
-        "decision_ready_from_cache": decision_ready_total,
-        "processed": processed,
-        "grouped": len(groups),
-        "matched": matched,
-        "not_same_person": not_same,
-        "insufficient_information": insuff,
-        "analysis_incomplete": incomplete,
-        "rebuilt_terminal_rows": rebuilt_terminal_rows,
-        "dry_run": int(params.dry_run),
-    }
 
 
-def _prepare_cache_readiness_legacy() -> Run[tuple[list[dict[str, Any]], int]]:
-    return _precompute_cache_readiness_run_legacy() >> (
-        lambda prep: (
-            put_line(f"[K] API 1 JSON schema:\n{to_json(Pass1Response)}")
-            ^ put_line(f"[K] API 2 JSON schema:\n{to_json(RankResponse)}")
-            ^ put_line(_format_cache_readiness_summary(prep[0]))
-            ^ pure(prep)
-        )
-    )
 
 
-def _runtime_deps_run() -> Run[KRuntimeDeps]:
-    def _with_env(env: Any) -> Run[KRuntimeDeps]:
-        return pure(
-            KRuntimeDeps(
-                duck_con=env["connections"][DbBackend.DUCKDB],
-                sqlite_con=env["connections"][DbBackend.SQLITE],
-                openai_client=env["openai_client"](),
-            )
-        )
-
-    return ask() >> _with_env
 
 
-def _precompute_cache_readiness_run_legacy() -> Run[tuple[list[dict[str, Any]], int]]:
-    return _runtime_deps_run() >> (
-        lambda deps: pure(_precompute_cache_readiness(deps.duck_con, deps.sqlite_con))
-    )
 
 
-def _run_pipeline_run_legacy(
-    params: KParams,
-    readiness_rows: list[dict[str, Any]],
-    pass1_prompt_template: GPTPromptTemplate,
-    rank_prompt_template: GPTPromptTemplate,
-) -> Run[dict[str, int]]:
-    return _runtime_deps_run() >> (
-        lambda deps: pure(
-            _run_pipeline(
-                deps.duck_con,
-                deps.sqlite_con,
-                deps.openai_client,
-                params,
-                readiness_rows,
-                pass1_prompt_template,
-                rank_prompt_template,
-            )
-        )
-    )
 
 
-def _execute_k_legacy(
-    params: KParams, readiness_rows: list[dict[str, Any]]
-) -> Run[NextStep]:
-    return ask() >> (
-        lambda env: resolve_prompt_template(env, PromptKey(PASS1_PROMPT_KEY))
-        >> (
-            lambda pass1_prompt_template: (
-                put_line(
-                    f"[K] Stored prompt key '{PASS1_PROMPT_KEY}' is still a placeholder"
-                    f" id ({pass1_prompt_template.id}). Replace it with your dashboard"
-                    " prompt_id and rerun."
-                )
-                ^ pure(NextStep.CONTINUE)
-                if pass1_prompt_template.id.startswith("pmpt_replace_")
-                else resolve_prompt_template(env, PromptKey(RANK_PROMPT_KEY))
-                >> (
-                    lambda rank_prompt_template: (
-                        put_line(
-                            f"[K] Stored prompt key '{RANK_PROMPT_KEY}' is still a"
-                            f" placeholder id ({rank_prompt_template.id}). Replace it"
-                            " with your dashboard prompt_id and rerun."
-                        )
-                        ^ pure(NextStep.CONTINUE)
-                        if rank_prompt_template.id.startswith("pmpt_replace_")
-                        else _run_pipeline_run_legacy(
-                            params,
-                            readiness_rows,
-                            pass1_prompt_template,
-                            rank_prompt_template,
-                        )
-                        >> (
-                            lambda summary: put_line(
-                                "[K] Orphan adjudication completed:"
-                                f" needs_api_total={summary['needs_api_total']},"
-                                f" selected_needs_api={summary['selected_needs_api']},"
-                                f" decision_ready_from_cache={summary['decision_ready_from_cache']},"
-                                f" processed={summary['processed']},"
-                                f" groups={summary['grouped']},"
-                                f" matched={summary['matched']},"
-                                f" not_same_person={summary['not_same_person']},"
-                                f" insufficient_information={summary['insufficient_information']},"
-                                f" analysis_incomplete={summary['analysis_incomplete']},"
-                                f" rebuilt_terminal_rows={summary['rebuilt_terminal_rows']},"
-                                f" dry_run={bool(summary['dry_run'])}"
-                            )
-                            ^ pure(NextStep.CONTINUE)
-                        )
-                    )
-                )
-            )
-        )
-    )
 
 
-def _prompt_and_execute_k_legacy(
-    readiness_rows: list[dict[str, Any]], needs_api_total: int
-) -> Run[NextStep]:
-    limit_prompt = (
-        f"Enter number of records requiring new API calls [{needs_api_total}]: "
-    )
-    return input_with_prompt(InputPrompt(limit_prompt)) >> (
-        lambda limit_raw: (
-            put_line("[K] limit=0; returning to main menu.") ^ pure(NextStep.CONTINUE)
-            if _parse_limit(str(limit_raw), default=needs_api_total) == 0
-            else input_with_prompt(PromptKey("k_start_after"))
-            >> (
-                lambda start_after_raw: input_with_prompt(
-                    PromptKey("k_group_same_incident")
-                )
-                >> (
-                    lambda group_raw: input_with_prompt(PromptKey("k_dry_run"))
-                    >> (
-                        lambda dry_raw: input_with_prompt(PromptKey("k_full_backfill"))
-                        >> (
-                            lambda full_raw: _execute_k_legacy(
-                                KParams(
-                                    limit=_parse_limit(
-                                        str(limit_raw), default=needs_api_total
-                                    ),
-                                    starting_after_orphan_id=str(
-                                        start_after_raw
-                                    ).strip(),
-                                    group_same_incident=_parse_bool(
-                                        str(group_raw), True
-                                    ),
-                                    dry_run=_parse_bool(str(dry_raw), False),
-                                    full_backfill=_parse_bool(str(full_raw), False),
-                                ),
-                                readiness_rows,
-                            )
-                        )
-                    )
-                )
-            )
-        )
-    )
 
 
-def adjudicate_orphans_controller_legacy() -> Run[NextStep]:
-    """
-    Entry point for controller [K].
-    """
-    return with_namespace(
-        Namespace("orphan_adj_k"),
-        to_prompts(ORPHAN_ADJ_PROMPTS),
-        _prepare_cache_readiness_legacy()
-        >> (lambda prep: _prompt_and_execute_k_legacy(prep[0], prep[1])),
-    )
 
 
 # === Monadic [K] controller overrides ===
@@ -4250,7 +2136,6 @@ def _queue_universe_rows_run_v2() -> Run[Array[CacheReadinessRow]]:
           ROW_NUMBER() OVER (
             ORDER BY
               qb.midpoint_day NULLS LAST,
-              qb.match_id,
               qb.orphan_id
           ) AS queue_pos
         FROM queue_base qb
@@ -4268,6 +2153,83 @@ def _queue_universe_rows_run_v2() -> Run[Array[CacheReadinessRow]]:
 
 
 def _load_orphan_dossier_run_v2(orphan_id: str) -> Run[Dossier]:
+    """Load the normalized dossier and article context for one orphan ID."""
+
+    def _load_article_context_for_dossier(base: dict[str, Any]) -> Run[Dossier]:
+        def _build_dossier(summary_rows: list[dict[str, Any]],
+                           article_rows: list[dict[str, Any]]) -> Dossier:
+            return _dossier_from_dict_v2(
+                {
+                    **base,
+                    "incident_summary_gpt": (
+                        _safe_text(summary_rows[0].get("summary"))
+                        if len(summary_rows) > 0
+                        else ""
+                    ),
+                    "article_title": (
+                        _safe_text(article_rows[0].get("Title"))
+                        if len(article_rows) > 0
+                        else ""
+                    ),
+                    "article_text": (
+                        _safe_text(article_rows[0].get("FullText"))[
+                            :MAX_FULLTEXT_CHARS
+                        ]
+                        if len(article_rows) > 0
+                        else ""
+                    ),
+                    "article_pub_date": (
+                        _safe_text(article_rows[0].get("PubDate"))
+                        if len(article_rows) > 0
+                        else ""
+                    ),
+                }
+            )
+
+        def _load_article_rows(summary_rows: list[dict[str, Any]]) -> Run[Dossier]:
+            return (
+                _query_rows_run_v2(
+                    """
+                    SELECT Title, FullText, PubDate
+                    FROM articles
+                    WHERE RecordId = ?
+                      AND Dataset = 'CLASS_WP'
+                      AND gptClass = 'M'
+                    LIMIT 1;
+                    """,
+                    _sql_params((base.get("article_id"),)),
+                    sqlite=True,
+                )
+                if base.get("article_id") is not None
+                else pure([])
+            ) >> (
+                lambda article_rows: pure(_build_dossier(summary_rows, article_rows))
+            )
+
+        return (
+            (
+                _query_rows_run_v2(
+                    """
+                    SELECT summary
+                    FROM incidents_cached
+                    WHERE article_id = ?
+                      AND incident_idx = ?
+                    LIMIT 1;
+                    """,
+                    _sql_params(
+                        (
+                            base.get("article_id"),
+                            _incident_idx_from_orphan_uid(orphan_id),
+                        )
+                    ),
+                )
+                if base.get("article_id") is not None
+                and _incident_idx_from_orphan_uid(orphan_id) is not None
+                else pure([])
+            )
+            >> _load_article_rows
+        )
+
     return (
         _query_rows_run_v2(
             """
@@ -4294,87 +2256,9 @@ def _load_orphan_dossier_run_v2(orphan_id: str) -> Run[Dossier]:
             _sql_params((orphan_id,)),
         )
         >> (
-            lambda rows: (
-                throw(ErrorPayload(f"orphan_dossier_missing:{orphan_id}"))
-                if len(rows) == 0
-                else (
-                    lambda base: (
-                        (
-                            _query_rows_run_v2(
-                                """
-                        SELECT summary
-                        FROM incidents_cached
-                        WHERE article_id = ?
-                          AND incident_idx = ?
-                        LIMIT 1;
-                        """,
-                                _sql_params(
-                                    (
-                                        base.get("article_id"),
-                                        _incident_idx_from_orphan_uid(orphan_id),
-                                    )
-                                ),
-                            )
-                            if base.get("article_id") is not None
-                            and _incident_idx_from_orphan_uid(orphan_id) is not None
-                            else pure([])
-                        )
-                        >> (
-                            lambda summary_rows: (
-                                _query_rows_run_v2(
-                                    """
-                            SELECT Title, FullText, PubDate
-                            FROM articles
-                            WHERE RecordId = ?
-                              AND Dataset = 'CLASS_WP'
-                              AND gptClass = 'M'
-                            LIMIT 1;
-                            """,
-                                    _sql_params((base.get("article_id"),)),
-                                    sqlite=True,
-                                )
-                                if base.get("article_id") is not None
-                                else pure([])
-                            )
-                            >> (
-                                lambda article_rows: pure(
-                                    _dossier_from_dict_v2(
-                                        {
-                                            **base,
-                                            "incident_summary_gpt": (
-                                                _safe_text(
-                                                    summary_rows[0].get("summary")
-                                                )
-                                                if len(summary_rows) > 0
-                                                else ""
-                                            ),
-                                            "article_title": (
-                                                _safe_text(article_rows[0].get("Title"))
-                                                if len(article_rows) > 0
-                                                else ""
-                                            ),
-                                            "article_text": (
-                                                _safe_text(
-                                                    article_rows[0].get("FullText")
-                                                )[:MAX_FULLTEXT_CHARS]
-                                                if len(article_rows) > 0
-                                                else ""
-                                            ),
-                                            "article_pub_date": (
-                                                _safe_text(
-                                                    article_rows[0].get("PubDate")
-                                                )
-                                                if len(article_rows) > 0
-                                                else ""
-                                            ),
-                                        }
-                                    )
-                                )
-                            )
-                        )
-                    )
-                )(rows[0])
-            )
+            lambda rows: throw(ErrorPayload(f"orphan_dossier_missing:{orphan_id}"))
+            if len(rows) == 0
+            else _load_article_context_for_dossier(rows[0])
         )
     )
 
@@ -4445,7 +2329,8 @@ def _llm_cache_put_run_v2(
         SQL(
             """
             INSERT INTO llm_cache (
-              stage, idempotency_key, model, prompt_version, input_json, response_json, created_at, updated_at
+              stage, idempotency_key, model, prompt_version, input_json,
+              response_json, created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?::JSON, ?::JSON, NOW(), NOW())
             ON CONFLICT(stage, idempotency_key) DO UPDATE SET
               model = EXCLUDED.model,
@@ -4476,8 +2361,9 @@ def _materialize_cache_readiness_run_v2(
             SQL(
                 """
                 INSERT INTO orphan_adj_cache_readiness (
-                  run_id, queue_pos, orphan_id, article_id, year, readiness_status, readiness_reason,
-                  pass1_idempotency_key, rank_idempotency_key, created_at
+                  run_id, queue_pos, orphan_id, article_id, year,
+                  readiness_status, readiness_reason, pass1_idempotency_key,
+                  rank_idempotency_key, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW());
                 """
             ),
@@ -4496,18 +2382,19 @@ def _materialize_cache_readiness_run_v2(
             ),
         )
 
+    def _insert_readiness_rows(_: Any) -> Run[Array[Any]]:
+        return (
+            array_traverse_run(rows, _insert_one)
+            if rows.length > 0
+            else pure(Array.empty())
+        )
+
     return (
         sql_exec(
             SQL("DELETE FROM orphan_adj_cache_readiness WHERE run_id = ?;"),
             _sql_params((run_id,)),
         )
-        >> (
-            lambda _: (
-                array_traverse_run(rows, _insert_one)
-                if rows.length > 0
-                else pure(Array.empty())
-            )
-        )
+        >> _insert_readiness_rows
         >> (lambda _: pure(None))
     )
 
@@ -4533,28 +2420,33 @@ def _compute_cache_readiness_row_run_v2(
 
 
 def _precompute_cache_readiness_run() -> Run[tuple[Array[CacheReadinessRow], int]]:
+    def _compute_readiness(
+        rows: Array[CacheReadinessRow],
+    ) -> Run[Array[CacheReadinessRow]]:
+        return (
+            array_traverse_run(rows, _compute_cache_readiness_row_run_v2)
+            if rows.length > 0
+            else pure(Array.empty())
+        )
+
+    def _persist_readiness_preview(
+        readiness: Array[CacheReadinessRow],
+    ) -> Run[tuple[Array[CacheReadinessRow], int]]:
+        return _materialize_cache_readiness_run_v2(
+            f"k_preview_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}",
+            readiness,
+        ) ^ pure(
+            (
+                readiness,
+                sum(1 for row in readiness if row.readiness_status == "needs_api"),
+            )
+        )
+
     return (
         _ensure_tables_run_v2()
         >> (lambda _: _queue_universe_rows_run_v2())
-        >> (
-            lambda rows: (
-                array_traverse_run(rows, _compute_cache_readiness_row_run_v2)
-                if rows.length > 0
-                else pure(Array.empty())
-            )
-        )
-        >> (
-            lambda readiness: _materialize_cache_readiness_run_v2(
-                f"k_preview_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}",
-                readiness,
-            )
-            ^ pure(
-                (
-                    readiness,
-                    sum(1 for row in readiness if row.readiness_status == "needs_api"),
-                )
-            )
-        )
+        >> _compute_readiness
+        >> _persist_readiness_preview
     )
 
 
@@ -4599,7 +2491,8 @@ def _insert_queue_rows_run_v2(
                     SQL(
                         """
                     INSERT INTO orphan_adj_queue_run (
-                      run_id, queue_pos, group_id, orphan_id, article_id, city_id, year, month, midpoint_day
+                      run_id, queue_pos, group_id, orphan_id, article_id,
+                      city_id, year, month, midpoint_day
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
                     """
                     ),
@@ -4705,7 +2598,8 @@ def _log_stage_metric_run_v2(
         SQL(
             """
             INSERT INTO orphan_adj_stage_metrics (
-              run_id, group_id, orphan_id, stage_name, query_id, row_count, notes, recorded_at
+              run_id, group_id, orphan_id, stage_name, query_id, row_count,
+              notes, recorded_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, NOW());
             """
         ),
@@ -4716,10 +2610,64 @@ def _log_stage_metric_run_v2(
 
 
 def _display_article_run_v2(dossier: Dossier) -> Run[Any]:
-    if dossier.article_id is None:
-        return put_line(
-            f"[K][{dossier.orphan_id}] No article_id available for display."
+    article_text_display = (
+        dossier.article_text if dossier.article_text != "" else "[empty]"
+    )
+    fallback = (
+        put_line(
+            f"[K][{dossier.orphan_id}]"
+            " article_id="
+            f"{dossier.article_id} title={dossier.article_title}"
         )
+        ^ put_line(f"[K][{dossier.orphan_id}] full_text:\n{article_text_display}")
+    )
+    return _display_article_by_id_run_v2(
+        dossier.orphan_id,
+        dossier.article_id,
+        empty_message="No article_id available for display.",
+        fallback=fallback,
+    )
+
+
+def _display_article_by_id_run_v2(
+    orphan_id: str,
+    article_id: int | None,
+    *,
+    empty_message: str,
+    fallback: Run[Any] | None = None,
+) -> Run[Any]:
+    if article_id is None:
+        return put_line(f"[K][{orphan_id}] {empty_message}")
+
+    def _render_article_row(rows: list[dict[str, Any]]) -> Run[Any]:
+        if len(rows) == 0:
+            return fallback if fallback is not None else put_line(
+                f"[K][{orphan_id}] Article {article_id} not found for display."
+            )
+        return run_except(
+            pure(dict(rows[0])).map(lambda row: Article(row, current=0, total=1))
+        ) >> _render_display_article_result
+
+    def _render_display_article_result(result: Any) -> Run[Any]:
+        return (
+            put_line(f"[K][{orphan_id}] Retrieved article:\n {result.r}")
+            if isinstance(result, Right)
+            else (
+                put_line(
+                    f"[K][{orphan_id}] display_article render"
+                    f" failed: {_safe_text(result.l)}"
+                )
+                ^ (
+                    fallback
+                    if fallback is not None
+                    else put_line(
+                        f"[K][{orphan_id}] Article {article_id} could not be"
+                        " displayed from stored data."
+                    )
+                )
+            )
+        )
+
     return (
         _query_rows_run_v2(
             """
@@ -4740,50 +2688,36 @@ def _display_article_run_v2(dossier: Dossier) -> Run[Any]:
           AND gptClass = 'M'
         LIMIT 1;
         """,
-            _sql_params((dossier.article_id,)),
+            _sql_params((article_id,)),
             sqlite=True,
         )
-        >> (
-            lambda rows: (
-                (
-                    put_line(
-                        f"[K][{dossier.orphan_id}]"
-                        f" article_id={dossier.article_id} title={dossier.article_title}"
-                    )
-                    ^ put_line(
-                        f"[K][{dossier.orphan_id}]"
-                        f" full_text:\n{dossier.article_text if dossier.article_text != '' else '[empty]'}"
-                    )
-                )
-                if len(rows) == 0
-                else run_except(
-                    pure(dict(rows[0])).map(
-                        lambda row: Article(row, current=0, total=1)
-                    )
-                )
-                >> (
-                    lambda result: (
-                        put_line(
-                            f"[K][{dossier.orphan_id}] Retrieved article:\n {result.r}"
-                        )
-                        if isinstance(result, Right)
-                        else (
-                            put_line(
-                                f"[K][{dossier.orphan_id}] display_article render"
-                                f" failed: {_safe_text(result.l)}"
-                            )
-                            ^ put_line(
-                                f"[K][{dossier.orphan_id}]"
-                                f" article_id={dossier.article_id} title={dossier.article_title}"
-                            )
-                            ^ put_line(
-                                f"[K][{dossier.orphan_id}]"
-                                f" full_text:\n{dossier.article_text if dossier.article_text != '' else '[empty]'}"
-                            )
-                        )
-                    )
-                )
-            )
+        >> _render_article_row
+    )
+
+
+def _matched_article_id_from_decision(decision: CaseDecision) -> int | None:
+    narrative = decision.evidence_json.get("narrative_evidence")
+    if not isinstance(narrative, dict):
+        return None
+    candidate_anchors = narrative.get("candidate_anchors")
+    if not isinstance(candidate_anchors, list) or len(candidate_anchors) == 0:
+        return None
+    first_candidate = candidate_anchors[0]
+    if not isinstance(first_candidate, dict):
+        return None
+    raw = first_candidate.get("source_article_id")
+    return int(raw) if isinstance(raw, int) else _int_or_none(raw)
+
+
+def _display_matched_article_run_v2(decision: CaseDecision) -> Run[Any]:
+    matched_article_id = _matched_article_id_from_decision(decision)
+    if decision.label != "matched" or matched_article_id is None:
+        return pure(None)
+    return put_line(f"[K][{decision.orphan_id}] Matched article:") ^ (
+        _display_article_by_id_run_v2(
+            decision.orphan_id,
+            matched_article_id,
+            empty_message="Matched article_id missing for display.",
         )
     )
 
@@ -4801,7 +2735,7 @@ def _log_api_usage_and_reasoning_run_v2(
 
 def _log_pass1_api_input_run_v2(orphan_id: str, payload: Pass1Request) -> Run[Any]:
     return put_line(f"[K][{orphan_id}] pass1_input_variables:") ^ put_line(
-        _pretty_json(payload.to_cache_payload())
+        _pretty_json(payload.to_display_payload())
     )
 
 
@@ -4890,59 +2824,54 @@ def _validate_anchors_run_v2(
         deduped_sets = [
             word_set for word_set in dict.fromkeys(raw_sets) if len(word_set) > 0
         ]
-        return _anchor_doc_frequency_run_v2(anchor_text) >> (
-            lambda doc_freq: (
-                pure(
-                    (
-                        valid,
-                        variants,
-                        failures + [f"high_freq_anchor:{anchor_text[:40]}:{doc_freq}"],
-                    )
+        filtered_variants = [
+            " ".join(word_set).strip()
+            for word_set in deduped_sets
+            if _norm(" ".join(word_set).strip()) != ""
+        ]
+        def _build_anchor_result(
+            doc_freq: int,
+        ) -> tuple[list[ValidatedAnchor], list[str], list[str]]:
+            if doc_freq > HIGH_FREQ_ANCHOR_DOC_THRESHOLD:
+                return (
+                    valid,
+                    variants,
+                    failures + [f"high_freq_anchor:{anchor_text[:40]}:{doc_freq}"],
                 )
-                if doc_freq > HIGH_FREQ_ANCHOR_DOC_THRESHOLD
-                else (
-                    lambda filtered_variants: pure(
-                        (
-                            valid
-                            + [
-                                ValidatedAnchor(
-                                    anchor_text=anchor_text,
-                                    variants=tuple(
-                                        filtered_variants
-                                        if len(filtered_variants) > 0
-                                        else [anchor_text]
-                                    ),
-                                    variant_word_sets=tuple(
-                                        deduped_sets
-                                        if len(filtered_variants) > 0
-                                        else [(anchor_text,)]
-                                    ),
-                                    doc_freq=doc_freq,
-                                )
-                            ],
-                            variants
-                            + (
-                                filtered_variants
-                                if len(filtered_variants) > 0
-                                else [anchor_text]
-                            ),
-                            failures,
-                        )
+            return (
+                valid
+                + [
+                    ValidatedAnchor(
+                        anchor_text=anchor_text,
+                        variants=tuple(
+                            filtered_variants
+                            if len(filtered_variants) > 0
+                            else [anchor_text]
+                        ),
+                        variant_word_sets=tuple(
+                            deduped_sets
+                            if len(filtered_variants) > 0
+                            else [(anchor_text,)]
+                        ),
+                        doc_freq=doc_freq,
                     )
-                )(
-                    [
-                        " ".join(word_set).strip()
-                        for word_set in deduped_sets
-                        if _norm(" ".join(word_set).strip()) != ""
-                    ]
-                )
+                ],
+                variants
+                + (
+                    filtered_variants
+                    if len(filtered_variants) > 0
+                    else [anchor_text]
+                ),
+                failures,
             )
+        return _anchor_doc_frequency_run_v2(anchor_text) >> (
+            lambda doc_freq: pure(_build_anchor_result(doc_freq))
         )
 
-    return (
-        fold_run(anchor_array, init, _step) if anchor_array.length > 0 else pure(init)
-    ) >> (
-        lambda result: pure(
+    def _finalize_anchor_validation(
+        result: tuple[list[ValidatedAnchor], list[str], list[str]]
+    ) -> Run[tuple[Array[ValidatedAnchor], Array[str], list[str]]]:
+        return pure(
             (
                 Array.make(tuple(result[0])),
                 Array.make(tuple(dict.fromkeys(result[1]))),
@@ -4951,7 +2880,10 @@ def _validate_anchors_run_v2(
                 + (["no_query_variants"] if len(result[1]) < 1 else []),
             )
         )
-    )
+
+    return (
+        fold_run(anchor_array, init, _step) if anchor_array.length > 0 else pure(init)
+    ) >> _finalize_anchor_validation
 
 
 def _fts_article_hits_query_run_v2(match_q: str, limit_n: int) -> Run[Array[int]]:
@@ -4988,24 +2920,15 @@ def _fts_article_hits_query_run_v2(match_q: str, limit_n: int) -> Run[Array[int]
     )
 
 
-def _fts_article_hits_run_v2(query_variant: str, limit_n: int = 60) -> Run[Array[int]]:
-    q = query_variant.strip()
-    if q == "":
+def _fts_article_hits_run_v2(fts_query: str, limit_n: int = 60) -> Run[Array[int]]:
+    if fts_query.strip() == "":
         return pure(Array.empty())
-    phrase_q = '"' + re.sub(r"\s+", " ", q).replace('"', '""').strip() + '"'
-    return run_except(_fts_article_hits_query_run_v2(q, limit_n)) >> (
-        lambda result: (
-            pure(result.r)
-            if isinstance(result, Right)
-            else run_except(_fts_article_hits_query_run_v2(phrase_q, limit_n))
-            >> (
-                lambda fallback: (
-                    pure(fallback.r)
-                    if isinstance(fallback, Right)
-                    else pure(Array.empty())
-                )
-            )
-        )
+
+    def _handle_fts_query_result(result: Any) -> Run[Array[int]]:
+        return pure(result.r) if isinstance(result, Right) else pure(Array.empty())
+
+    return run_except(_fts_article_hits_query_run_v2(fts_query, limit_n)) >> (
+        _handle_fts_query_result
     )
 
 
@@ -5058,6 +2981,7 @@ def _entities_for_articles_run_v2(
                                 if row.get("source_article_id") is not None
                                 else None
                             ),
+                            source_incident_idx=None,
                             midpoint_day=(
                                 _as_float(row.get("midpoint_day"), 0.0)
                                 if row.get("midpoint_day") is not None
@@ -5086,6 +3010,475 @@ def _entities_for_articles_run_v2(
         )
     )
 
+
+def _entities_for_articles_group_run_v2(
+    article_ids: Array[int], target_article_id: int | None, query_variant: str
+) -> Run[Array[C2Candidate]]:
+    if article_ids.length == 0:
+        return pure(Array.empty())
+    values_sql = ",".join("(?)" for _ in article_ids)
+    params_values: tuple[Any, ...]
+    exclusion_sql = ""
+    if target_article_id is None:
+        params_values = article_ids.a
+    else:
+        exclusion_sql = (
+            "WHERE NOT list_contains("
+            "  string_split(COALESCE(e.article_ids_csv, ''), ','),"
+            "  CAST(? AS VARCHAR)"
+            ")"
+        )
+        params_values = (*article_ids.a, target_article_id)
+    return (
+        _query_rows_run_v2(
+            f"""
+        WITH hits(article_id) AS (
+          SELECT * FROM (VALUES {values_sql})
+        ),
+        incident_victims AS (
+          SELECT
+            h.article_id AS source_article_id,
+            i.incident_idx AS source_incident_idx,
+            v.victim_row_id
+          FROM hits h
+          JOIN incidents_cached i
+            ON i.article_id = h.article_id
+          JOIN victims_cached_enh v
+            ON v.article_id = i.article_id
+           AND v.incident_idx = i.incident_idx
+        ),
+        incident_entities AS (
+          SELECT DISTINCT
+            iv.source_article_id,
+            iv.source_incident_idx,
+            m.victim_entity_id AS entity_uid
+          FROM incident_victims iv
+          JOIN victim_entity_members m
+            ON m.victim_row_id = iv.victim_row_id
+          UNION
+          SELECT DISTINCT
+            iv.source_article_id,
+            iv.source_incident_idx,
+            CAST(fom.entity_uid AS VARCHAR) AS entity_uid
+          FROM incident_victims iv
+          JOIN final_orphan_matches fom
+            ON CAST(fom.orphan_uid AS VARCHAR) = iv.victim_row_id
+        )
+        SELECT DISTINCT
+          ie.entity_uid,
+          ie.source_article_id,
+          ie.source_incident_idx,
+          e.midpoint_day AS midpoint_day
+        FROM incident_entities ie
+        JOIN entity_link_input e
+          ON e.unique_id = ie.entity_uid
+        {exclusion_sql};
+        """,
+            _sql_params(params_values),
+        )
+        >> (
+            lambda rows: pure(
+                Array.make(
+                    tuple(
+                        C2Candidate(
+                            entity_uid=_safe_text(row.get("entity_uid")),
+                            source_article_id=(
+                                _as_int(row.get("source_article_id"), 0)
+                                if row.get("source_article_id") is not None
+                                else None
+                            ),
+                            source_incident_idx=(
+                                _as_int(row.get("source_incident_idx"), 0)
+                                if row.get("source_incident_idx") is not None
+                                else None
+                            ),
+                            midpoint_day=(
+                                _as_float(row.get("midpoint_day"), 0.0)
+                                if row.get("midpoint_day") is not None
+                                else None
+                            ),
+                            day_gap=0.0,
+                            compat_count=0,
+                            summary_cosine=0.0,
+                            det_score=0.0,
+                            query_variant=query_variant,
+                        )
+                        for row in rows
+                    )
+                )
+            )
+        )
+    )
+
+
+def _candidate_incident_rows_run_v2(
+    group_dossier: GroupDossier, candidates: Array[C2Candidate]
+) -> Run[list[dict[str, Any]]]:
+    incident_map: dict[tuple[int | None, int | None], dict[str, Any]] = {}
+    for candidate in candidates:
+        if candidate.source_article_id is None or candidate.source_incident_idx is None:
+            continue
+        incident_key = (candidate.source_article_id, candidate.source_incident_idx)
+        existing = incident_map.get(incident_key)
+        if existing is None:
+            incident_map[incident_key] = {
+                "source_article_id": candidate.source_article_id,
+                "source_incident_idx": candidate.source_incident_idx,
+                "query_variants": (
+                    [] if candidate.query_variant == "" else [candidate.query_variant]
+                ),
+                "eligible_entity_uids": (
+                    [] if candidate.entity_uid == "" else [candidate.entity_uid]
+                ),
+            }
+            continue
+        if (
+            candidate.query_variant != ""
+            and candidate.query_variant not in existing["query_variants"]
+        ):
+            cast(list[str], existing["query_variants"]).append(candidate.query_variant)
+        if (
+            candidate.entity_uid != ""
+            and candidate.entity_uid not in existing["eligible_entity_uids"]
+        ):
+            cast(list[str], existing["eligible_entity_uids"]).append(
+                candidate.entity_uid
+            )
+
+    incident_rows = list(incident_map.values())
+    if len(incident_rows) == 0:
+        return pure([])
+
+    values_sql = ",".join("(?, ?)" for _ in incident_rows)
+    params: list[Any] = []
+    for row in incident_rows:
+        params.extend((row["source_article_id"], row["source_incident_idx"]))
+    target_article_id = group_dossier.article_id
+    target_incident_idx = group_dossier.incident_idx
+    target_midpoint_day = group_dossier.midpoint_day
+    params.extend(
+        (
+            target_article_id,
+            target_incident_idx,
+            target_midpoint_day,
+            target_article_id,
+            target_incident_idx,
+            target_article_id,
+            target_incident_idx,
+            target_article_id,
+            target_incident_idx,
+            target_article_id,
+            target_incident_idx,
+        )
+    )
+    return (
+        _query_rows_run_v2(
+            f"""
+        WITH candidate_incidents(source_article_id, source_incident_idx) AS (
+          SELECT * FROM (VALUES {values_sql})
+        )
+        SELECT
+          ci.source_article_id,
+          ci.source_incident_idx,
+          i.midpoint_day,
+          ABS(
+            COALESCE(CAST(i.midpoint_day AS DOUBLE), 0)
+            - COALESCE(
+              (
+                SELECT midpoint_day
+                FROM incidents_cached
+                WHERE article_id = ?
+                  AND incident_idx = ?
+                LIMIT 1
+              ),
+              ?,
+              0
+            )
+          ) AS day_gap,
+          CASE
+            WHEN i.summary_vec IS NOT NULL
+              AND (
+                SELECT summary_vec
+                FROM incidents_cached
+                WHERE article_id = ?
+                  AND incident_idx = ?
+                LIMIT 1
+              ) IS NOT NULL
+            THEN array_cosine_similarity(
+              i.summary_vec,
+              (
+                SELECT summary_vec
+                FROM incidents_cached
+                WHERE article_id = ?
+                  AND incident_idx = ?
+                LIMIT 1
+              )
+            )
+            ELSE 0.0
+          END AS summary_cosine
+        FROM candidate_incidents ci
+        JOIN incidents_cached i
+          ON i.article_id = ci.source_article_id
+         AND i.incident_idx = ci.source_incident_idx;
+        """,
+            _sql_params(tuple(params)),
+        )
+        >> (
+            lambda rows: pure(
+                [
+                    {
+                        **row,
+                        "query_variants": incident_map.get(
+                            (
+                                _as_int(row.get("source_article_id"), 0)
+                                if row.get("source_article_id") is not None
+                                else None,
+                                _as_int(row.get("source_incident_idx"), 0)
+                                if row.get("source_incident_idx") is not None
+                                else None,
+                            ),
+                            {},
+                        ).get("query_variants", []),
+                        "eligible_entity_uids": incident_map.get(
+                            (
+                                _as_int(row.get("source_article_id"), 0)
+                                if row.get("source_article_id") is not None
+                                else None,
+                                _as_int(row.get("source_incident_idx"), 0)
+                                if row.get("source_incident_idx") is not None
+                                else None,
+                            ),
+                            {},
+                        ).get("eligible_entity_uids", []),
+                    }
+                    for row in rows
+                ]
+            )
+        )
+    )
+
+
+def _incident_representatives_from_rows_v2(
+    rows: list[dict[str, Any]],
+) -> Array[IncidentRepresentativeCandidate]:
+    by_incident: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        source_article_id = (
+            _as_int(row.get("source_article_id"), 0)
+            if row.get("source_article_id") is not None
+            else None
+        )
+        source_incident_idx = (
+            _as_int(row.get("source_incident_idx"), 0)
+            if row.get("source_incident_idx") is not None
+            else None
+        )
+        incident_key = _incident_key_from_candidate(
+            source_article_id, source_incident_idx
+        )
+        existing = by_incident.get(incident_key)
+        summary_cosine = _as_float(row.get("summary_cosine"), 0.0)
+        day_gap = _as_float(row.get("day_gap"), 9999.0)
+        query_variants = [
+            _safe_text(value)
+            for value in (row.get("query_variants") or [])
+            if _safe_text(value) != ""
+        ]
+        eligible_entity_uids = [
+            _safe_text(value)
+            for value in (row.get("eligible_entity_uids") or [])
+            if _safe_text(value) != ""
+        ]
+        if existing is None:
+            representative_uid = (
+                sorted(eligible_entity_uids)[0]
+                if len(eligible_entity_uids) > 0
+                else ""
+            )
+            by_incident[incident_key] = {
+                "entity_uid": representative_uid,
+                "source_article_id": source_article_id,
+                "source_incident_idx": source_incident_idx,
+                "midpoint_day": (
+                    _as_float(row.get("midpoint_day"), 0.0)
+                    if row.get("midpoint_day") is not None
+                    else None
+                ),
+                "day_gap": day_gap,
+                "summary_cosine": summary_cosine,
+                "query_variants": query_variants,
+                "eligible_entity_uids": eligible_entity_uids,
+            }
+            continue
+
+        existing["summary_cosine"] = max(
+            _as_float(existing.get("summary_cosine"), 0.0), summary_cosine
+        )
+        existing["day_gap"] = min(_as_float(existing.get("day_gap"), 9999.0), day_gap)
+        for query_variant in query_variants:
+            if query_variant not in existing["query_variants"]:
+                cast(list[str], existing["query_variants"]).append(query_variant)
+        for entity_uid in eligible_entity_uids:
+            if entity_uid not in existing["eligible_entity_uids"]:
+                cast(list[str], existing["eligible_entity_uids"]).append(entity_uid)
+        sorted_entities = sorted(cast(list[str], existing["eligible_entity_uids"]))
+        existing["entity_uid"] = sorted_entities[0] if len(sorted_entities) > 0 else ""
+
+    representatives = [
+        IncidentRepresentativeCandidate(
+            entity_uid=_safe_text(record.get("entity_uid")),
+            source_article_id=cast(int | None, record.get("source_article_id")),
+            source_incident_idx=cast(int | None, record.get("source_incident_idx")),
+            midpoint_day=cast(float | None, record.get("midpoint_day")),
+            day_gap=_as_float(record.get("day_gap"), 9999.0),
+            summary_cosine=_as_float(record.get("summary_cosine"), 0.0),
+            det_score=(
+                1.2
+                + 0.6 * len(cast(list[str], record.get("query_variants") or []))
+                + 1.7 * _as_float(record.get("summary_cosine"), 0.0)
+                - 0.01 * _as_float(record.get("day_gap"), 9999.0)
+            ),
+            anchor_hit_count=len(cast(list[str], record.get("query_variants") or [])),
+            query_variant=(
+                cast(list[str], record.get("query_variants") or [""])[0]
+                if len(cast(list[str], record.get("query_variants") or [])) > 0
+                else ""
+            ),
+            query_variants=tuple(cast(list[str], record.get("query_variants") or [])),
+            eligible_entity_uids=tuple(
+                sorted(cast(list[str], record.get("eligible_entity_uids") or []))
+            ),
+        )
+        for record in by_incident.values()
+        if len(cast(list[str], record.get("eligible_entity_uids") or [])) > 0
+    ]
+    representatives.sort(
+        key=lambda candidate: (
+            -candidate.det_score,
+            -candidate.anchor_hit_count,
+            -candidate.summary_cosine,
+            candidate.day_gap,
+            _safe_text(candidate.entity_uid),
+        )
+    )
+    return Array.make(tuple(representatives[:MAX_MERGED_CANDIDATES_FOR_API2]))
+
+
+def _incident_representative_rows_for_display_v2(
+    candidates: Array[IncidentRepresentativeCandidate],
+) -> list[dict[str, Any]]:
+    return [candidate.to_dict() for candidate in candidates]
+
+
+def _candidate_incident_context_by_key_run_v2(
+    representative_entity_uid: str,
+    source_article_id: int | None,
+    source_incident_idx: int | None,
+) -> Run[dict[str, Any]]:
+    def _load_exact_incident_context(_: dict[str, Any]) -> Run[dict[str, Any]]:
+        if source_article_id is None or source_incident_idx is None:
+            return _candidate_incident_context_run_v2(
+                representative_entity_uid, source_article_id
+            )
+        return (
+            _query_rows_run_v2(
+                """
+            SELECT
+              incident_date,
+              year,
+              month,
+              location_raw,
+              victim_count,
+              summary
+            FROM incidents_cached
+            WHERE article_id = ?
+              AND incident_idx = ?
+            LIMIT 1;
+            """,
+                _sql_params((source_article_id, source_incident_idx)),
+            )
+            >> (
+                lambda rows: pure(
+                    {
+                        "incident_date": "",
+                        "incident_location": "",
+                        "victim_count": "",
+                        "incident_summary": "",
+                    }
+                )
+                if len(rows) == 0
+                else pure(
+                    {
+                        "incident_date": _format_incident_date(
+                            rows[0].get("incident_date"),
+                            year=rows[0].get("year"),
+                            month=rows[0].get("month"),
+                        ),
+                        "incident_location": _safe_text(rows[0].get("location_raw")),
+                        "victim_count": _safe_text(rows[0].get("victim_count")),
+                        "incident_summary": _safe_text(rows[0].get("summary")),
+                    }
+                )
+            )
+        )
+
+    return pure({}) >> _load_exact_incident_context
+
+
+def _build_rank_request_for_group_run_v2(
+    group_dossier: GroupDossier, candidates: Array[IncidentRepresentativeCandidate]
+) -> Run[RankRequest]:
+    def _build_one(
+        candidate: IncidentRepresentativeCandidate,
+    ) -> Run[RankCandidateContext]:
+        def _build_candidate_context(
+            article_ctx: dict[str, Any]
+        ) -> Run[RankCandidateContext]:
+            return _candidate_incident_context_by_key_run_v2(
+                candidate.entity_uid,
+                candidate.source_article_id,
+                candidate.source_incident_idx,
+            ) >> (
+                lambda incident_ctx: pure(
+                    RankCandidateContext(
+                        entity_uid=candidate.entity_uid,
+                        article_title=_safe_text(article_ctx.get("article_title")),
+                        article_text=_safe_text(article_ctx.get("article_text")),
+                        article_date=_safe_text(article_ctx.get("article_date")),
+                        incident_date=_safe_text(incident_ctx.get("incident_date")),
+                        incident_location=_safe_text(
+                            incident_ctx.get("incident_location")
+                        ),
+                        victim_count=_safe_text(incident_ctx.get("victim_count")),
+                        incident_summary=_safe_text(
+                            incident_ctx.get("incident_summary")
+                        ),
+                    )
+                )
+            )
+
+        return _candidate_article_context_run_v2(candidate.source_article_id) >> (
+            _build_candidate_context
+        )
+
+    return (
+        array_traverse_run(candidates, _build_one)
+        if candidates.length > 0
+        else pure(Array.empty())
+    ) >> (
+        lambda contexts: pure(
+            RankRequest(
+                article_title=group_dossier.article_title,
+                article_text=group_dossier.article_text,
+                article_date=_format_article_date(group_dossier.article_pub_date),
+                incident_date=group_dossier.incident_date,
+                incident_location=group_dossier.incident_location,
+                victim_count=group_dossier.victim_count,
+                incident_summary=group_dossier.incident_summary,
+                candidates=tuple(contexts),
+            )
+        )
+    )
 
 def _score_c2_candidate_weights_run_v2(
     orphan_id: str, candidates: Array[C2Candidate]
@@ -5148,10 +3541,9 @@ def _score_c2_candidate_weights_run_v2(
         ^ sql_exec(SQL(f"DROP TABLE IF EXISTS {left_table};"))
         ^ sql_exec(SQL(f"DROP TABLE IF EXISTS {right_table};"))
     )
-    return run_except(main) >> (
-        lambda result: cleanup
-        >> (
-            lambda _: (
+    def _finalize_splink_weight_scoring(result: Any) -> Run[dict[str, float]]:
+        def _build_weight_map(_: Any) -> Run[dict[str, float]]:
+            return (
                 throw(
                     ErrorPayload(
                         f"splink_c2_weight_scoring_failed: {_safe_text(result.l)}"
@@ -5169,8 +3561,10 @@ def _score_c2_candidate_weights_run_v2(
                     }
                 )
             )
-        )
-    )
+
+        return cleanup >> _build_weight_map
+
+    return run_except(main) >> _finalize_splink_weight_scoring
 
 
 def _insert_candidates_run_v2(
@@ -5181,8 +3575,8 @@ def _insert_candidates_run_v2(
             SQL(
                 """
                 INSERT INTO orphan_adj_candidates_c2 (
-                  run_id, group_id, orphan_id, entity_uid, source_article_id, query_variant,
-                  det_score, splink_match_weight, features_json
+                  run_id, group_id, orphan_id, entity_uid, source_article_id,
+                  query_variant, det_score, splink_match_weight, features_json
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?::JSON);
                 """
             ),
@@ -5223,7 +3617,8 @@ def _insert_merged_candidates_run_v2(
             SQL(
                 """
                 INSERT INTO orphan_adj_candidates_merged (
-                  run_id, group_id, orphan_id, entity_uid, det_score, splink_match_weight, source_stages, features_json
+                  run_id, group_id, orphan_id, entity_uid, det_score,
+                  splink_match_weight, source_stages, features_json
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?::JSON);
                 """
             ),
@@ -5244,6 +3639,43 @@ def _insert_merged_candidates_run_v2(
     return (
         array_traverse_run(merged, _insert_one)
         if merged.length > 0
+        else pure(Array.empty())
+    ) >> (lambda _: pure(None))
+
+
+def _insert_incident_representatives_run_v2(
+    run_id: str,
+    group_id: str,
+    orphan_id: str,
+    representatives: Array[IncidentRepresentativeCandidate],
+) -> Run[Any]:
+    def _insert_one(candidate: IncidentRepresentativeCandidate) -> Run[Any]:
+        return sql_exec(
+            SQL(
+                """
+                INSERT INTO orphan_adj_candidates_merged (
+                  run_id, group_id, orphan_id, entity_uid, det_score,
+                  splink_match_weight, source_stages, features_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?::JSON);
+                """
+            ),
+            _sql_params(
+                (
+                    run_id,
+                    group_id,
+                    orphan_id,
+                    candidate.entity_uid,
+                    candidate.det_score,
+                    None,
+                    "incident_repr",
+                    _canonical_json(candidate.to_dict()),
+                )
+            ),
+        )
+
+    return (
+        array_traverse_run(representatives, _insert_one)
+        if representatives.length > 0
         else pure(Array.empty())
     ) >> (lambda _: pure(None))
 
@@ -5289,6 +3721,63 @@ def _candidate_article_context_run_v2(article_id: int | None) -> Run[dict[str, A
 def _candidate_incident_context_run_v2(
     entity_uid: str, source_article_id: int | None
 ) -> Run[dict[str, Any]]:
+    """Load incident-level context for one ranked candidate entity."""
+
+    def _build_incident_context(row: dict[str, Any]) -> Run[dict[str, Any]]:
+        return (
+            (
+                _query_rows_run_v2(
+                    """
+                    SELECT i.summary
+                    FROM incidents_cached i
+                    LEFT JOIN entity_link_input e
+                      ON e.unique_id = ?
+                    WHERE i.article_id = ?
+                    ORDER BY
+                      CASE
+                        WHEN i.summary_vec IS NOT NULL AND e.summary_vec IS NOT NULL
+                          THEN array_cosine_similarity(i.summary_vec, e.summary_vec)
+                        ELSE -1
+                      END DESC,
+                      i.incident_idx ASC
+                    LIMIT 1;
+                    """,
+                    _sql_params((entity_uid, source_article_id)),
+                )
+                if source_article_id is not None
+                else pure([])
+            )
+            >> (
+                lambda summary_rows: pure(
+                    {
+                        "incident_date": _format_incident_date(
+                            row.get("incident_date"),
+                            year=row.get("year"),
+                            month=row.get("month"),
+                        ),
+                        "incident_location": _safe_text(
+                            row.get("geo_address_norm")
+                        ),
+                        "victim_count": _safe_text(row.get("victim_count")),
+                        "incident_summary": (
+                            _safe_text(summary_rows[0].get("summary"))
+                            if len(summary_rows) > 0
+                            and _safe_text(summary_rows[0].get("summary")).strip()
+                            != ""
+                            else " | ".join(
+                                part
+                                for part in [
+                                    _safe_text(row.get("circumstance")),
+                                    _safe_text(row.get("relationship")),
+                                ]
+                                if part.strip() != ""
+                            )
+                        ),
+                    }
+                )
+            )
+        )
+
     return (
         _query_rows_run_v2(
             """
@@ -5308,72 +3797,16 @@ def _candidate_incident_context_run_v2(
             _sql_params((entity_uid,)),
         )
         >> (
-            lambda rows: (
-                pure(
-                    {
-                        "incident_date": "",
-                        "incident_location": "",
-                        "victim_count": "",
-                        "incident_summary": "",
-                    }
-                )
-                if len(rows) == 0
-                else (
-                    lambda row: (
-                        _query_rows_run_v2(
-                            """
-                    SELECT i.summary
-                    FROM incidents_cached i
-                    LEFT JOIN entity_link_input e
-                      ON e.unique_id = ?
-                    WHERE i.article_id = ?
-                    ORDER BY
-                      CASE
-                        WHEN i.summary_vec IS NOT NULL AND e.summary_vec IS NOT NULL
-                          THEN array_cosine_similarity(i.summary_vec, e.summary_vec)
-                        ELSE -1
-                      END DESC,
-                      i.incident_idx ASC
-                    LIMIT 1;
-                    """,
-                            _sql_params((entity_uid, source_article_id)),
-                        )
-                        if source_article_id is not None
-                        else pure([])
-                    )
-                    >> (
-                        lambda summary_rows: pure(
-                            {
-                                "incident_date": _format_incident_date(
-                                    row.get("incident_date"),
-                                    year=row.get("year"),
-                                    month=row.get("month"),
-                                ),
-                                "incident_location": _safe_text(
-                                    row.get("geo_address_norm")
-                                ),
-                                "victim_count": _safe_text(row.get("victim_count")),
-                                "incident_summary": (
-                                    _safe_text(summary_rows[0].get("summary"))
-                                    if len(summary_rows) > 0
-                                    and _safe_text(
-                                        summary_rows[0].get("summary")
-                                    ).strip()
-                                    != ""
-                                    else " | ".join(
-                                        part
-                                        for part in [
-                                            _safe_text(row.get("circumstance")),
-                                            _safe_text(row.get("relationship")),
-                                        ]
-                                        if part.strip() != ""
-                                    )
-                                ),
-                            }
-                        )
-                    )
-                )(rows[0])
+            lambda rows: pure(
+                {
+                    "incident_date": "",
+                    "incident_location": "",
+                    "victim_count": "",
+                    "incident_summary": "",
+                }
             )
+            if len(rows) == 0
+            else _build_incident_context(rows[0])
         )
     )
 
@@ -5383,11 +3816,12 @@ def _build_rank_request_run_v2(
 ) -> Run[RankRequest]:
     def _build_one(candidate: MergedCandidate) -> Run[RankCandidateContext]:
         source_article_id = _candidate_source_article_id(candidate.to_dict())
-        return _candidate_article_context_run_v2(source_article_id) >> (
-            lambda article_ctx: _candidate_incident_context_run_v2(
+        def _build_candidate_context(
+            article_ctx: dict[str, Any]
+        ) -> Run[RankCandidateContext]:
+            return _candidate_incident_context_run_v2(
                 candidate.entity_uid, source_article_id
-            )
-            >> (
+            ) >> (
                 lambda incident_ctx: pure(
                     RankCandidateContext(
                         entity_uid=candidate.entity_uid,
@@ -5405,6 +3839,9 @@ def _build_rank_request_run_v2(
                     )
                 )
             )
+
+        return _candidate_article_context_run_v2(source_article_id) >> (
+            _build_candidate_context
         )
 
     return (
@@ -5434,7 +3871,7 @@ def _log_anchor_and_candidates_run_v2(
     valid_anchors: Array[ValidatedAnchor],
     variants_used: Array[str],
     c2_rows: Array[C2Candidate],
-    merged: Array[MergedCandidate],
+    merged: Array[MergedCandidate] | Array[IncidentRepresentativeCandidate],
     ranked: list[dict[str, Any]],
 ) -> Run[Any]:
     c2_dicts = [_c2_candidate_to_dict_v2(candidate) for candidate in c2_rows]
@@ -5471,20 +3908,135 @@ def _validate_rank_output_v2(
     )
 
 
+def _validate_incident_rank_output_v2(
+    response: RankResponse, candidates: Array[IncidentRepresentativeCandidate]
+) -> list[dict[str, Any]]:
+    if response.match_result != "match":
+        return []
+    allowed = {candidate.entity_uid for candidate in candidates}
+    by_uid = {candidate.entity_uid: candidate for candidate in candidates}
+    matched_uid = _safe_text(response.matched_entity_uid)
+    if matched_uid == "" or matched_uid not in allowed:
+        return []
+    selected = by_uid[matched_uid]
+    return [
+        {
+            "entity_uid": selected.entity_uid,
+            "rank_score": 1.0,
+            "det_score": selected.det_score,
+            "anchor_hit_count": selected.anchor_hit_count,
+            "summary_cosine": selected.summary_cosine,
+            "day_gap": selected.day_gap,
+            "source_article_id": selected.source_article_id,
+            "source_incident_idx": selected.source_incident_idx,
+            "query_variant": selected.query_variant,
+            "query_variants": list(selected.query_variants),
+            "eligible_entity_uids": list(selected.eligible_entity_uids),
+            "stage_name": "incident_repr",
+        }
+    ]
+
+
+def _make_assignment_candidate_dict_v2(
+    *,
+    entity_uid: str,
+    source_article_id: int | None,
+    source_incident_idx: int | None,
+    splink_match_weight: float,
+    ranked_incidents: list[dict[str, Any]],
+) -> dict[str, Any]:
+    top_incident = ranked_incidents[0] if len(ranked_incidents) > 0 else {}
+    return {
+        "entity_uid": entity_uid,
+        "rank_score": 1.0,
+        "det_score": _as_float(top_incident.get("det_score"), 0.0),
+        "splink_match_weight": splink_match_weight,
+        "anchor_hit_count": _as_int(top_incident.get("anchor_hit_count"), 0),
+        "summary_cosine": _as_float(top_incident.get("summary_cosine"), 0.0),
+        "day_gap": _as_float(top_incident.get("day_gap"), 9999.0),
+        "source_article_id": source_article_id,
+        "source_incident_idx": source_incident_idx,
+        "query_variant": _safe_text(top_incident.get("query_variant")),
+        "query_variants": top_incident.get("query_variants") or [],
+        "stage_name": "incident_assignment",
+    }
+
+
+def _maximize_weight_assignment_v2(
+    orphan_ids: tuple[str, ...],
+    entity_uids: tuple[str, ...],
+    weight_by_orphan: dict[str, dict[str, float]],
+) -> dict[str, str]:
+    if len(orphan_ids) == 0 or len(entity_uids) == 0:
+        return {}
+    sorted_orphans = tuple(sorted(orphan_ids))
+    sorted_entities = tuple(sorted(entity_uids))
+    target_size = min(len(sorted_orphans), len(sorted_entities))
+    weights = tuple(
+        tuple(
+            _as_float(weight_by_orphan.get(orphan_id, {}).get(entity_uid), 0.0)
+            for entity_uid in sorted_entities
+        )
+        for orphan_id in sorted_orphans
+    )
+
+    @lru_cache(maxsize=None)
+    def _search(
+        orphan_idx: int, used_mask: int, assigned_count: int
+    ) -> tuple[float, tuple[tuple[str, str], ...]] | None:
+        remaining_orphans = len(sorted_orphans) - orphan_idx
+        remaining_needed = target_size - assigned_count
+        if remaining_needed < 0 or remaining_orphans < remaining_needed:
+            return None
+        if orphan_idx == len(sorted_orphans):
+            return (0.0, tuple()) if assigned_count == target_size else None
+
+        best: tuple[float, tuple[tuple[str, str], ...]] | None = None
+        if remaining_orphans > remaining_needed:
+            best = _search(orphan_idx + 1, used_mask, assigned_count)
+
+        for entity_idx, entity_uid in enumerate(sorted_entities):
+            if used_mask & (1 << entity_idx):
+                continue
+            tail = _search(
+                orphan_idx + 1, used_mask | (1 << entity_idx), assigned_count + 1
+            )
+            if tail is None:
+                continue
+            candidate = (
+                weights[orphan_idx][entity_idx] + tail[0],
+                ((sorted_orphans[orphan_idx], entity_uid),) + tail[1],
+            )
+            if best is None:
+                best = candidate
+                continue
+            if candidate[0] > best[0]:
+                best = candidate
+                continue
+            if candidate[0] == best[0] and candidate[1] < best[1]:
+                best = candidate
+        return best
+
+    result = _search(0, 0, 0)
+    if result is None:
+        return {}
+    return dict(result[1])
+
+
 def _cache_terminal_decision_run_v2(decision: CaseDecision) -> Run[Any]:
+    """Persist a terminal decision in the end-to-end adjudication cache."""
+
     if decision.label not in {"matched", "not_same_person", "insufficient_information"}:
         return pure(None)
     return _load_orphan_dossier_run_v2(decision.orphan_id) >> (
-        lambda dossier: (
-            lambda request: _llm_cache_put_run_v2(
-                stage=E2E_CACHE_STAGE,
-                idempotency_key=decision.orphan_id,
-                model=f"{PASS1_MODEL}|{RANK_MODEL}",
-                prompt_version=f"{PASS1_PROMPT_VERSION}|{RANK_PROMPT_VERSION}|e2e_v1",
-                input_payload=request.to_cache_payload(),
-                response_payload=_decision_to_cache_payload(decision),
-            )
-        )(_build_pass1_request_v2(dossier))
+        lambda dossier: _llm_cache_put_run_v2(
+            stage=E2E_CACHE_STAGE,
+            idempotency_key=decision.orphan_id,
+            model=f"{PASS1_MODEL}|{RANK_MODEL}",
+            prompt_version=f"{PASS1_PROMPT_VERSION}|{RANK_PROMPT_VERSION}|e2e_v1",
+            input_payload=_build_pass1_request_v2(dossier).to_cache_payload(),
+            response_payload=_decision_to_cache_payload(decision),
+        )
     )
 
 
@@ -5512,12 +4064,10 @@ def _cached_decisions_from_readiness_run_v2(
             >> _after_cache
         )
 
-    return (
-        array_traverse_run(selected, _load_one)
-        if selected.length > 0
-        else pure(Array.empty())
-    ) >> (
-        lambda rows: pure(
+    def _filter_terminal_cached_decisions(
+        rows: Array[CaseDecision | None],
+    ) -> Run[Array[CaseDecision]]:
+        return pure(
             Array.make(
                 tuple(
                     row
@@ -5528,7 +4078,12 @@ def _cached_decisions_from_readiness_run_v2(
                 )
             )
         )
-    )
+
+    return (
+        array_traverse_run(selected, _load_one)
+        if selected.length > 0
+        else pure(Array.empty())
+    ) >> _filter_terminal_cached_decisions
 
 
 def _rebuild_overrides_table_run_v2(
@@ -5577,7 +4132,8 @@ def _rebuild_overrides_table_run_v2(
                           changed_at
                         ) VALUES (
                           NULL,
-                          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::JSON, 'interactive_agent_k', NOW()
+                          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::JSON,
+                          'interactive_agent_k', NOW()
                         );
                         """
                     ),
@@ -5611,7 +4167,10 @@ def _rebuild_overrides_table_run_v2(
                       analyst_mode,
                       created_at,
                       updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?::JSON, 'interactive_agent_k', NOW(), NOW());
+                    ) VALUES (
+                      ?, ?, ?, ?, ?, ?::JSON,
+                      'interactive_agent_k', NOW(), NOW()
+                    );
                     """
                 ),
                 _sql_params(
@@ -5633,6 +4192,17 @@ def _rebuild_overrides_table_run_v2(
         )
 
     def _commit_swap() -> Run[int]:
+        def _finish_transaction(result: Any) -> Run[int]:
+            return (
+                sql_exec(SQL("COMMIT;"))
+                ^ sql_exec(SQL("DROP TABLE orphan_adj_overrides_next_tmp;"))
+                ^ pure(terminal.length)
+            ) if isinstance(result, Right) else (
+                sql_exec(SQL("ROLLBACK;"))
+                ^ sql_exec(SQL("DROP TABLE IF EXISTS orphan_adj_overrides_next_tmp;"))
+                ^ throw(ErrorPayload(f"{result.l}"))
+            )
+
         return sql_exec(SQL("BEGIN TRANSACTION;")) ^ run_except(
             sql_exec(SQL("DELETE FROM orphan_adjudication_overrides;"))
             ^ sql_exec(
@@ -5641,43 +4211,40 @@ def _rebuild_overrides_table_run_v2(
                     " orphan_adj_overrides_next_tmp;"
                 )
             )
-        ) >> (
-            lambda result: (
-                (
-                    sql_exec(SQL("COMMIT;"))
-                    ^ sql_exec(SQL("DROP TABLE orphan_adj_overrides_next_tmp;"))
-                    ^ pure(terminal.length)
-                )
-                if isinstance(result, Right)
-                else (
-                    sql_exec(SQL("ROLLBACK;"))
-                    ^ sql_exec(
-                        SQL("DROP TABLE IF EXISTS orphan_adj_overrides_next_tmp;")
-                    )
-                    ^ throw(ErrorPayload(f"{result.l}"))
+        ) >> _finish_transaction
+
+    def _stage_next_override_rows(
+        prior_rows: list[dict[str, Any]],
+    ) -> Run[int]:
+        prior_by_orphan = {_safe_text(row.get("orphan_id")): row for row in prior_rows}
+        return (
+            sql_exec(
+                SQL(
+                    """
+                    CREATE TEMP TABLE orphan_adj_overrides_next_tmp AS
+                    SELECT *
+                    FROM orphan_adjudication_overrides
+                    WHERE 1=0;
+                    """
                 )
             )
-        )
+            ^ _insert_terminal_rows(prior_by_orphan)
+        ) >> (lambda _: _commit_swap())
 
     return (
         _query_rows_run_v2(
             """
-        SELECT orphan_id, resolution_label, resolved_entity_id, confidence, reason_summary, evidence_json
+        SELECT
+          orphan_id,
+          resolution_label,
+          resolved_entity_id,
+          confidence,
+          reason_summary,
+          evidence_json
         FROM orphan_adjudication_overrides;
         """
         )
-        >> (
-            lambda prior_rows: sql_exec(
-                SQL(
-                    "CREATE TEMP TABLE orphan_adj_overrides_next_tmp AS SELECT * FROM"
-                    " orphan_adjudication_overrides WHERE 1=0;"
-                )
-            )
-            ^ _insert_terminal_rows(
-                {_safe_text(row.get("orphan_id")): row for row in prior_rows}
-            )
-            >> (lambda _: _commit_swap())
-        )
+        >> _stage_next_override_rows
     )
 
 
@@ -5706,6 +4273,7 @@ def _finalize_decision_run_v2(run_id: str, decision: CaseDecision) -> Run[CaseDe
             error_message=error_message,
         )
         ^ _cache_terminal_decision_run_v2(decision)
+        ^ _display_matched_article_run_v2(decision)
         ^ pure(decision)
     )
 
@@ -5743,6 +4311,82 @@ def _process_single_orphan_run_v2(
         weights: dict[str, float],
     ) -> Run[OrphanWork]:
         merged = _merge_candidates_v2(scored_candidates)
+
+        def _build_ranked_work(rank_t: GPTResponseTuple) -> Run[OrphanWork]:
+            rank_response = cast(RankResponse, rank_t.parsed.output)
+            ranked = _validate_rank_output_v2(rank_response, merged)
+            return (
+                put_line(f"[K][{orphan_id}] rank_api_call: completed")
+                ^ _log_api_usage_and_reasoning_run_v2(orphan_id, "rank", rank_t)
+                ^ put_line(f"[K][{orphan_id}] rank_result (api_call):")
+                ^ put_line(_pretty_json(json.loads(rank_response.model_dump_json())))
+                ^ _log_stage_metric_run_v2(
+                    run_id,
+                    group_id,
+                    orphan_id,
+                    "rank",
+                    "rank_validate",
+                    len(ranked),
+                    "direct_ranker",
+                )
+                ^ pure(
+                    OrphanWork(
+                        orphan_id=orphan_id,
+                        article_id=dossier.article_id,
+                        insufficient=(
+                            rank_response.match_result
+                            == "insufficient_information"
+                        ),
+                        insufficient_reason=(
+                            "rank"
+                            if rank_response.match_result
+                            == "insufficient_information"
+                            else None
+                        ),
+                        stage_trace=[
+                            {
+                                "stage": "pass1",
+                                "row_count": valid_anchors.length,
+                                "gate": "pass",
+                                "anchor_failures": anchor_failures,
+                            },
+                            {"stage": "B", "row_count": 0, "gate": "bypassed"},
+                            {"stage": "C", "row_count": 0, "gate": "bypassed"},
+                            {
+                                "stage": "splink_c2_weight",
+                                "row_count": len(weights),
+                                "gate": "pass",
+                            },
+                            {
+                                "stage": "C2",
+                                "row_count": scored_candidates.length,
+                                "gate": "pass",
+                            },
+                            {
+                                "stage": "rank",
+                                "row_count": len(ranked),
+                                "gate": "pass",
+                            },
+                        ],
+                        anchors=[
+                            _validated_anchor_to_dict_v2(anchor)
+                            for anchor in valid_anchors
+                        ],
+                        valid_variants=list(variants_used),
+                        merged_candidates=[
+                            candidate.to_dict() for candidate in merged
+                        ],
+                        ranked_candidates=ranked,
+                        provisional_reason=(
+                            "insufficient information from rank api"
+                            if rank_response.match_result
+                            == "insufficient_information"
+                            else "ranked candidates available"
+                        ),
+                    )
+                )
+            )
+
         return (
             (
                 _insert_merged_candidates_run_v2(run_id, group_id, orphan_id, merged)
@@ -5770,86 +4414,7 @@ def _process_single_orphan_run_v2(
                 ^ put_line(f"[K][{orphan_id}] rank_api_call: start")
                 ^ _call_rank_run_v2(rank_request)
             )
-            >> (
-                lambda rank_t: (
-                    lambda rank_response, ranked: put_line(
-                        f"[K][{orphan_id}] rank_api_call: completed"
-                    )
-                    ^ _log_api_usage_and_reasoning_run_v2(orphan_id, "rank", rank_t)
-                    ^ put_line(f"[K][{orphan_id}] rank_result (api_call):")
-                    ^ put_line(
-                        _pretty_json(json.loads(rank_response.model_dump_json()))
-                    )
-                    ^ _log_stage_metric_run_v2(
-                        run_id,
-                        group_id,
-                        orphan_id,
-                        "rank",
-                        "rank_validate",
-                        len(ranked),
-                        "direct_ranker",
-                    )
-                    ^ pure(
-                        OrphanWork(
-                            orphan_id=orphan_id,
-                            article_id=dossier.article_id,
-                            insufficient=rank_response.match_result
-                            == "insufficient_information",
-                            insufficient_reason=(
-                                "rank"
-                                if rank_response.match_result
-                                == "insufficient_information"
-                                else None
-                            ),
-                            stage_trace=[
-                                {
-                                    "stage": "pass1",
-                                    "row_count": valid_anchors.length,
-                                    "gate": "pass",
-                                    "anchor_failures": anchor_failures,
-                                },
-                                {"stage": "B", "row_count": 0, "gate": "bypassed"},
-                                {"stage": "C", "row_count": 0, "gate": "bypassed"},
-                                {
-                                    "stage": "splink_c2_weight",
-                                    "row_count": len(weights),
-                                    "gate": "pass",
-                                },
-                                {
-                                    "stage": "C2",
-                                    "row_count": scored_candidates.length,
-                                    "gate": "pass",
-                                },
-                                {
-                                    "stage": "rank",
-                                    "row_count": len(ranked),
-                                    "gate": "pass",
-                                },
-                            ],
-                            anchors=[
-                                _validated_anchor_to_dict_v2(anchor)
-                                for anchor in valid_anchors
-                            ],
-                            valid_variants=list(variants_used),
-                            merged_candidates=[
-                                candidate.to_dict() for candidate in merged
-                            ],
-                            ranked_candidates=ranked,
-                            provisional_reason=(
-                                "insufficient information from rank api"
-                                if rank_response.match_result
-                                == "insufficient_information"
-                                else "ranked candidates available"
-                            ),
-                        )
-                    )
-                )(
-                    cast(RankResponse, rank_t.parsed.output),
-                    _validate_rank_output_v2(
-                        cast(RankResponse, rank_t.parsed.output), merged
-                    ),
-                )
-            )
+            >> _build_ranked_work
         )
 
     def _candidate_stage(
@@ -5858,7 +4423,9 @@ def _process_single_orphan_run_v2(
         variants_used: Array[str],
         anchor_failures: list[str],
     ) -> Run[OrphanWork]:
-        def _with_grouped(
+        query_specs = _query_specs_from_validated_anchors(valid_anchors)
+
+        def _score_and_rank_grouped_candidates(
             grouped_candidates: Array[Array[C2Candidate]],
         ) -> Run[OrphanWork]:
             flattened = Array.make(
@@ -5868,13 +4435,43 @@ def _process_single_orphan_run_v2(
                     for candidate in candidate_group
                 )
             )
-            return _score_c2_candidate_weights_run_v2(orphan_id, flattened) >> (
-                lambda weights: (
-                    lambda scored_candidates: put_line(
+
+            def _attach_splink_weights(weights: dict[str, float]) -> Run[OrphanWork]:
+                scored_candidates = Array.make(
+                    tuple(
+                        C2Candidate(
+                            entity_uid=candidate.entity_uid,
+                            source_article_id=candidate.source_article_id,
+                            source_incident_idx=candidate.source_incident_idx,
+                            midpoint_day=candidate.midpoint_day,
+                            day_gap=candidate.day_gap,
+                            compat_count=candidate.compat_count,
+                            summary_cosine=candidate.summary_cosine,
+                            det_score=candidate.det_score,
+                            query_variant=candidate.query_variant,
+                            splink_match_weight=weights.get(candidate.entity_uid),
+                        )
+                        for candidate in flattened
+                    )
+                )
+                requested_count = len(
+                    {
+                        candidate.entity_uid
+                        for candidate in scored_candidates
+                        if candidate.entity_uid != ""
+                    }
+                )
+                unscored_count = sum(
+                    1
+                    for candidate in scored_candidates
+                    if candidate.splink_match_weight is None
+                )
+                return (
+                    put_line(
                         f"[K][{orphan_id}] splink_c2_weight_scoring: "
-                        f"requested_candidates={len({candidate.entity_uid for candidate in scored_candidates if candidate.entity_uid != ''})}, "
+                        f"requested_candidates={requested_count}, "
                         f"scored_candidates={len(weights)}, "
-                        f"unscored_candidates={sum(1 for candidate in scored_candidates if candidate.splink_match_weight is None)}"
+                        f"unscored_candidates={unscored_count}"
                     )
                     ^ _log_stage_metric_run_v2(
                         run_id,
@@ -5883,7 +4480,7 @@ def _process_single_orphan_run_v2(
                         "splink_c2_weight",
                         "candidate_entity_vs_orphan",
                         len(weights),
-                        f"missing={sum(1 for candidate in scored_candidates if candidate.splink_match_weight is None)}",
+                        f"missing={unscored_count}",
                     )
                     ^ _insert_candidates_run_v2(
                         run_id, group_id, orphan_id, scored_candidates
@@ -5895,7 +4492,7 @@ def _process_single_orphan_run_v2(
                         "C2",
                         "fts_variant_union",
                         scored_candidates.length,
-                        f"variants={variants_used.length}",
+                        f"variants={query_specs.length}",
                     )
                     ^ _rank_stage(
                         dossier,
@@ -5905,24 +4502,10 @@ def _process_single_orphan_run_v2(
                         scored_candidates,
                         weights,
                     )
-                )(
-                    Array.make(
-                        tuple(
-                            C2Candidate(
-                                entity_uid=candidate.entity_uid,
-                                source_article_id=candidate.source_article_id,
-                                midpoint_day=candidate.midpoint_day,
-                                day_gap=candidate.day_gap,
-                                compat_count=candidate.compat_count,
-                                summary_cosine=candidate.summary_cosine,
-                                det_score=candidate.det_score,
-                                query_variant=candidate.query_variant,
-                                splink_match_weight=weights.get(candidate.entity_uid),
-                            )
-                            for candidate in flattened
-                        )
-                    )
                 )
+
+            return _score_c2_candidate_weights_run_v2(orphan_id, flattened) >> (
+                _attach_splink_weights
             )
 
         return (
@@ -5934,18 +4517,20 @@ def _process_single_orphan_run_v2(
             )
             ^ (
                 array_traverse_run(
-                    variants_used,
-                    lambda variant: _fts_article_hits_run_v2(variant, 60)
+                    query_specs,
+                    lambda query_spec: _fts_article_hits_run_v2(
+                        query_spec.fts_query, 60
+                    )
                     >> (
                         lambda article_ids: _entities_for_articles_run_v2(
-                            article_ids, orphan_id, variant
+                            article_ids, orphan_id, query_spec.display_text
                         )
                     ),
                 )
-                if variants_used.length > 0
+                if query_specs.length > 0
                 else pure(Array.empty())
             )
-        ) >> _with_grouped
+        ) >> _score_and_rank_grouped_candidates
 
     def _validated_stage(
         dossier: Dossier,
@@ -6002,31 +4587,37 @@ def _process_single_orphan_run_v2(
             )
         )
 
-    return _load_orphan_dossier_run_v2(orphan_id) >> (
-        lambda dossier: _display_article_run_v2(dossier)
-        ^ (
-            lambda request: _log_pass1_api_input_run_v2(orphan_id, request)
+    def _call_pass1_stage(dossier: Dossier) -> Run[GPTResponseTuple]:
+        request = _build_pass1_request_v2(dossier)
+        return (
+            _display_article_run_v2(dossier)
+            ^ _log_pass1_api_input_run_v2(orphan_id, request)
             ^ put_line(f"[K][{orphan_id}] pass1_api_call: start")
             ^ _call_pass1_run_v2(request)
-        )(_build_pass1_request_v2(dossier))
-        >> (
-            lambda pass1_t: put_line(f"[K][{orphan_id}] pass1_api_call: completed")
+        )
+
+    def _finalize_pass1_response(
+        dossier: Dossier, pass1_t: GPTResponseTuple
+    ) -> Run[OrphanWork]:
+        return (
+            put_line(f"[K][{orphan_id}] pass1_api_call: completed")
             ^ _log_api_usage_and_reasoning_run_v2(orphan_id, "pass1", pass1_t)
             ^ put_line(f"[K][{orphan_id}] pass1_result (api_call):")
             ^ put_line(
-                _pretty_json(
-                    json.loads(
-                        cast(Pass1Response, pass1_t.parsed.output).model_dump_json()
-                    )
+                _format_pass1_response_for_display(
+                    cast(Pass1Response, pass1_t.parsed.output)
                 )
             )
             ^ _validate_anchors_run_v2(cast(Pass1Response, pass1_t.parsed.output))
-        )
-        >> (
+        ) >> (
             lambda validated: _validated_stage(
                 dossier, validated[0], validated[1], validated[2]
             )
         )
+
+    return _load_orphan_dossier_run_v2(orphan_id) >> (
+        lambda dossier: _call_pass1_stage(dossier)
+        >> (lambda pass1_t: _finalize_pass1_response(dossier, pass1_t))
     )
 
 
@@ -6036,88 +4627,541 @@ def _process_group_run_v2(
     if group.length == 0:
         return pure(Array.empty())
     group_id = group[0].group_id
+    leader = group[0]
+    leader_orphan_id = leader.orphan_id
+    group_orphan_ids = tuple(row.orphan_id for row in group)
+    group_key = _incident_group_key_from_orphan_id(leader_orphan_id)
 
-    def _process_one(row: CacheReadinessRow) -> Run[OrphanWork]:
-        return _set_case_state_run_v2(
-            run_id, row.orphan_id, case_status="in_progress", stage_completed="start"
-        ) ^ run_except(_process_single_orphan_run_v2(run_id, group_id, row)) >> (
-            lambda result: (
-                (
-                    _set_case_state_run_v2(
-                        run_id,
-                        row.orphan_id,
-                        case_status="in_progress",
-                        stage_completed="rank",
-                    )
-                    ^ pure(result.r)
+    def _mark_group_in_progress() -> Run[Any]:
+        return array_traverse_run(
+            group,
+            lambda row: _set_case_state_run_v2(
+                run_id,
+                row.orphan_id,
+                case_status="in_progress",
+                stage_completed="start",
+            ),
+        )
+
+    def _log_shared_stage_metric(
+        stage: str, operation: str, row_count: int, notes: str
+    ) -> Run[Any]:
+        return array_traverse_run(
+            group,
+            lambda row: _log_stage_metric_run_v2(
+                run_id, group_id, row.orphan_id, stage, operation, row_count, notes
+            ),
+        )
+
+    def _insert_shared_candidates(candidates: Array[C2Candidate]) -> Run[Any]:
+        return array_traverse_run(
+            group,
+            lambda row: _insert_candidates_run_v2(
+                run_id, group_id, row.orphan_id, candidates
+            ),
+        )
+
+    def _insert_shared_representatives(
+        representatives: Array[IncidentRepresentativeCandidate],
+    ) -> Run[Any]:
+        return array_traverse_run(
+            group,
+            lambda row: _insert_incident_representatives_run_v2(
+                run_id, group_id, row.orphan_id, representatives
+            ),
+        )
+
+    def _build_shared_works(
+        *,
+        article_id: int | None,
+        anchors: Array[ValidatedAnchor],
+        variants_used: Array[str],
+        ranked_candidates: list[dict[str, Any]],
+        stage_trace: list[dict[str, Any]],
+        provisional_reason: str,
+        insufficient: bool = False,
+        insufficient_reason: str | None = None,
+    ) -> Array[OrphanWork]:
+        anchor_dicts = [_validated_anchor_to_dict_v2(anchor) for anchor in anchors]
+        return Array.make(
+            tuple(
+                OrphanWork(
+                    orphan_id=row.orphan_id,
+                    article_id=article_id,
+                    insufficient=insufficient,
+                    insufficient_reason=insufficient_reason,
+                    stage_trace=stage_trace,
+                    anchors=anchor_dicts,
+                    valid_variants=list(variants_used),
+                    merged_candidates=ranked_candidates,
+                    ranked_candidates=ranked_candidates,
+                    provisional_reason=provisional_reason,
                 )
-                if isinstance(result, Right)
-                else (
-                    put_line(
-                        f"[K][{row.orphan_id}] processing_error: {_safe_text(result.l)}"
-                    )
-                    ^ _log_stage_metric_run_v2(
-                        run_id,
-                        group_id,
-                        row.orphan_id,
-                        "error",
-                        "exception",
-                        0,
-                        _safe_text(result.l)[:500],
-                    )
-                    ^ _set_case_state_run_v2(
-                        run_id,
-                        row.orphan_id,
-                        case_status="failed",
-                        stage_completed="error",
-                        decision_label="analysis_incomplete",
-                        error_message=_safe_text(result.l)[:800],
-                    )
-                    ^ pure(
-                        _processing_error_work_v2(
-                            row.orphan_id, row.article_id, _safe_text(result.l)
-                        )
-                    )
+                for row in group
+            )
+        )
+
+    def _finalize_decisions_from_group_work(
+        work_items: Array[OrphanWork],
+        assigned_candidates: dict[str, dict[str, Any]],
+    ) -> Run[Array[CaseDecision]]:
+        return pure(
+            Array.make(
+                tuple(
+                    _decision_from_work(work, assigned_candidates.get(work.orphan_id))
+                    for work in work_items
                 )
             )
         )
 
-    return array_traverse_run(group, _process_one) >> (
-        lambda work_items: (
-            lambda assigned: pure(
-                Array.make(
-                    tuple(
-                        (
-                            CaseDecision(
-                                orphan_id=work.orphan_id,
-                                article_id=work.article_id,
-                                label="analysis_incomplete",
-                                resolved_entity_id=None,
-                                confidence=None,
-                                reason_summary=(
-                                    "Required adjudication stages failed due to"
-                                    " execution error and the case must be retried."
-                                ),
-                                evidence_json={
-                                    "stage_trace": work.stage_trace,
-                                    "reason_code": "execution_failure",
-                                    "execution_audit": {
-                                        "query_mode": "interactive_sql",
-                                        "fts_used": False,
-                                        "fts_query_list": [],
-                                    },
-                                },
-                            )
-                            if len(work.stage_trace) > 0
-                            and _safe_text(work.stage_trace[0].get("stage")) == "error"
-                            else _decision_from_work(work, assigned.get(work.orphan_id))
-                        )
-                        for work in work_items
+    def _analysis_incomplete_decisions(message: str) -> Array[CaseDecision]:
+        return Array.make(
+            tuple(
+                CaseDecision(
+                    orphan_id=row.orphan_id,
+                    article_id=row.article_id,
+                    label="analysis_incomplete",
+                    resolved_entity_id=None,
+                    confidence=None,
+                    reason_summary=(
+                        "Required adjudication stages failed due to execution error"
+                        " and the case must be retried."
+                    ),
+                    evidence_json={
+                        "stage_trace": [
+                            {
+                                "stage": "error",
+                                "row_count": 0,
+                                "gate": "fail",
+                                "error": message,
+                            }
+                        ],
+                        "reason_code": "execution_failure",
+                        "execution_audit": {
+                            "query_mode": "interactive_sql",
+                            "fts_used": False,
+                            "fts_query_list": [],
+                        },
+                    },
+                )
+                for row in group
+            )
+        )
+
+    def _handle_group_result(result: Any) -> Run[Array[CaseDecision]]:
+        if isinstance(result, Right):
+            return pure(result.r)
+        message = _safe_text(result.l)
+        return (
+            array_traverse_run(
+                group,
+                lambda row: put_line(
+                    f"[K][{row.orphan_id}] processing_error: {message}"
+                )
+                ^ _log_stage_metric_run_v2(
+                    run_id,
+                    group_id,
+                    row.orphan_id,
+                    "error",
+                    "exception",
+                    0,
+                    message[:500],
+                )
+                ^ _set_case_state_run_v2(
+                    run_id,
+                    row.orphan_id,
+                    case_status="failed",
+                    stage_completed="error",
+                    decision_label="analysis_incomplete",
+                    error_message=message[:800],
+                ),
+            )
+            ^ pure(_analysis_incomplete_decisions(message))
+        )
+
+    def _load_group_dossier() -> Run[GroupDossier]:
+        return _load_orphan_dossier_run_v2(leader_orphan_id) >> (
+            lambda dossier: pure(
+                _group_dossier_from_dossier(group_key, group_orphan_ids, dossier)
+            )
+        )
+
+    def _build_assignment_decisions(
+        group_dossier: GroupDossier,
+        valid_anchors: Array[ValidatedAnchor],
+        variants_used: Array[str],
+        representatives: Array[IncidentRepresentativeCandidate],
+        ranked_candidates: list[dict[str, Any]],
+    ) -> Run[Array[CaseDecision]]:
+        selected = ranked_candidates[0] if len(ranked_candidates) > 0 else {}
+        allowed_entities = tuple(
+            sorted(
+                _safe_text(uid)
+                for uid in (selected.get("eligible_entity_uids") or [])
+                if _safe_text(uid) != ""
+            )
+        )
+        if len(allowed_entities) == 0:
+            return throw(
+                ErrorPayload(
+                    "selected_incident_has_no_eligible_entities_after_exclusion"
+                )
+            )
+        entity_candidates = Array.make(
+            tuple(
+                C2Candidate(
+                    entity_uid=entity_uid,
+                    source_article_id=selected.get("source_article_id"),
+                    source_incident_idx=selected.get("source_incident_idx"),
+                    midpoint_day=None,
+                    day_gap=0.0,
+                    compat_count=0,
+                    summary_cosine=0.0,
+                    det_score=0.0,
+                    query_variant=_safe_text(selected.get("query_variant")),
+                )
+                for entity_uid in allowed_entities
+            )
+        )
+
+        def _collect_weight_maps(
+            weight_rows: Array[tuple[str, dict[str, float]]],
+        ) -> Run[Array[CaseDecision]]:
+            weight_by_orphan = dict(weight_rows)
+            assignment = _maximize_weight_assignment_v2(
+                group_orphan_ids, allowed_entities, weight_by_orphan
+            )
+            shared_stage_trace = [
+                {
+                    "stage": "pass1",
+                    "row_count": valid_anchors.length,
+                    "gate": "pass",
+                    "group_size": len(group_orphan_ids),
+                },
+                {"stage": "B", "row_count": 0, "gate": "bypassed"},
+                {"stage": "C", "row_count": 0, "gate": "bypassed"},
+                {
+                    "stage": "C2",
+                    "row_count": representatives.length,
+                    "gate": "pass",
+                },
+                {
+                    "stage": "rank",
+                    "row_count": len(ranked_candidates),
+                    "gate": "pass",
+                },
+                {
+                    "stage": "assignment",
+                    "row_count": len(assignment),
+                    "gate": "pass",
+                },
+            ]
+            work_items = _build_shared_works(
+                article_id=group_dossier.article_id,
+                anchors=valid_anchors,
+                variants_used=variants_used,
+                ranked_candidates=ranked_candidates,
+                stage_trace=shared_stage_trace,
+                provisional_reason="matched incident selected but orphan unassigned",
+            )
+            assigned_candidates = {
+                orphan_id: _make_assignment_candidate_dict_v2(
+                    entity_uid=entity_uid,
+                    source_article_id=selected.get("source_article_id"),
+                    source_incident_idx=selected.get("source_incident_idx"),
+                    splink_match_weight=_as_float(
+                        weight_by_orphan.get(orphan_id, {}).get(entity_uid), 0.0
+                    ),
+                    ranked_incidents=ranked_candidates,
+                )
+                for orphan_id, entity_uid in assignment.items()
+            }
+            return _finalize_decisions_from_group_work(work_items, assigned_candidates)
+
+        return array_traverse_run(
+            group,
+            lambda row: _score_c2_candidate_weights_run_v2(
+                row.orphan_id, entity_candidates
+            ).map(lambda weights: (row.orphan_id, weights)),
+        ) >> _collect_weight_maps
+
+    def _finalize_rank_response(
+        group_dossier: GroupDossier,
+        valid_anchors: Array[ValidatedAnchor],
+        variants_used: Array[str],
+        representatives: Array[IncidentRepresentativeCandidate],
+        rank_t: GPTResponseTuple,
+    ) -> Run[Array[CaseDecision]]:
+        rank_response = cast(RankResponse, rank_t.parsed.output)
+        ranked = _validate_incident_rank_output_v2(rank_response, representatives)
+        ranked_for_evidence = ranked + [
+            candidate.to_dict()
+            for candidate in representatives
+            if candidate.entity_uid
+            not in {_safe_text(row.get("entity_uid")) for row in ranked}
+        ]
+        shared_stage_trace = [
+            {
+                "stage": "pass1",
+                "row_count": valid_anchors.length,
+                "gate": "pass",
+                "group_size": len(group_orphan_ids),
+            },
+            {"stage": "B", "row_count": 0, "gate": "bypassed"},
+            {"stage": "C", "row_count": 0, "gate": "bypassed"},
+            {"stage": "C2", "row_count": representatives.length, "gate": "pass"},
+            {"stage": "rank", "row_count": len(ranked), "gate": "pass"},
+        ]
+        if rank_response.match_result == "insufficient_information":
+            return _finalize_decisions_from_group_work(
+                _build_shared_works(
+                    article_id=group_dossier.article_id,
+                    anchors=valid_anchors,
+                    variants_used=variants_used,
+                    ranked_candidates=ranked_for_evidence,
+                    stage_trace=shared_stage_trace,
+                    provisional_reason="insufficient information from rank api",
+                    insufficient=True,
+                    insufficient_reason="rank",
+                ),
+                {},
+            )
+        if rank_response.match_result != "match" or len(ranked) == 0:
+            return _finalize_decisions_from_group_work(
+                _build_shared_works(
+                    article_id=group_dossier.article_id,
+                    anchors=valid_anchors,
+                    variants_used=variants_used,
+                    ranked_candidates=ranked_for_evidence,
+                    stage_trace=shared_stage_trace,
+                    provisional_reason="no matching incident from rank api",
+                ),
+                {},
+            )
+        return _build_assignment_decisions(
+            group_dossier,
+            valid_anchors,
+            variants_used,
+            representatives,
+            ranked_for_evidence,
+        )
+
+    def _rank_group_candidates(
+        group_dossier: GroupDossier,
+        valid_anchors: Array[ValidatedAnchor],
+        variants_used: Array[str],
+        c2_candidates: Array[C2Candidate],
+        representatives: Array[IncidentRepresentativeCandidate],
+    ) -> Run[Array[CaseDecision]]:
+        return (
+            _insert_shared_candidates(c2_candidates)
+            ^ _insert_shared_representatives(representatives)
+            ^ _log_shared_stage_metric(
+                "C2",
+                "fts_variant_union",
+                c2_candidates.length,
+                f"variants={variants_used.length}",
+            )
+            ^ _log_shared_stage_metric(
+                "merge",
+                "candidate_incident_merge",
+                representatives.length,
+                f"top{MAX_MERGED_CANDIDATES_FOR_API2}",
+            )
+            ^ _log_anchor_and_candidates_run_v2(
+                leader_orphan_id,
+                valid_anchors,
+                variants_used,
+                c2_candidates,
+                representatives,
+                [],
+            )
+            ^ _build_rank_request_for_group_run_v2(group_dossier, representatives)
+        ) >> (
+            lambda rank_request: _log_rank_api_input_run_v2(
+                leader_orphan_id, rank_request
+            )
+            ^ put_line(f"[K][{leader_orphan_id}] rank_api_call: start")
+            ^ _call_rank_run_v2(rank_request)
+        ) >> (
+            lambda rank_t: put_line(
+                f"[K][{leader_orphan_id}] rank_api_call: completed"
+            )
+            ^ _log_api_usage_and_reasoning_run_v2(leader_orphan_id, "rank", rank_t)
+            ^ put_line(f"[K][{leader_orphan_id}] rank_result (api_call):")
+            ^ put_line(
+                _pretty_json(
+                    json.loads(
+                        cast(RankResponse, rank_t.parsed.output).model_dump_json()
                     )
                 )
             )
-        )(_assign_group(list(work_items)))
-    )
+            ^ _finalize_rank_response(
+                group_dossier, valid_anchors, variants_used, representatives, rank_t
+            )
+        )
+
+    def _candidate_stage(
+        group_dossier: GroupDossier,
+        valid_anchors: Array[ValidatedAnchor],
+        variants_used: Array[str],
+    ) -> Run[Array[CaseDecision]]:
+        query_specs = _query_specs_from_validated_anchors(valid_anchors)
+
+        def _build_representatives(
+            grouped_candidates: Array[Array[C2Candidate]],
+        ) -> Run[Array[CaseDecision]]:
+            flattened = Array.make(
+                tuple(
+                    candidate
+                    for candidate_group in grouped_candidates
+                    for candidate in candidate_group
+                )
+            )
+            return _candidate_incident_rows_run_v2(group_dossier, flattened) >> (
+                lambda incident_rows: _rank_group_candidates(
+                    group_dossier,
+                    valid_anchors,
+                    variants_used,
+                    flattened,
+                    _incident_representatives_from_rows_v2(incident_rows),
+                )
+            )
+
+        return (
+            _log_shared_stage_metric("B", "bypassed", 0, "bypassed_focus_c2")
+            ^ _log_shared_stage_metric("C", "bypassed", 0, "bypassed_focus_c2")
+            ^ (
+                array_traverse_run(
+                    query_specs,
+                    lambda query_spec: _fts_article_hits_run_v2(
+                        query_spec.fts_query, 60
+                    )
+                    >> (
+                        lambda article_ids: _entities_for_articles_group_run_v2(
+                            article_ids,
+                            group_dossier.article_id,
+                            query_spec.display_text,
+                        )
+                    ),
+                )
+                if query_specs.length > 0
+                else pure(Array.empty())
+            )
+        ) >> _build_representatives
+
+    def _handle_validated_anchors(
+        group_dossier: GroupDossier,
+        valid_anchors: Array[ValidatedAnchor],
+        variants_used: Array[str],
+        anchor_failures: list[str],
+    ) -> Run[Array[CaseDecision]]:
+        shared_stage_trace = [
+            {
+                "stage": "pass1",
+                "row_count": valid_anchors.length,
+                    "gate": (
+                        "fail"
+                        if _pass1_gate_failed(
+                            [
+                                _validated_anchor_to_dict_v2(anchor)
+                                for anchor in valid_anchors
+                            ],
+                            anchor_failures,
+                        )
+                        else "pass"
+                ),
+                "anchor_failures": anchor_failures,
+                "group_size": len(group_orphan_ids),
+            }
+        ]
+        return _log_shared_stage_metric(
+            "pass1",
+            "anchor_validation",
+            valid_anchors.length,
+            ";".join(anchor_failures),
+        ) ^ (
+            _log_anchor_and_candidates_run_v2(
+                leader_orphan_id,
+                valid_anchors,
+                Array.empty(),
+                Array.empty(),
+                Array.empty(),
+                [],
+            )
+            ^ _finalize_decisions_from_group_work(
+                _build_shared_works(
+                    article_id=group_dossier.article_id,
+                    anchors=valid_anchors,
+                    variants_used=variants_used,
+                    ranked_candidates=[],
+                    stage_trace=shared_stage_trace,
+                    provisional_reason="insufficient anchors from pass1",
+                    insufficient=True,
+                    insufficient_reason="pass1",
+                ),
+                {},
+            )
+            if _pass1_gate_failed(
+                [_validated_anchor_to_dict_v2(anchor) for anchor in valid_anchors],
+                anchor_failures,
+            )
+            else _candidate_stage(group_dossier, valid_anchors, variants_used)
+        )
+
+    def _run_group_pipeline(group_dossier: GroupDossier) -> Run[Array[CaseDecision]]:
+        request = _build_pass1_request_for_group_v2(group_dossier)
+        return (
+            _display_article_run_v2(
+                _dossier_from_dict_v2(
+                    {
+                        "unique_id": leader_orphan_id,
+                        "article_id": group_dossier.article_id,
+                        "city_id": group_dossier.city_id,
+                        "year": group_dossier.year,
+                        "month": group_dossier.month,
+                        "midpoint_day": group_dossier.midpoint_day,
+                        "date_precision": "",
+                        "incident_date": group_dossier.incident_date,
+                        "victim_count": group_dossier.victim_count,
+                        "weapon": "",
+                        "circumstance": "",
+                        "geo_address_norm": group_dossier.incident_location,
+                        "geo_address_short": "",
+                        "geo_address_short_2": "",
+                        "relationship": "",
+                        "incident_summary_gpt": group_dossier.incident_summary,
+                        "article_title": group_dossier.article_title,
+                        "article_text": group_dossier.article_text,
+                        "article_pub_date": group_dossier.article_pub_date,
+                    }
+                )
+            )
+            ^ _log_pass1_api_input_run_v2(leader_orphan_id, request)
+            ^ put_line(f"[K][{leader_orphan_id}] pass1_api_call: start")
+            ^ _call_pass1_run_v2(request)
+        ) >> (
+            lambda pass1_t: put_line(
+                f"[K][{leader_orphan_id}] pass1_api_call: completed"
+            )
+            ^ _log_api_usage_and_reasoning_run_v2(leader_orphan_id, "pass1", pass1_t)
+            ^ put_line(f"[K][{leader_orphan_id}] pass1_result (api_call):")
+            ^ put_line(
+                _format_pass1_response_for_display(
+                    cast(Pass1Response, pass1_t.parsed.output)
+                )
+            )
+            ^ _validate_anchors_run_v2(cast(Pass1Response, pass1_t.parsed.output))
+        ) >> (
+            lambda validated: _handle_validated_anchors(
+                group_dossier, validated[0], validated[1], validated[2]
+            )
+        )
+
+    return (
+        _mark_group_in_progress()
+        ^ run_except(_load_group_dossier() >> _run_group_pipeline)
+    ) >> _handle_group_result
 
 
 def _run_pipeline_run(
@@ -6132,6 +5176,94 @@ def _run_pipeline_run(
         new_decisions = Array.make(
             tuple(decision for group in grouped_decisions for decision in group)
         )
+
+        def _combine_cached_and_live_decisions(
+            finalized: Array[CaseDecision],
+        ) -> Run[RunSummary]:
+            def _rebuild_from_decisions(cached: Array[CaseDecision]) -> Run[RunSummary]:
+                all_decisions = Array.make(tuple(finalized.a + cached.a))
+
+                def _persist_run_summary(
+                    rebuilt_terminal_rows: int,
+                ) -> Run[RunSummary]:
+                    matched = sum(
+                        1 for decision in finalized if decision.label == "matched"
+                    )
+                    not_same = sum(
+                        1
+                        for decision in finalized
+                        if decision.label == "not_same_person"
+                    )
+                    insufficient = sum(
+                        1
+                        for decision in finalized
+                        if decision.label == "insufficient_information"
+                    )
+                    incomplete = sum(
+                        1
+                        for decision in finalized
+                        if decision.label == "analysis_incomplete"
+                    )
+                    return sql_exec(
+                        SQL(
+                            """
+                            UPDATE orphan_adj_run
+                            SET
+                              finished_at = NOW(),
+                              processed_count = ?,
+                              grouped_count = ?,
+                              matched_count = ?,
+                              not_same_person_count = ?,
+                              insufficient_information_count = ?,
+                              analysis_incomplete_count = ?,
+                              status = 'completed'
+                            WHERE run_id = ?;
+                            """
+                        ),
+                        _sql_params(
+                            (
+                                finalized.length,
+                                groups.length,
+                                matched,
+                                not_same,
+                                insufficient,
+                                incomplete,
+                                run_id,
+                            )
+                        ),
+                    ) ^ pure(
+                        RunSummary(
+                            needs_api_total=sum(
+                                1
+                                for row in readiness_rows
+                                if row.readiness_status == "needs_api"
+                            ),
+                            selected_needs_api=selected.length,
+                            decision_ready_from_cache=sum(
+                                1
+                                for row in readiness_rows
+                                if row.readiness_status
+                                == "decision_ready_from_cache"
+                            ),
+                            processed=finalized.length,
+                            grouped=groups.length,
+                            matched=matched,
+                            not_same_person=not_same,
+                            insufficient_information=insufficient,
+                            analysis_incomplete=incomplete,
+                            rebuilt_terminal_rows=rebuilt_terminal_rows,
+                            dry_run=params.dry_run,
+                        )
+                    )
+
+                return _rebuild_overrides_table_run_v2(
+                    run_id, all_decisions, dry_run=params.dry_run
+                ) >> _persist_run_summary
+
+            return _cached_decisions_from_readiness_run_v2(
+                readiness_rows, selected_ids
+            ) >> _rebuild_from_decisions
+
         return (
             array_traverse_run(
                 new_decisions,
@@ -6139,95 +5271,7 @@ def _run_pipeline_run(
             )
             if new_decisions.length > 0
             else pure(Array.empty())
-        ) >> (
-            lambda finalized: _cached_decisions_from_readiness_run_v2(
-                readiness_rows, selected_ids
-            )
-            >> (
-                lambda cached: (
-                    lambda all_decisions: _rebuild_overrides_table_run_v2(
-                        run_id, all_decisions, dry_run=params.dry_run
-                    )
-                    >> (
-                        lambda rebuilt_terminal_rows: (
-                            lambda matched, not_same, insufficient, incomplete: sql_exec(
-                                SQL(
-                                    """
-                                    UPDATE orphan_adj_run
-                                    SET
-                                      finished_at = NOW(),
-                                      processed_count = ?,
-                                      grouped_count = ?,
-                                      matched_count = ?,
-                                      not_same_person_count = ?,
-                                      insufficient_information_count = ?,
-                                      analysis_incomplete_count = ?,
-                                      status = 'completed'
-                                    WHERE run_id = ?;
-                                    """
-                                ),
-                                _sql_params(
-                                    (
-                                        finalized.length,
-                                        groups.length,
-                                        matched,
-                                        not_same,
-                                        insufficient,
-                                        incomplete,
-                                        run_id,
-                                    )
-                                ),
-                            )
-                            ^ pure(
-                                RunSummary(
-                                    needs_api_total=sum(
-                                        1
-                                        for row in readiness_rows
-                                        if row.readiness_status == "needs_api"
-                                    ),
-                                    selected_needs_api=selected.length,
-                                    decision_ready_from_cache=sum(
-                                        1
-                                        for row in readiness_rows
-                                        if row.readiness_status
-                                        == "decision_ready_from_cache"
-                                    ),
-                                    processed=finalized.length,
-                                    grouped=groups.length,
-                                    matched=matched,
-                                    not_same_person=not_same,
-                                    insufficient_information=insufficient,
-                                    analysis_incomplete=incomplete,
-                                    rebuilt_terminal_rows=rebuilt_terminal_rows,
-                                    dry_run=params.dry_run,
-                                )
-                            )
-                        )(
-                            sum(
-                                1
-                                for decision in finalized
-                                if decision.label == "matched"
-                            ),
-                            sum(
-                                1
-                                for decision in finalized
-                                if decision.label == "not_same_person"
-                            ),
-                            sum(
-                                1
-                                for decision in finalized
-                                if decision.label == "insufficient_information"
-                            ),
-                            sum(
-                                1
-                                for decision in finalized
-                                if decision.label == "analysis_incomplete"
-                            ),
-                        )
-                    )
-                )(Array.make(tuple(finalized.a + cached.a)))
-            )
-        )
+        ) >> _combine_cached_and_live_decisions
 
     return (
         _ensure_tables_run_v2()
@@ -6254,13 +5298,12 @@ def _run_pipeline_run(
                 else pure(Array.empty())
             )
             >> (
-                lambda result: (
-                    _finish(result.r)
-                    if isinstance(result, Right)
-                    else (
-                        sql_exec(
-                            SQL(
-                                """
+                lambda result: _finish(result.r)
+                if isinstance(result, Right)
+                else (
+                    sql_exec(
+                        SQL(
+                            """
                     UPDATE orphan_adj_run
                     SET
                       finished_at = NOW(),
@@ -6274,13 +5317,12 @@ def _run_pipeline_run(
                       error_message = ?
                     WHERE run_id = ?;
                     """
-                            ),
-                            _sql_params(
-                                (groups.length, _safe_text(result.l)[:800], run_id)
-                            ),
-                        )
-                        ^ throw(ErrorPayload(f"{result.l}"))
+                        ),
+                        _sql_params(
+                            (groups.length, _safe_text(result.l)[:800], run_id)
+                        ),
                     )
+                    ^ throw(ErrorPayload(f"{result.l}"))
                 )
             )
         )
@@ -6299,48 +5341,63 @@ def _prepare_cache_readiness() -> Run[tuple[Array[CacheReadinessRow], int]]:
 def _execute_k(
     params: KParams, readiness_rows: Array[CacheReadinessRow]
 ) -> Run[NextStep]:
-    return ask() >> (
-        lambda env: resolve_prompt_template(env, PromptKey(PASS1_PROMPT_KEY))
-        >> (
-            lambda pass1_prompt_template: (
+    def _validate_prompt_templates_and_execute(
+        env: Any, pass1_prompt_template: Any
+    ) -> Run[NextStep]:
+        if pass1_prompt_template.id.startswith("pmpt_replace_"):
+            return (
                 put_line(
                     f"[K] Stored prompt key '{PASS1_PROMPT_KEY}' is still a placeholder"
                     f" id ({pass1_prompt_template.id}). Replace it with your dashboard"
                     " prompt_id and rerun."
                 )
                 ^ pure(NextStep.CONTINUE)
-                if pass1_prompt_template.id.startswith("pmpt_replace_")
-                else resolve_prompt_template(env, PromptKey(RANK_PROMPT_KEY))
-                >> (
-                    lambda rank_prompt_template: (
-                        put_line(
-                            f"[K] Stored prompt key '{RANK_PROMPT_KEY}' is still a"
-                            f" placeholder id ({rank_prompt_template.id}). Replace it"
-                            " with your dashboard prompt_id and rerun."
-                        )
-                        ^ pure(NextStep.CONTINUE)
-                        if rank_prompt_template.id.startswith("pmpt_replace_")
-                        else _run_pipeline_run(params, readiness_rows)
-                        >> (
-                            lambda summary: put_line(
-                                "[K] Orphan adjudication completed:"
-                                f" needs_api_total={summary.needs_api_total},"
-                                f" selected_needs_api={summary.selected_needs_api},"
-                                f" decision_ready_from_cache={summary.decision_ready_from_cache},"
-                                f" processed={summary.processed},"
-                                f" groups={summary.grouped}, matched={summary.matched},"
-                                f" not_same_person={summary.not_same_person},"
-                                f" insufficient_information={summary.insufficient_information},"
-                                f" analysis_incomplete={summary.analysis_incomplete},"
-                                f" rebuilt_terminal_rows={summary.rebuilt_terminal_rows},"
-                                f" dry_run={summary.dry_run}"
-                            )
-                            ^ pure(NextStep.CONTINUE)
-                        )
-                    )
-                )
             )
+
+        def _handle_rank_prompt(rank_prompt_template: Any) -> Run[NextStep]:
+            if rank_prompt_template.id.startswith("pmpt_replace_"):
+                return (
+                    put_line(
+                        f"[K] Stored prompt key '{RANK_PROMPT_KEY}' is still a"
+                        f" placeholder id ({rank_prompt_template.id}). Replace it"
+                        " with your dashboard prompt_id and rerun."
+                    )
+                    ^ pure(NextStep.CONTINUE)
+                )
+            return _run_pipeline_run(params, readiness_rows) >> _display_k_summary
+
+        return resolve_prompt_template(env, PromptKey(RANK_PROMPT_KEY)) >> (
+            _handle_rank_prompt
         )
+
+    def _display_k_summary(summary: RunSummary) -> Run[NextStep]:
+        return put_line(
+            (
+                "[K] Orphan adjudication completed:"
+                f" needs_api_total={summary.needs_api_total},"
+                f" selected_needs_api={summary.selected_needs_api},"
+                " decision_ready_from_cache="
+                f"{summary.decision_ready_from_cache},"
+                f" processed={summary.processed},"
+                f" groups={summary.grouped},"
+                f" matched={summary.matched},"
+                " not_same_person="
+                f"{summary.not_same_person},"
+                " insufficient_information="
+                f"{summary.insufficient_information},"
+                " analysis_incomplete="
+                f"{summary.analysis_incomplete},"
+                " rebuilt_terminal_rows="
+                f"{summary.rebuilt_terminal_rows},"
+                f" dry_run={summary.dry_run}"
+            )
+        ) ^ pure(NextStep.CONTINUE)
+
+    return ask() >> (
+        lambda env: resolve_prompt_template(env, PromptKey(PASS1_PROMPT_KEY))
+        >> (lambda pass1_prompt_template: _validate_prompt_templates_and_execute(
+            env, pass1_prompt_template
+        ))
     )
 
 
@@ -6350,45 +5407,50 @@ def _prompt_and_execute_k(
     limit_prompt = (
         f"Enter number of records requiring new API calls [{needs_api_total}]: "
     )
-    return input_with_prompt(InputPrompt(limit_prompt)) >> (
-        lambda limit_raw: (
-            put_line("[K] limit=0; returning to main menu.") ^ pure(NextStep.CONTINUE)
-            if _parse_limit(str(limit_raw), default=needs_api_total) == 0
-            else input_with_prompt(PromptKey("k_start_after"))
+    def _collect_remaining_prompts(limit_raw: Any) -> Run[NextStep]:
+        parsed_limit = _parse_limit(str(limit_raw), default=needs_api_total)
+        if parsed_limit == 0:
+            return put_line("[K] limit=0; returning to main menu.") ^ pure(
+                NextStep.CONTINUE
+            )
+
+        def _build_params(
+            start_after_raw: Any, group_raw: Any, dry_raw: Any, full_raw: Any
+        ) -> KParams:
+            return KParams(
+                limit=parsed_limit,
+                starting_after_orphan_id=str(start_after_raw).strip(),
+                group_same_incident=_parse_bool(str(group_raw), True),
+                dry_run=_parse_bool(str(dry_raw), False),
+                full_backfill=_parse_bool(str(full_raw), False),
+            )
+
+        return input_with_prompt(PromptKey("k_start_after")) >> (
+            lambda start_after_raw: input_with_prompt(
+                PromptKey("k_group_same_incident")
+            )
             >> (
-                lambda start_after_raw: input_with_prompt(
-                    PromptKey("k_group_same_incident")
-                )
+                lambda group_raw: input_with_prompt(PromptKey("k_dry_run"))
                 >> (
-                    lambda group_raw: input_with_prompt(PromptKey("k_dry_run"))
+                    lambda dry_raw: input_with_prompt(PromptKey("k_full_backfill"))
                     >> (
-                        lambda dry_raw: input_with_prompt(PromptKey("k_full_backfill"))
-                        >> (
-                            lambda full_raw: _execute_k(
-                                KParams(
-                                    limit=_parse_limit(
-                                        str(limit_raw), default=needs_api_total
-                                    ),
-                                    starting_after_orphan_id=str(
-                                        start_after_raw
-                                    ).strip(),
-                                    group_same_incident=_parse_bool(
-                                        str(group_raw), True
-                                    ),
-                                    dry_run=_parse_bool(str(dry_raw), False),
-                                    full_backfill=_parse_bool(str(full_raw), False),
-                                ),
-                                readiness_rows,
-                            )
+                        lambda full_raw: _execute_k(
+                            _build_params(
+                                start_after_raw, group_raw, dry_raw, full_raw
+                            ),
+                            readiness_rows,
                         )
                     )
                 )
             )
         )
-    )
+
+    return input_with_prompt(InputPrompt(limit_prompt)) >> _collect_remaining_prompts
 
 
 def adjudicate_orphans_controller() -> Run[NextStep]:
+    """Run controller [K] under the application's standard Run stack."""
+
     prog = _prepare_cache_readiness() >> (
         lambda prep: _prompt_and_execute_k(prep[0], prep[1])
     )

@@ -326,14 +326,6 @@ DATE_COMP = cl.CustomComparison(
                 cll.AbsoluteDifferenceLevel("year", 2),
                 YEAR_PRECISION
             ),
-            # ComparisonLevel(
-            #     "midpoint within 7 months",
-            #     _clause_from_comps(
-            #         ComparisonComp.MIDPOINT_EXISTS,
-            #         ComparisonComp.MIDPOINT_7MONTH,
-            #         ComparisonComp.YEAR_PRECISION
-            #     )
-            # ).to_dict(),
         ).configure(label_for_charts="15d day prec or 3m prec or 2yr year prec"),
         cll.And(
             NOT_DAY_PRECISION,

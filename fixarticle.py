@@ -4,7 +4,7 @@ Monadic controller for reviewing and making changes to a single article
 from enum import Enum
 from calculations import single_article_sql, latest_gptresults_sql
 from pymonad import Run, Namespace, with_namespace, to_prompts, put_line, \
-    pure, input_number, PromptKey, sql_query, sql_exec, SQL, SQLParams, throw, \
+    pure, input_number, input_with_prompt, PromptKey, sql_query, sql_exec, SQL, SQLParams, throw, \
     ErrorPayload, set_, with_models, String, Tuple, GPTUsage, \
         GPTReasoning, Maybe, Just, _Nothing, gpt_usage_reasoning_from_rows, \
         run_except, Left, with_duckdb
@@ -21,7 +21,7 @@ from orphan_adjudication_controller import E2E_CACHE_STAGE
 
 FIX_PROMPTS: dict[str, str | tuple[str,]] = {
     "record_id": "Please enter the record ID of the article you want to fix: ",
-    "delete_cache_entry_index": "Select orphan cache entry number to delete: ",
+    "delete_cache_entry_index": "Select orphan cache entry number to delete, type 'all', or 0 to go back: ",
 }
 ARTICLE_PROMPT = ("Apply [S]econd filter via GPT",
                   "Extract incident via [G]PT",
@@ -196,28 +196,49 @@ def _display_cache_rows(rows: tuple[dict, ...]) -> Run[None]:
         "\n\n".join(fmt(i, row) for i, row in enumerate(rows, start=1))
     return put_line(message) ^ pure(None)
 
-def _choose_cache_entry(rows: tuple[dict, ...]) -> Run[dict]:
+def _choose_cache_entries(rows: tuple[dict, ...]) -> Run[tuple[dict, ...]]:
     """
-    Select a specific orphan cache entry to delete.
+    Select one or all orphan cache entries to delete.
     """
     if len(rows) == 1:
-        return pure(rows[0])
+        return pure((rows[0],))
 
     listing = "\n".join(
         f"  {i}. orphan_id={str(row.get('orphan_id') or '')} "
         f"cache_key={str(row.get('cache_key') or '')}"
         for i, row in enumerate(rows, start=1)
     )
-    return (
-        put_line("[F] Multiple orphan cache entries found. Choose one to delete:\n" + listing)
-        ^ input_number(PromptKey("delete_cache_entry_index"))
-    ) >> (
-        lambda selected: (
-            pure(rows[selected - 1])
+
+    def _parse_selection(raw_value: str) -> Run[tuple[dict, ...]]:
+        value = raw_value.strip()
+        if value == "0":
+            return pure(tuple())
+        if value.lower() == "all":
+            return pure(rows)
+        try:
+            selected = int(value)
+        except ValueError:
+            return put_line("[F] Invalid orphan cache entry selection.") >> (
+                lambda _: _choose_cache_entries(rows)
+            )
+        return (
+            pure((rows[selected - 1],))
             if 1 <= selected <= len(rows)
-            else put_line("[F] Invalid orphan cache entry selection.") >> (lambda _: _choose_cache_entry(rows))
+            else put_line("[F] Invalid orphan cache entry selection.") >> (
+                lambda _: _choose_cache_entries(rows)
+            )
         )
-    )
+
+    return (
+        put_line(
+            "[F] Multiple orphan cache entries found. Choose one to delete, "
+            "type 'all', or enter 0 to go back:\n"
+            "  0. go back\n"
+            "  all. delete all entries\n"
+            + listing
+        )
+        ^ input_with_prompt(PromptKey("delete_cache_entry_index"))
+    ) >> (lambda selected: _parse_selection(str(selected)))
 
 def _delete_cache_entry(article: Article, row: dict) -> Run[None]:
     """
@@ -242,6 +263,16 @@ def _delete_cache_entry(article: Article, row: dict) -> Run[None]:
             f"(orphan_id={orphan_id}, cache_key={cache_key})."
         )
         ^ pure(None)
+    )
+
+def _delete_cache_entries(article: Article, rows: tuple[dict, ...]) -> Run[None]:
+    """
+    Delete one or more selected orphan adjudication cache entries.
+    """
+    if len(rows) == 0:
+        return pure(None)
+    return _delete_cache_entry(article, rows[0]) >> (
+        lambda _: _delete_cache_entries(article, rows[1:])
     )
 
 def _select_apply_action(article: Article, allow_cache_delete: bool = True) -> Run[NextStep]:
@@ -310,9 +341,9 @@ def _apply_action(
             )
         case FixAction.DELETE_ORPHAN_CACHE:
             return (
-                _choose_cache_entry(cache_rows)
-                >> (lambda selected: _delete_cache_entry(article, selected))
-                >> (lambda _: _select_apply_action(article, False))
+                _choose_cache_entries(cache_rows)
+                >> (lambda selected: _delete_cache_entries(article, selected))
+                >> (lambda _: _select_apply_action(article, allow_cache_delete))
             )
         case FixAction.QUIT:
             return pure(NextStep.QUIT)
