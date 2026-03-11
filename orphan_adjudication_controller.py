@@ -351,8 +351,10 @@ class IncidentRepresentativeCandidate:
     source_incident_idx: int | None
     midpoint_day: float | None
     day_gap: float
+    compat_count: int
     summary_cosine: float
     det_score: float
+    splink_match_weight: float | None
     anchor_hit_count: int
     query_variant: str
     query_variants: tuple[str, ...]
@@ -367,8 +369,10 @@ class IncidentRepresentativeCandidate:
             "source_incident_idx": self.source_incident_idx,
             "midpoint_day": self.midpoint_day,
             "day_gap": self.day_gap,
+            "compat_count": self.compat_count,
             "summary_cosine": self.summary_cosine,
             "det_score": self.det_score,
+            "splink_match_weight": self.splink_match_weight,
             "anchor_hit_count": self.anchor_hit_count,
             "query_variant": self.query_variant,
             "query_variants": list(self.query_variants),
@@ -522,6 +526,11 @@ class OrphanWork:
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _display_safe_id(raw: str | None) -> str:
+    """Render colon-delimited IDs with zero-width breaks for readable logs."""
+    return _safe_text(raw).replace(":", ":\u200b")
 
 
 def _canonical_json(payload: Any) -> str:
@@ -767,16 +776,6 @@ def _incident_idx_from_orphan_uid(uid: str) -> int | None:
         return None
     try:
         return int(parts[1])
-    except ValueError:
-        return None
-
-
-def _article_id_from_uid(uid: str) -> int | None:
-    parts = _safe_text(uid).split(":")
-    if len(parts) < 1:
-        return None
-    try:
-        return int(parts[0])
     except ValueError:
         return None
 
@@ -1047,19 +1046,6 @@ def _candidate_source_article_id(row: dict[str, Any]) -> int | None:
                 continue
 
     return None
-
-
-def _source_incident_idx_from_entity_uid_for_article(
-    entity_uid: str, source_article_id: int | None
-) -> int | None:
-    uid_article_id = _article_id_from_uid(entity_uid)
-    if (
-        uid_article_id is None
-        or source_article_id is None
-        or uid_article_id != source_article_id
-    ):
-        return None
-    return _incident_idx_from_orphan_uid(entity_uid)
 
 
 def _incident_key_from_candidate(
@@ -3111,12 +3097,206 @@ def _entities_for_articles_group_run_v2(
     )
 
 
+def _score_group_candidates_for_orphan_run_v2(
+    orphan_id: str, candidates: Array[C2Candidate]
+) -> Run[Array[C2Candidate]]:
+    if candidates.length == 0:
+        return pure(Array.empty())
+    values_sql = ",".join("(?, ?, ?, ?, ?)" for _ in candidates)
+    params: list[Any] = []
+    for candidate in candidates:
+        params.extend(
+            (
+                candidate.entity_uid,
+                candidate.source_article_id,
+                candidate.source_incident_idx,
+                candidate.query_variant,
+                candidate.midpoint_day,
+            )
+        )
+    params.append(orphan_id)
+
+    def _attach_weights(
+        scored_candidates: Array[C2Candidate],
+    ) -> Run[Array[C2Candidate]]:
+        def _finalize(weights: dict[str, float]) -> Run[Array[C2Candidate]]:
+            return pure(
+                Array.make(
+                    tuple(
+                        C2Candidate(
+                            entity_uid=candidate.entity_uid,
+                            source_article_id=candidate.source_article_id,
+                            source_incident_idx=candidate.source_incident_idx,
+                            midpoint_day=candidate.midpoint_day,
+                            day_gap=candidate.day_gap,
+                            compat_count=candidate.compat_count,
+                            summary_cosine=candidate.summary_cosine,
+                            det_score=candidate.det_score,
+                            query_variant=candidate.query_variant,
+                            splink_match_weight=weights.get(candidate.entity_uid),
+                        )
+                        for candidate in scored_candidates
+                    )
+                )
+            )
+
+        return _score_c2_candidate_weights_run_v2(orphan_id, scored_candidates) >> (
+            _finalize
+        )
+
+    return (
+        _query_rows_run_v2(
+            f"""
+        WITH candidate_entities(
+          entity_uid,
+          source_article_id,
+          source_incident_idx,
+          query_variant,
+          midpoint_day
+        ) AS (
+          SELECT * FROM (VALUES {values_sql})
+        ),
+        o AS (
+          SELECT *
+          FROM orphan_link_input
+          WHERE unique_id = ?
+        )
+        SELECT DISTINCT
+          c.entity_uid,
+          c.source_article_id,
+          c.source_incident_idx,
+          c.query_variant,
+          c.midpoint_day,
+          ABS(
+            COALESCE(CAST(e.midpoint_day AS DOUBLE), 0)
+            - COALESCE(o.midpoint_day, 0)
+          ) AS day_gap,
+          CASE WHEN e.victim_sex = o.victim_sex THEN 1 ELSE 0 END AS sex_match,
+          CASE WHEN e.weapon = o.weapon THEN 1 ELSE 0 END AS weapon_match,
+          CASE
+            WHEN e.circumstance = o.circumstance THEN 1 ELSE 0
+          END AS circumstance_match,
+          array_cosine_similarity(e.summary_vec, o.summary_vec) AS summary_cosine
+        FROM candidate_entities c
+        JOIN entity_link_input e
+          ON e.unique_id = c.entity_uid
+        CROSS JOIN o;
+        """,
+            _sql_params(tuple(params)),
+        )
+        >> (
+            lambda rows: pure(
+                Array.make(
+                    tuple(
+                        C2Candidate(
+                            entity_uid=_safe_text(row.get("entity_uid")),
+                            source_article_id=(
+                                _as_int(row.get("source_article_id"), 0)
+                                if row.get("source_article_id") is not None
+                                else None
+                            ),
+                            source_incident_idx=(
+                                _as_int(row.get("source_incident_idx"), 0)
+                                if row.get("source_incident_idx") is not None
+                                else None
+                            ),
+                            midpoint_day=(
+                                _as_float(row.get("midpoint_day"), 0.0)
+                                if row.get("midpoint_day") is not None
+                                else None
+                            ),
+                            day_gap=_as_float(row.get("day_gap"), 9999.0),
+                            compat_count=_as_int(row.get("sex_match"), 0)
+                            + _as_int(row.get("weapon_match"), 0)
+                            + _as_int(row.get("circumstance_match"), 0),
+                            summary_cosine=_as_float(row.get("summary_cosine"), 0.0),
+                            det_score=1.2
+                            + 0.8
+                            * (
+                                _as_int(row.get("sex_match"), 0)
+                                + _as_int(row.get("weapon_match"), 0)
+                                + _as_int(row.get("circumstance_match"), 0)
+                            )
+                            + 1.7 * _as_float(row.get("summary_cosine"), 0.0)
+                            - 0.01 * _as_float(row.get("day_gap"), 9999.0),
+                            query_variant=_safe_text(row.get("query_variant")),
+                        )
+                        for row in rows
+                    )
+                )
+            )
+        )
+    ) >> _attach_weights
+
+
+def _aggregate_group_c2_candidates_v2(
+    per_orphan_rows: Array[Array[C2Candidate]],
+) -> Array[C2Candidate]:
+    by_candidate: dict[tuple[str, int | None, int | None, str], dict[str, Any]] = {}
+    for candidate_rows in per_orphan_rows:
+        for candidate in candidate_rows:
+            key = (
+                candidate.entity_uid,
+                candidate.source_article_id,
+                candidate.source_incident_idx,
+                candidate.query_variant,
+            )
+            existing = by_candidate.get(key)
+            if existing is None:
+                by_candidate[key] = {
+                    "best_det_candidate": candidate,
+                    "splink_match_weight": candidate.splink_match_weight,
+                }
+                continue
+            best_det_candidate = cast(C2Candidate, existing["best_det_candidate"])
+            if candidate.det_score > best_det_candidate.det_score:
+                existing["best_det_candidate"] = candidate
+            row_weight = candidate.splink_match_weight
+            existing_weight = existing.get("splink_match_weight")
+            if row_weight is not None and (
+                existing_weight is None
+                or _as_float(row_weight, 0.0) > _as_float(existing_weight, 0.0)
+            ):
+                existing["splink_match_weight"] = row_weight
+
+    aggregated = [
+        C2Candidate(
+            entity_uid=record["best_det_candidate"].entity_uid,
+            source_article_id=record["best_det_candidate"].source_article_id,
+            source_incident_idx=record["best_det_candidate"].source_incident_idx,
+            midpoint_day=record["best_det_candidate"].midpoint_day,
+            day_gap=record["best_det_candidate"].day_gap,
+            compat_count=record["best_det_candidate"].compat_count,
+            summary_cosine=record["best_det_candidate"].summary_cosine,
+            det_score=record["best_det_candidate"].det_score,
+            query_variant=record["best_det_candidate"].query_variant,
+            splink_match_weight=record.get("splink_match_weight"),
+        )
+        for record in by_candidate.values()
+    ]
+    aggregated.sort(
+        key=lambda candidate: (
+            -candidate.det_score,
+            -_as_float(candidate.splink_match_weight, float("-inf")),
+            -candidate.summary_cosine,
+            -candidate.compat_count,
+            candidate.day_gap,
+            candidate.entity_uid,
+            candidate.query_variant,
+        )
+    )
+    return Array.make(tuple(aggregated))
+
+
 def _candidate_incident_rows_run_v2(
-    group_dossier: GroupDossier, candidates: Array[C2Candidate]
+    candidates: Array[C2Candidate],
 ) -> Run[list[dict[str, Any]]]:
     incident_map: dict[tuple[int | None, int | None], dict[str, Any]] = {}
     for candidate in candidates:
-        if candidate.source_article_id is None or candidate.source_incident_idx is None:
+        if (
+            candidate.source_article_id is None
+            or candidate.source_incident_idx is None
+        ):
             continue
         incident_key = (candidate.source_article_id, candidate.source_incident_idx)
         existing = incident_map.get(incident_key)
@@ -3130,6 +3310,8 @@ def _candidate_incident_rows_run_v2(
                 "eligible_entity_uids": (
                     [] if candidate.entity_uid == "" else [candidate.entity_uid]
                 ),
+                "best_det_candidate": candidate,
+                "max_splink_match_weight": candidate.splink_match_weight,
             }
             continue
         if (
@@ -3144,117 +3326,39 @@ def _candidate_incident_rows_run_v2(
             cast(list[str], existing["eligible_entity_uids"]).append(
                 candidate.entity_uid
             )
+        best_det_candidate = cast(C2Candidate, existing["best_det_candidate"])
+        if candidate.det_score > best_det_candidate.det_score:
+            existing["best_det_candidate"] = candidate
+        candidate_weight = candidate.splink_match_weight
+        existing_weight = existing.get("max_splink_match_weight")
+        if candidate_weight is not None and (
+            existing_weight is None
+            or _as_float(candidate_weight, 0.0) > _as_float(existing_weight, 0.0)
+        ):
+            existing["max_splink_match_weight"] = candidate_weight
 
-    incident_rows = list(incident_map.values())
-    if len(incident_rows) == 0:
-        return pure([])
-
-    values_sql = ",".join("(?, ?)" for _ in incident_rows)
-    params: list[Any] = []
-    for row in incident_rows:
-        params.extend((row["source_article_id"], row["source_incident_idx"]))
-    target_article_id = group_dossier.article_id
-    target_incident_idx = group_dossier.incident_idx
-    target_midpoint_day = group_dossier.midpoint_day
-    params.extend(
-        (
-            target_article_id,
-            target_incident_idx,
-            target_midpoint_day,
-            target_article_id,
-            target_incident_idx,
-            target_article_id,
-            target_incident_idx,
-            target_article_id,
-            target_incident_idx,
-            target_article_id,
-            target_incident_idx,
-        )
-    )
-    return (
-        _query_rows_run_v2(
-            f"""
-        WITH candidate_incidents(source_article_id, source_incident_idx) AS (
-          SELECT * FROM (VALUES {values_sql})
-        )
-        SELECT
-          ci.source_article_id,
-          ci.source_incident_idx,
-          i.midpoint_day,
-          ABS(
-            COALESCE(CAST(i.midpoint_day AS DOUBLE), 0)
-            - COALESCE(
-              (
-                SELECT midpoint_day
-                FROM incidents_cached
-                WHERE article_id = ?
-                  AND incident_idx = ?
-                LIMIT 1
-              ),
-              ?,
-              0
-            )
-          ) AS day_gap,
-          CASE
-            WHEN i.summary_vec IS NOT NULL
-              AND (
-                SELECT summary_vec
-                FROM incidents_cached
-                WHERE article_id = ?
-                  AND incident_idx = ?
-                LIMIT 1
-              ) IS NOT NULL
-            THEN array_cosine_similarity(
-              i.summary_vec,
-              (
-                SELECT summary_vec
-                FROM incidents_cached
-                WHERE article_id = ?
-                  AND incident_idx = ?
-                LIMIT 1
-              )
-            )
-            ELSE 0.0
-          END AS summary_cosine
-        FROM candidate_incidents ci
-        JOIN incidents_cached i
-          ON i.article_id = ci.source_article_id
-         AND i.incident_idx = ci.source_incident_idx;
-        """,
-            _sql_params(tuple(params)),
-        )
-        >> (
-            lambda rows: pure(
-                [
-                    {
-                        **row,
-                        "query_variants": incident_map.get(
-                            (
-                                _as_int(row.get("source_article_id"), 0)
-                                if row.get("source_article_id") is not None
-                                else None,
-                                _as_int(row.get("source_incident_idx"), 0)
-                                if row.get("source_incident_idx") is not None
-                                else None,
-                            ),
-                            {},
-                        ).get("query_variants", []),
-                        "eligible_entity_uids": incident_map.get(
-                            (
-                                _as_int(row.get("source_article_id"), 0)
-                                if row.get("source_article_id") is not None
-                                else None,
-                                _as_int(row.get("source_incident_idx"), 0)
-                                if row.get("source_incident_idx") is not None
-                                else None,
-                            ),
-                            {},
-                        ).get("eligible_entity_uids", []),
-                    }
-                    for row in rows
-                ]
-            )
-        )
+    return pure(
+        [
+            {
+                "source_article_id": record["source_article_id"],
+                "source_incident_idx": record["source_incident_idx"],
+                "midpoint_day": cast(
+                    C2Candidate, record["best_det_candidate"]
+                ).midpoint_day,
+                "day_gap": cast(C2Candidate, record["best_det_candidate"]).day_gap,
+                "compat_count": cast(
+                    C2Candidate, record["best_det_candidate"]
+                ).compat_count,
+                "summary_cosine": cast(
+                    C2Candidate, record["best_det_candidate"]
+                ).summary_cosine,
+                "det_score": cast(C2Candidate, record["best_det_candidate"]).det_score,
+                "splink_match_weight": record.get("max_splink_match_weight"),
+                "query_variants": record["query_variants"],
+                "eligible_entity_uids": record["eligible_entity_uids"],
+            }
+            for record in incident_map.values()
+        ]
     )
 
 
@@ -3305,22 +3409,48 @@ def _incident_representatives_from_rows_v2(
                     else None
                 ),
                 "day_gap": day_gap,
+                "compat_count": _as_int(row.get("compat_count"), 0),
                 "summary_cosine": summary_cosine,
+                "det_score": _as_float(row.get("det_score"), 0.0),
+                "splink_match_weight": (
+                    _as_float(row.get("splink_match_weight"), 0.0)
+                    if row.get("splink_match_weight") is not None
+                    else None
+                ),
                 "query_variants": query_variants,
                 "eligible_entity_uids": eligible_entity_uids,
             }
             continue
 
-        existing["summary_cosine"] = max(
-            _as_float(existing.get("summary_cosine"), 0.0), summary_cosine
-        )
-        existing["day_gap"] = min(_as_float(existing.get("day_gap"), 9999.0), day_gap)
         for query_variant in query_variants:
             if query_variant not in existing["query_variants"]:
                 cast(list[str], existing["query_variants"]).append(query_variant)
         for entity_uid in eligible_entity_uids:
             if entity_uid not in existing["eligible_entity_uids"]:
                 cast(list[str], existing["eligible_entity_uids"]).append(entity_uid)
+        if _as_float(row.get("det_score"), 0.0) > _as_float(
+            existing.get("det_score"), 0.0
+        ):
+            existing["midpoint_day"] = (
+                _as_float(row.get("midpoint_day"), 0.0)
+                if row.get("midpoint_day") is not None
+                else None
+            )
+            existing["day_gap"] = day_gap
+            existing["compat_count"] = _as_int(row.get("compat_count"), 0)
+            existing["summary_cosine"] = summary_cosine
+            existing["det_score"] = _as_float(row.get("det_score"), 0.0)
+        row_splink = (
+            _as_float(row.get("splink_match_weight"), 0.0)
+            if row.get("splink_match_weight") is not None
+            else None
+        )
+        existing_splink = existing.get("splink_match_weight")
+        if row_splink is not None and (
+            existing_splink is None
+            or _as_float(row_splink, 0.0) > _as_float(existing_splink, 0.0)
+        ):
+            existing["splink_match_weight"] = row_splink
         sorted_entities = sorted(cast(list[str], existing["eligible_entity_uids"]))
         existing["entity_uid"] = sorted_entities[0] if len(sorted_entities) > 0 else ""
 
@@ -3331,12 +3461,13 @@ def _incident_representatives_from_rows_v2(
             source_incident_idx=cast(int | None, record.get("source_incident_idx")),
             midpoint_day=cast(float | None, record.get("midpoint_day")),
             day_gap=_as_float(record.get("day_gap"), 9999.0),
+            compat_count=_as_int(record.get("compat_count"), 0),
             summary_cosine=_as_float(record.get("summary_cosine"), 0.0),
-            det_score=(
-                1.2
-                + 0.6 * len(cast(list[str], record.get("query_variants") or []))
-                + 1.7 * _as_float(record.get("summary_cosine"), 0.0)
-                - 0.01 * _as_float(record.get("day_gap"), 9999.0)
+            det_score=_as_float(record.get("det_score"), 0.0),
+            splink_match_weight=(
+                _as_float(record.get("splink_match_weight"), 0.0)
+                if record.get("splink_match_weight") is not None
+                else None
             ),
             anchor_hit_count=len(cast(list[str], record.get("query_variants") or [])),
             query_variant=(
@@ -3355,8 +3486,10 @@ def _incident_representatives_from_rows_v2(
     representatives.sort(
         key=lambda candidate: (
             -candidate.det_score,
+            -_as_float(candidate.splink_match_weight, float("-inf")),
             -candidate.anchor_hit_count,
             -candidate.summary_cosine,
+            -candidate.compat_count,
             candidate.day_gap,
             _safe_text(candidate.entity_uid),
         )
@@ -4248,7 +4381,12 @@ def _rebuild_overrides_table_run_v2(
     )
 
 
-def _finalize_decision_run_v2(run_id: str, decision: CaseDecision) -> Run[CaseDecision]:
+def _finalize_decision_run_v2(
+    run_id: str,
+    decision: CaseDecision,
+    *,
+    display_matched_article: bool = True,
+) -> Run[CaseDecision]:
     decision_hash = _decision_hash_for_case(decision)
     stage_trace = decision.evidence_json.get("stage_trace")
     error_message = None
@@ -4273,9 +4411,88 @@ def _finalize_decision_run_v2(run_id: str, decision: CaseDecision) -> Run[CaseDe
             error_message=error_message,
         )
         ^ _cache_terminal_decision_run_v2(decision)
-        ^ _display_matched_article_run_v2(decision)
+        ^ (
+            _display_matched_article_run_v2(decision)
+            if display_matched_article
+            else pure(None)
+        )
         ^ pure(decision)
     )
+
+
+def _log_group_match_assignments_run_v2(
+    decisions: Array[CaseDecision],
+) -> Run[Any]:
+    """Log the final orphan-to-entity matches chosen for one processed group."""
+    matched = tuple(
+        decision
+        for decision in decisions
+        if decision.label == "matched"
+        and _safe_text(decision.resolved_entity_id) != ""
+    )
+    if len(matched) == 0:
+        return pure(None)
+    leader_orphan_id = decisions[0].orphan_id if decisions.length > 0 else ""
+    lines = [f"[K][{leader_orphan_id}] final_group_matches:"]
+    lines.extend(
+        f"  {_display_safe_id(decision.orphan_id)} -> "
+        f"{_display_safe_id(decision.resolved_entity_id)}"
+        for decision in matched
+    )
+    return put_line("\n".join(lines))
+
+
+def _display_group_matched_article_run_v2(
+    decisions: Array[CaseDecision],
+) -> Run[Any]:
+    """Display the matched source article once for a processed group."""
+    matched = tuple(
+        decision for decision in decisions if decision.label == "matched"
+    )
+    if len(matched) == 0:
+        return pure(None)
+    leader_orphan_id = decisions[0].orphan_id if decisions.length > 0 else ""
+    article_ids = tuple(
+        article_id
+        for article_id in (
+            _matched_article_id_from_decision(decision) for decision in matched
+        )
+        if article_id is not None
+    )
+    if len(article_ids) == 0:
+        return pure(None)
+    return put_line(f"[K][{leader_orphan_id}] Matched article:") ^ (
+        _display_article_by_id_run_v2(
+            leader_orphan_id,
+            article_ids[0],
+            empty_message="Matched article_id missing for display.",
+        )
+    )
+
+
+def _finalize_group_decisions_run_v2(
+    run_id: str,
+    decisions: Array[CaseDecision],
+) -> Run[Array[CaseDecision]]:
+    """Persist per-decision state, then emit one consolidated match log per group."""
+    if decisions.length == 0:
+        return pure(Array.empty())
+
+    def _display_group_outcome(
+        finalized: Array[CaseDecision],
+    ) -> Run[Array[CaseDecision]]:
+        return (
+            _log_group_match_assignments_run_v2(finalized)
+            ^ _display_group_matched_article_run_v2(finalized)
+            ^ pure(finalized)
+        )
+
+    return array_traverse_run(
+        decisions,
+        lambda decision: _finalize_decision_run_v2(
+            run_id, decision, display_matched_article=False
+        ),
+    ) >> _display_group_outcome
 
 
 def _processing_error_work_v2(
@@ -5011,20 +5228,30 @@ def _process_group_run_v2(
         def _build_representatives(
             grouped_candidates: Array[Array[C2Candidate]],
         ) -> Run[Array[CaseDecision]]:
-            flattened = Array.make(
+            base_candidates = Array.make(
                 tuple(
                     candidate
                     for candidate_group in grouped_candidates
                     for candidate in candidate_group
                 )
             )
-            return _candidate_incident_rows_run_v2(group_dossier, flattened) >> (
-                lambda incident_rows: _rank_group_candidates(
-                    group_dossier,
-                    valid_anchors,
-                    variants_used,
-                    flattened,
-                    _incident_representatives_from_rows_v2(incident_rows),
+            return array_traverse_run(
+                group,
+                lambda row: _score_group_candidates_for_orphan_run_v2(
+                    row.orphan_id, base_candidates
+                ),
+            ) >> (
+                lambda per_orphan_rows: _candidate_incident_rows_run_v2(
+                    _aggregate_group_c2_candidates_v2(per_orphan_rows)
+                )
+                >> (
+                    lambda incident_rows: _rank_group_candidates(
+                        group_dossier,
+                        valid_anchors,
+                        variants_used,
+                        _aggregate_group_c2_candidates_v2(per_orphan_rows),
+                        _incident_representatives_from_rows_v2(incident_rows),
+                    )
                 )
             )
 
@@ -5264,14 +5491,27 @@ def _run_pipeline_run(
                 readiness_rows, selected_ids
             ) >> _rebuild_from_decisions
 
+        def _flatten_finalized_groups(
+            finalized_groups: Array[Array[CaseDecision]],
+        ) -> Run[RunSummary]:
+            return _combine_cached_and_live_decisions(
+                Array.make(
+                    tuple(
+                        decision
+                        for finalized_group in finalized_groups
+                        for decision in finalized_group
+                    )
+                )
+            )
+
         return (
             array_traverse_run(
-                new_decisions,
-                lambda decision: _finalize_decision_run_v2(run_id, decision),
+                grouped_decisions,
+                lambda decisions: _finalize_group_decisions_run_v2(run_id, decisions),
             )
             if new_decisions.length > 0
             else pure(Array.empty())
-        ) >> _combine_cached_and_live_decisions
+        ) >> _flatten_finalized_groups
 
     return (
         _ensure_tables_run_v2()
