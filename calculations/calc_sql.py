@@ -635,15 +635,30 @@ def insert_gptresults_sql() -> str:
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """
 
-def latest_gptresults_sql() -> str:
+def latest_gptresults_sql(exclusion_count: int = 3) -> str:
     """
     SQL statement to return the most recent GPT result for an article.
+    """
+    placeholders = ", ".join("?" for _ in range(exclusion_count))
+    return """
+        SELECT *
+        FROM gptResults
+        WHERE RecordId = ?
+        AND COALESCE(PromptKey, '') NOT IN (""" + placeholders + """)
+        ORDER BY TimeStamp DESC, ResultId DESC
+        LIMIT 1
+    """
+
+
+def latest_gptresults_for_promptkey_sql() -> str:
+    """
+    SQL statement to return the most recent GPT result for an article/prompt key.
     """
     return """
         SELECT *
         FROM gptResults
         WHERE RecordId = ?
-        AND COALESCE(PromptKey, '') NOT IN (?, ?, ?)
+          AND PromptKey = ?
         ORDER BY TimeStamp DESC, ResultId DESC
         LIMIT 1
     """

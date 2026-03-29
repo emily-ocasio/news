@@ -33,6 +33,7 @@ class GPTModel(str, Enum):
     """OpenAI GPT model enumeration"""
     GPT_5_NANO = "gpt-5-nano"
     GPT_5_MINI = "gpt-5-mini"
+    GPT_5 = "gpt-5.1"
 
     @classmethod
     def from_string(cls, model_str: str) -> 'GPTModel | None':
@@ -61,6 +62,12 @@ class GPTModel(str, Enum):
                 return 0.025
             case GPTModel.GPT_5_MINI, GPTTokenType.OUTPUT:
                 return 2.0
+            case GPTModel.GPT_5, GPTTokenType.UNCACHED:
+                return 1.25
+            case GPTModel.GPT_5, GPTTokenType.CACHED:
+                return 0.125
+            case GPTModel.GPT_5, GPTTokenType.OUTPUT:
+                return 10.0
             case _:
                 raise ValueError(
                     f"Unknown model or token type: {self}, {token_type}")

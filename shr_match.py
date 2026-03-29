@@ -631,7 +631,8 @@ def match_article_to_shr_victims() -> Run[NextStep]:
                             WHEN LOWER(TRIM(Circumstance)) LIKE '%gambling%' THEN 'other felony related'
                             WHEN LOWER(TRIM(Circumstance)) LIKE '%sex offense%' THEN 'rape'
                             WHEN LOWER(TRIM(Circumstance)) LIKE '%police%' THEN 'felon killed by police'
-                            WHEN LOWER(TRIM(Circumstance)) LIKE '%private citizen%' THEN 'other'
+                            WHEN LOWER(TRIM(Circumstance)) LIKE '%private citizen%'
+                                THEN 'felon killed by private citizen'
                             WHEN LOWER(TRIM(Circumstance)) LIKE '%other%' THEN 'other'
                             ELSE 'undetermined'  -- Default to undetermined for unmapped values
                         END AS circumstance,

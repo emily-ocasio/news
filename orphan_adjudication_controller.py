@@ -15,9 +15,11 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal, cast
 
-from pydantic import BaseModel, ConfigDict, RootModel
+from pydantic import BaseModel, ConfigDict
 
+from appstate import user_name
 from article import Article
+from calculations import insert_gptresults_sql
 from menuprompts import NextStep
 from pymonad import (SQL, DbBackend, EnvKey, ErrorPayload, InputPrompt, Left,
                      Namespace, PromptKey, Right, Run, SQLParams, String, ask,
@@ -25,7 +27,7 @@ from pymonad import (SQL, DbBackend, EnvKey, ErrorPayload, InputPrompt, Left,
                      resolve_prompt_template, response_with_gpt_prompt,
                      run_except, splink_dedupe_job, sql_exec, sql_query, throw,
                      to_gpt_tuple, to_json, to_prompts, with_duckdb,
-                     with_models, with_namespace)
+                     view, with_models, with_namespace)
 from pymonad.array import Array
 from pymonad.openai import GPTModel, GPTResponseTuple
 from pymonad.run import fold_run
@@ -33,8 +35,8 @@ from pymonad.runsplink import PairsTableName, PredictionInputTableNames
 from pymonad.traverse import array_traverse_run
 from splink_types import SplinkType
 
-PASS1_MODEL = "gpt-5-mini"
-RANK_MODEL = "gpt-5-mini"
+PASS1_MODEL = "gpt-5.1"
+RANK_MODEL = "gpt-5"
 PASS1_MODEL_KEY = EnvKey("k_pass1_model")
 RANK_MODEL_KEY = EnvKey("k_rank_model")
 PASS1_PROMPT_VERSION = "k_pass1_v1"
@@ -43,23 +45,19 @@ PASS1_PROMPT_KEY = "k_pass1_anchor_prompt"
 RANK_PROMPT_KEY = "k_rank_candidate_prompt"
 E2E_CACHE_STAGE = "adjudication_e2e"
 
-HIGH_FREQ_ANCHOR_DOC_THRESHOLD = 120
+HIGH_FREQ_ANCHOR_DOC_THRESHOLD_PCT = 0.20
 MAX_FULLTEXT_CHARS = 24000
 MAX_MERGED_CANDIDATES_FOR_API2 = 20
+TOP_SCORE_UNION_ENTITY_LIMIT = 20
+ANCHOR_GATE_TOP_N = 5
+PER_ANCHOR_GATE_TOP_N = 3
 
 ORPHAN_ADJ_PROMPTS: dict[str, str | tuple[str, str] | tuple[str]] = {
     "k_limit": "Enter number of records requiring new API calls [0]: ",
     "k_start_after": "Starting after orphan_id (blank for none): ",
-    "k_group_same_incident": "Group same incident? [Y/n]: ",
-    "k_dry_run": "Dry run only (no overrides write)? [y/N]: ",
-    "k_full_backfill": "Full backfill (ignore limit)? [y/N]: ",
     PASS1_PROMPT_KEY: ("pmpt_69ab817541588196935eb8137e392df80334ac0c71d05cf6",),
     RANK_PROMPT_KEY: ("pmpt_69aca43ee474819681d1bc3980e5d87c05903d6db9bfe4e1",),
 }
-
-
-class WordSet(RootModel[list[str]]):
-    """A list of related search tokens for one retrieval variant."""
 
 
 class Anchor(BaseModel):
@@ -67,7 +65,7 @@ class Anchor(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     anchor_theme: str
-    variants: list[WordSet]
+    variants: list[str]
 
 
 class Pass1Response(BaseModel):
@@ -246,7 +244,6 @@ class ValidatedAnchor:
 
     anchor_text: str
     variants: tuple[str, ...]
-    variant_word_sets: tuple[tuple[str, ...], ...]
     doc_freq: int
 
     def to_dict(self) -> dict[str, Any]:
@@ -257,15 +254,16 @@ class ValidatedAnchor:
             "source_span": "",
             "incident_link_reason": "",
             "variants": list(self.variants),
-            "variant_word_sets": [list(words) for words in self.variant_word_sets],
             "doc_freq": self.doc_freq,
         }
 
 
 @dataclass(frozen=True)
 class C2QuerySpec:
-    """Display text plus safe SQLite FTS expression for one token bundle."""
+    """Display text plus safe SQLite FTS expression for one anchor family."""
 
+    anchor_text: str
+    variants: tuple[str, ...]
     display_text: str
     fts_query: str
 
@@ -282,7 +280,9 @@ class C2Candidate:
     compat_count: int
     summary_cosine: float
     det_score: float
+    anchor_text: str
     query_variant: str
+    query_variants: tuple[str, ...] = ()
     splink_match_weight: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -297,7 +297,9 @@ class C2Candidate:
             "compat_count": self.compat_count,
             "summary_cosine": self.summary_cosine,
             "det_score": self.det_score,
+            "anchor_text": self.anchor_text,
             "query_variant": self.query_variant,
+            "query_variants": list(self.query_variants),
             "stage_name": "C2",
             "splink_match_weight": self.splink_match_weight,
         }
@@ -356,6 +358,7 @@ class IncidentRepresentativeCandidate:
     det_score: float
     splink_match_weight: float | None
     anchor_hit_count: int
+    anchor_themes: tuple[str, ...]
     query_variant: str
     query_variants: tuple[str, ...]
     eligible_entity_uids: tuple[str, ...]
@@ -374,6 +377,7 @@ class IncidentRepresentativeCandidate:
             "det_score": self.det_score,
             "splink_match_weight": self.splink_match_weight,
             "anchor_hit_count": self.anchor_hit_count,
+            "anchor_themes": list(self.anchor_themes),
             "query_variant": self.query_variant,
             "query_variants": list(self.query_variants),
             "eligible_entity_uids": list(self.eligible_entity_uids),
@@ -481,6 +485,20 @@ class RunSummary:
     analysis_incomplete: int
     rebuilt_terminal_rows: int
     dry_run: bool
+
+
+@dataclass(frozen=True)
+class ArticleCacheRefreshSummary:
+    """Summary of one article-scoped forced adjudication cache refresh."""
+
+    article_id: int
+    orphan_rows: int
+    groups: int
+    cached_terminal: int
+    matched: int
+    not_same_person: int
+    insufficient_information: int
+    analysis_incomplete: int
 
 
 @dataclass(frozen=True)
@@ -628,11 +646,11 @@ def _format_pass1_response_for_display(response: Pass1Response) -> str:
         )
         lines.append('      "variants": [')
         variants = anchor.variants
-        for variant_index, word_set in enumerate(variants):
+        for variant_index, variant in enumerate(variants):
             suffix = "," if variant_index < len(variants) - 1 else ""
             lines.append(
                 "        "
-                + json.dumps(word_set.root, ensure_ascii=True)
+                + json.dumps(variant, ensure_ascii=True)
                 + suffix
             )
         lines.append("      ]")
@@ -649,22 +667,24 @@ def _truncate_article_text_for_display(text: str, *, limit: int = 100) -> str:
     return text[:limit] + "..."
 
 
-def _normalize_fts_bundle_token(token: str) -> str:
+def _normalize_fts_variant_token(token: str) -> str:
     cleaned = re.sub(r"\s+", " ", _safe_text(token)).strip()
     if cleaned == "":
         return ""
     return cleaned.replace('"', '""')
 
 
-def _build_fts_query_from_word_set(word_set: tuple[str, ...]) -> str:
+def _build_fts_or_query_from_variants(variants: tuple[str, ...]) -> str:
     tokens = [
         normalized
-        for normalized in (_normalize_fts_bundle_token(token) for token in word_set)
+        for normalized in (
+            _normalize_fts_variant_token(token) for token in variants
+        )
         if normalized != ""
     ]
     if len(tokens) == 0:
         return ""
-    return " AND ".join(f'"{token}"' for token in tokens)
+    return " OR ".join(f'"{token}"' for token in tokens)
 
 
 def _query_specs_from_validated_anchors(
@@ -672,16 +692,20 @@ def _query_specs_from_validated_anchors(
 ) -> Array[C2QuerySpec]:
     seen: dict[str, C2QuerySpec] = {}
     for anchor in valid_anchors:
-        for word_set in anchor.variant_word_sets:
-            display_text = " ".join(word_set).strip()
-            fts_query = _build_fts_query_from_word_set(word_set)
-            if display_text == "" or fts_query == "":
-                continue
-            if display_text not in seen:
-                seen[display_text] = C2QuerySpec(
-                    display_text=display_text,
-                    fts_query=fts_query,
-                )
+        display_text = (
+            f"{anchor.anchor_text}: "
+            + " OR ".join(variant for variant in anchor.variants if variant != "")
+        )
+        fts_query = _build_fts_or_query_from_variants(anchor.variants)
+        if display_text == "" or fts_query == "":
+            continue
+        if anchor.anchor_text not in seen:
+            seen[anchor.anchor_text] = C2QuerySpec(
+                anchor_text=anchor.anchor_text,
+                variants=anchor.variants,
+                display_text=display_text,
+                fts_query=fts_query,
+            )
     return Array.make(tuple(seen.values()))
 
 
@@ -1007,6 +1031,9 @@ def _case_fingerprint(
 
 
 def _decision_to_cache_payload(decision: CaseDecision) -> dict[str, Any]:
+    # pylint: disable=fixme
+    # TODO: simplify cached response_json to the minimum fields actually needed
+    # for replay and audit once the controller behavior stabilizes.
     return {
         "orphan_id": decision.orphan_id,
         "article_id": decision.article_id,
@@ -2442,6 +2469,19 @@ def _format_cache_readiness_summary_v2(rows: Array[CacheReadinessRow]) -> str:
     )
 
 
+def _article_queue_rows_run_v2(article_id: int) -> Run[Array[CacheReadinessRow]]:
+    """Return current [K]-eligible queue rows for a single article."""
+
+    def _filter_article_rows(
+        rows: Array[CacheReadinessRow],
+    ) -> Run[Array[CacheReadinessRow]]:
+        return pure(
+            Array.make(tuple(row for row in rows if row.article_id == article_id))
+        )
+
+    return _queue_universe_rows_run_v2() >> _filter_article_rows
+
+
 def _select_needs_api_rows_v2(
     rows: Array[CacheReadinessRow], params: KParams
 ) -> Array[CacheReadinessRow]:
@@ -2719,6 +2759,55 @@ def _log_api_usage_and_reasoning_run_v2(
     )
 
 
+def _save_gptresults_entry_run_v2(
+    article_id: int | None,
+    prompt_key: str,
+    variables: dict[str, str | None],
+    response_t: GPTResponseTuple,
+    format_type_name: str,
+) -> Run[Any]:
+    if article_id is None or article_id <= 0:
+        return pure(None)
+    usage = response_t.parsed.usage
+    output_json = response_t.parsed.output.model_dump_json(indent=2)
+    variables_json = json.dumps(variables, default=str, indent=2)
+    timestamp = String(datetime.now().isoformat())
+    model = String(usage.model_used.value if usage.model_used is not None else "")
+    return view(user_name) >> (
+        lambda user: ask() >> (
+            lambda env: resolve_prompt_template(env, PromptKey(prompt_key)) >> (
+                lambda prompt_template: sql_exec(
+                    SQL(insert_gptresults_sql()),
+                    SQLParams(
+                        (
+                            article_id,
+                            String(user),
+                            timestamp,
+                            String(prompt_key),
+                            String(prompt_template.id),
+                            (
+                                String(prompt_template.version)
+                                if prompt_template.version is not None
+                                else None
+                            ),
+                            String(variables_json),
+                            model,
+                            String(format_type_name),
+                            String(output_json),
+                            String(str(response_t.parsed.reasoning)),
+                            usage.input_tokens,
+                            usage.cached_tokens,
+                            usage.output_tokens,
+                            usage.reasoning_tokens,
+                            usage.cost(),
+                        )
+                    ),
+                )
+            )
+        )
+    )
+
+
 def _log_pass1_api_input_run_v2(orphan_id: str, payload: Pass1Request) -> Run[Any]:
     return put_line(f"[K][{orphan_id}] pass1_input_variables:") ^ put_line(
         _pretty_json(payload.to_display_payload())
@@ -2748,6 +2837,7 @@ def _call_pass1_run_v2(request: Pass1Request) -> Run[GPTResponseTuple]:
             Pass1Response,
             PASS1_MODEL_KEY,
             effort="low",
+            verbosity="low",
             stream=False,
         )
     ) >> _require_gpt_tuple_v2
@@ -2761,7 +2851,7 @@ def _call_rank_run_v2(request: RankRequest) -> Run[GPTResponseTuple]:
             cast(dict[str, str | None], request.to_prompt_variables()),
             RankResponse,
             RANK_MODEL_KEY,
-            effort="low",
+            effort="medium",
             stream=False,
         )
     ) >> _require_gpt_tuple_v2
@@ -2786,90 +2876,128 @@ def _anchor_doc_frequency_run_v2(anchor_text: str) -> Run[int]:
     )
 
 
+def _anchor_doc_threshold_run_v2() -> Run[int]:
+    return (
+        _query_rows_run_v2(
+            """
+        SELECT COUNT(*) AS n
+        FROM articles
+        WHERE Dataset='CLASS_WP'
+          AND gptClass='M';
+        """,
+            sqlite=True,
+        )
+        >> (
+            lambda rows: pure(
+                max(
+                    1,
+                    int(
+                        (int(rows[0].get("n") or 0) if len(rows) > 0 else 0)
+                        * HIGH_FREQ_ANCHOR_DOC_THRESHOLD_PCT
+                    ),
+                )
+            )
+        )
+    )
+
+
 def _validate_anchors_run_v2(
     pass1: Pass1Response,
 ) -> Run[tuple[Array[ValidatedAnchor], Array[str], list[str]]]:
     anchor_array = Array.make(tuple(pass1.anchors))
     init: tuple[list[ValidatedAnchor], list[str], list[str]] = ([], [], [])
 
-    def _step(
-        acc: tuple[list[ValidatedAnchor], list[str], list[str]], anchor: Anchor
-    ) -> Run[tuple[list[ValidatedAnchor], list[str], list[str]]]:
-        valid, variants, failures = acc
-        anchor_text = _safe_text(anchor.anchor_theme).strip()
-        if _norm(anchor_text) == "":
-            return pure((valid, variants, failures + ["empty_anchor"]))
-        raw_sets = [
-            tuple(
-                _safe_text(word).strip()
-                for word in word_set.root
-                if _safe_text(word).strip() != ""
-            )
-            for word_set in anchor.variants
-        ]
-        deduped_sets = [
-            word_set for word_set in dict.fromkeys(raw_sets) if len(word_set) > 0
-        ]
-        filtered_variants = [
-            " ".join(word_set).strip()
-            for word_set in deduped_sets
-            if _norm(" ".join(word_set).strip()) != ""
-        ]
-        def _build_anchor_result(
-            doc_freq: int,
-        ) -> tuple[list[ValidatedAnchor], list[str], list[str]]:
-            if doc_freq > HIGH_FREQ_ANCHOR_DOC_THRESHOLD:
-                return (
-                    valid,
-                    variants,
-                    failures + [f"high_freq_anchor:{anchor_text[:40]}:{doc_freq}"],
-                )
-            return (
-                valid
-                + [
-                    ValidatedAnchor(
-                        anchor_text=anchor_text,
-                        variants=tuple(
-                            filtered_variants
-                            if len(filtered_variants) > 0
-                            else [anchor_text]
-                        ),
-                        variant_word_sets=tuple(
-                            deduped_sets
-                            if len(filtered_variants) > 0
-                            else [(anchor_text,)]
-                        ),
-                        doc_freq=doc_freq,
-                    )
-                ],
-                variants
-                + (
-                    filtered_variants
-                    if len(filtered_variants) > 0
-                    else [anchor_text]
-                ),
-                failures,
-            )
-        return _anchor_doc_frequency_run_v2(anchor_text) >> (
-            lambda doc_freq: pure(_build_anchor_result(doc_freq))
-        )
-
-    def _finalize_anchor_validation(
-        result: tuple[list[ValidatedAnchor], list[str], list[str]]
+    def _validate_with_threshold(
+        high_freq_anchor_doc_threshold: int,
     ) -> Run[tuple[Array[ValidatedAnchor], Array[str], list[str]]]:
-        return pure(
-            (
-                Array.make(tuple(result[0])),
-                Array.make(tuple(dict.fromkeys(result[1]))),
-                result[2]
-                + (["no_valid_anchors"] if len(result[0]) < 1 else [])
-                + (["no_query_variants"] if len(result[1]) < 1 else []),
+        def _step(
+            acc: tuple[list[ValidatedAnchor], list[str], list[str]], anchor: Anchor
+        ) -> Run[tuple[list[ValidatedAnchor], list[str], list[str]]]:
+            valid, variants, failures = acc
+            anchor_text = _safe_text(anchor.anchor_theme).strip()
+            if _norm(anchor_text) == "":
+                return pure((valid, variants, failures + ["empty_anchor"]))
+            raw_variants = tuple(
+                dict.fromkeys(
+                    _safe_text(variant).strip()
+                    for variant in anchor.variants
+                    if _norm(_safe_text(variant).strip()) != ""
+                )
             )
-        )
+            if len(raw_variants) == 0:
+                return pure(
+                    (
+                        valid,
+                        variants,
+                        failures + [f"no_valid_variants:{anchor_text}"],
+                    )
+                )
 
-    return (
-        fold_run(anchor_array, init, _step) if anchor_array.length > 0 else pure(init)
-    ) >> _finalize_anchor_validation
+            def _build_anchor_result(
+                variant_doc_freqs: Array[int],
+            ) -> Run[tuple[list[ValidatedAnchor], list[str], list[str]]]:
+                accepted: list[str] = []
+                filtered_failures = list(failures)
+                min_doc_freq = high_freq_anchor_doc_threshold + 1
+                for variant, doc_freq in zip(
+                    raw_variants, variant_doc_freqs.a, strict=False
+                ):
+                    if doc_freq > high_freq_anchor_doc_threshold:
+                        filtered_failures.append(
+                            "high_freq_variant:"
+                            f"{anchor_text[:40]}:{variant[:40]}:{doc_freq}"
+                        )
+                        continue
+                    accepted.append(variant)
+                    min_doc_freq = min(min_doc_freq, doc_freq)
+                if len(accepted) == 0:
+                    return pure(
+                        (
+                            valid,
+                            variants,
+                            filtered_failures
+                            + [f"no_valid_variants:{anchor_text}"],
+                        )
+                    )
+                return pure(
+                    (
+                        valid
+                        + [
+                            ValidatedAnchor(
+                                anchor_text=anchor_text,
+                                variants=tuple(accepted),
+                                doc_freq=min_doc_freq,
+                            )
+                        ],
+                        variants + accepted,
+                        filtered_failures,
+                    )
+                )
+
+            return array_traverse_run(
+                Array.make(raw_variants), _anchor_doc_frequency_run_v2
+            ) >> _build_anchor_result
+
+        def _finalize_anchor_validation(
+            result: tuple[list[ValidatedAnchor], list[str], list[str]]
+        ) -> Run[tuple[Array[ValidatedAnchor], Array[str], list[str]]]:
+            return pure(
+                (
+                    Array.make(tuple(result[0])),
+                    Array.make(tuple(dict.fromkeys(result[1]))),
+                    result[2]
+                    + (["no_valid_anchors"] if len(result[0]) < 1 else [])
+                    + (["no_query_variants"] if len(result[1]) < 1 else []),
+                )
+            )
+
+        return (
+            fold_run(anchor_array, init, _step)
+            if anchor_array.length > 0
+            else pure(init)
+        ) >> _finalize_anchor_validation
+
+    return _anchor_doc_threshold_run_v2() >> _validate_with_threshold
 
 
 def _fts_article_hits_query_run_v2(match_q: str, limit_n: int) -> Run[Array[int]]:
@@ -2916,6 +3044,56 @@ def _fts_article_hits_run_v2(fts_query: str, limit_n: int = 60) -> Run[Array[int
     return run_except(_fts_article_hits_query_run_v2(fts_query, limit_n)) >> (
         _handle_fts_query_result
     )
+
+
+def _matched_variants_for_articles_run_v2(
+    article_ids: Array[int], variants: tuple[str, ...]
+) -> Run[dict[int, tuple[str, ...]]]:
+    if article_ids.length == 0 or len(variants) == 0:
+        return pure({})
+    values_sql = ",".join("(?)" for _ in article_ids)
+
+    def _build_variant_hits(rows: Array[Any]) -> Run[dict[int, tuple[str, ...]]]:
+        matched: dict[int, tuple[str, ...]] = {}
+        normalized_variants = tuple(
+            variant for variant in variants if _norm(variant) != ""
+        )
+        for row in rows:
+            record_id = (
+                _as_int(row.get("RecordId"), 0)
+                if row.get("RecordId") is not None
+                else 0
+            )
+            if record_id <= 0:
+                continue
+            text = _norm(_safe_text(row.get("FullText")))
+            matched_variants = tuple(
+                variant
+                for variant in normalized_variants
+                if _norm(variant) != "" and _norm(variant) in text
+            )
+            matched[record_id] = (
+                matched_variants
+                if len(matched_variants) > 0
+                else normalized_variants
+            )
+        return pure(matched)
+
+    return _query_rows_run_v2(
+        f"""
+        WITH hits(article_id) AS (
+          SELECT * FROM (VALUES {values_sql})
+        )
+        SELECT a.RecordId, a.FullText
+        FROM hits h
+        JOIN articles a
+          ON a.RecordId = h.article_id
+        WHERE a.Dataset = 'CLASS_WP'
+          AND a.gptClass = 'M';
+        """,
+        _sql_params(article_ids.a),
+        sqlite=True,
+    ) >> (lambda rows: _build_variant_hits(Array.make(tuple(rows))))
 
 
 def _entities_for_articles_run_v2(
@@ -2987,7 +3165,9 @@ def _entities_for_articles_run_v2(
                             )
                             + 1.7 * _as_float(row.get("summary_cosine"), 0.0)
                             - 0.01 * _as_float(row.get("day_gap"), 9999.0),
+                            anchor_text=query_variant,
                             query_variant=query_variant,
+                            query_variants=(query_variant,),
                         )
                         for row in rows
                     )
@@ -2998,7 +3178,10 @@ def _entities_for_articles_run_v2(
 
 
 def _entities_for_articles_group_run_v2(
-    article_ids: Array[int], target_article_id: int | None, query_variant: str
+    article_ids: Array[int],
+    target_article_id: int | None,
+    anchor_text: str,
+    matched_variants_by_article: dict[int, tuple[str, ...]],
 ) -> Run[Array[C2Candidate]]:
     if article_ids.length == 0:
         return pure(Array.empty())
@@ -3087,7 +3270,23 @@ def _entities_for_articles_group_run_v2(
                             compat_count=0,
                             summary_cosine=0.0,
                             det_score=0.0,
-                            query_variant=query_variant,
+                            anchor_text=anchor_text,
+                            query_variant=(
+                                matched_variants_by_article.get(
+                                    _as_int(row.get("source_article_id"), 0), tuple()
+                                )[0]
+                                if len(
+                                    matched_variants_by_article.get(
+                                        _as_int(row.get("source_article_id"), 0),
+                                        tuple(),
+                                    )
+                                )
+                                > 0
+                                else anchor_text
+                            ),
+                            query_variants=matched_variants_by_article.get(
+                                _as_int(row.get("source_article_id"), 0), tuple()
+                            ),
                         )
                         for row in rows
                     )
@@ -3104,14 +3303,21 @@ def _score_group_candidates_for_orphan_run_v2(
         return pure(Array.empty())
     values_sql = ",".join("(?, ?, ?, ?, ?)" for _ in candidates)
     params: list[Any] = []
+    candidate_by_key: dict[
+        tuple[str, int | None, int | None, str, float | None], C2Candidate
+    ] = {}
     for candidate in candidates:
+        candidate_key = (
+            candidate.entity_uid,
+            candidate.source_article_id,
+            candidate.source_incident_idx,
+            candidate.query_variant,
+            candidate.midpoint_day,
+        )
+        candidate_by_key[candidate_key] = candidate
         params.extend(
             (
-                candidate.entity_uid,
-                candidate.source_article_id,
-                candidate.source_incident_idx,
-                candidate.query_variant,
-                candidate.midpoint_day,
+                *candidate_key,
             )
         )
     params.append(orphan_id)
@@ -3132,7 +3338,9 @@ def _score_group_candidates_for_orphan_run_v2(
                             compat_count=candidate.compat_count,
                             summary_cosine=candidate.summary_cosine,
                             det_score=candidate.det_score,
+                            anchor_text=candidate.anchor_text,
                             query_variant=candidate.query_variant,
+                            query_variants=candidate.query_variants,
                             splink_match_weight=weights.get(candidate.entity_uid),
                         )
                         for candidate in scored_candidates
@@ -3219,7 +3427,51 @@ def _score_group_candidates_for_orphan_run_v2(
                             )
                             + 1.7 * _as_float(row.get("summary_cosine"), 0.0)
                             - 0.01 * _as_float(row.get("day_gap"), 9999.0),
+                            anchor_text=candidate_by_key[
+                                (
+                                    _safe_text(row.get("entity_uid")),
+                                    (
+                                        _as_int(row.get("source_article_id"), 0)
+                                        if row.get("source_article_id") is not None
+                                        else None
+                                    ),
+                                    (
+                                        _as_int(row.get("source_incident_idx"), 0)
+                                        if row.get("source_incident_idx")
+                                        is not None
+                                        else None
+                                    ),
+                                    _safe_text(row.get("query_variant")),
+                                    (
+                                        _as_float(row.get("midpoint_day"), 0.0)
+                                        if row.get("midpoint_day") is not None
+                                        else None
+                                    ),
+                                )
+                            ].anchor_text,
                             query_variant=_safe_text(row.get("query_variant")),
+                            query_variants=candidate_by_key[
+                                (
+                                    _safe_text(row.get("entity_uid")),
+                                    (
+                                        _as_int(row.get("source_article_id"), 0)
+                                        if row.get("source_article_id") is not None
+                                        else None
+                                    ),
+                                    (
+                                        _as_int(row.get("source_incident_idx"), 0)
+                                        if row.get("source_incident_idx")
+                                        is not None
+                                        else None
+                                    ),
+                                    _safe_text(row.get("query_variant")),
+                                    (
+                                        _as_float(row.get("midpoint_day"), 0.0)
+                                        if row.get("midpoint_day") is not None
+                                        else None
+                                    ),
+                                )
+                            ].query_variants,
                         )
                         for row in rows
                     )
@@ -3232,20 +3484,23 @@ def _score_group_candidates_for_orphan_run_v2(
 def _aggregate_group_c2_candidates_v2(
     per_orphan_rows: Array[Array[C2Candidate]],
 ) -> Array[C2Candidate]:
-    by_candidate: dict[tuple[str, int | None, int | None, str], dict[str, Any]] = {}
+    by_candidate: dict[
+        tuple[str, int | None, int | None, str], dict[str, Any]
+    ] = {}
     for candidate_rows in per_orphan_rows:
         for candidate in candidate_rows:
             key = (
                 candidate.entity_uid,
                 candidate.source_article_id,
                 candidate.source_incident_idx,
-                candidate.query_variant,
+                candidate.anchor_text,
             )
             existing = by_candidate.get(key)
             if existing is None:
                 by_candidate[key] = {
                     "best_det_candidate": candidate,
                     "splink_match_weight": candidate.splink_match_weight,
+                    "query_variants": list(candidate.query_variants),
                 }
                 continue
             best_det_candidate = cast(C2Candidate, existing["best_det_candidate"])
@@ -3258,6 +3513,9 @@ def _aggregate_group_c2_candidates_v2(
                 or _as_float(row_weight, 0.0) > _as_float(existing_weight, 0.0)
             ):
                 existing["splink_match_weight"] = row_weight
+            for variant in candidate.query_variants:
+                if variant not in existing["query_variants"]:
+                    cast(list[str], existing["query_variants"]).append(variant)
 
     aggregated = [
         C2Candidate(
@@ -3269,7 +3527,13 @@ def _aggregate_group_c2_candidates_v2(
             compat_count=record["best_det_candidate"].compat_count,
             summary_cosine=record["best_det_candidate"].summary_cosine,
             det_score=record["best_det_candidate"].det_score,
-            query_variant=record["best_det_candidate"].query_variant,
+            anchor_text=record["best_det_candidate"].anchor_text,
+            query_variant=(
+                cast(list[str], record.get("query_variants") or [""])[0]
+                if len(cast(list[str], record.get("query_variants") or [])) > 0
+                else record["best_det_candidate"].anchor_text
+            ),
+            query_variants=tuple(cast(list[str], record.get("query_variants") or [])),
             splink_match_weight=record.get("splink_match_weight"),
         )
         for record in by_candidate.values()
@@ -3288,6 +3552,112 @@ def _aggregate_group_c2_candidates_v2(
     return Array.make(tuple(aggregated))
 
 
+def _group_weight_map_from_candidates_v2(
+    group: Array[CacheReadinessRow],
+    per_orphan_rows: Array[Array[C2Candidate]],
+) -> dict[str, dict[str, float]]:
+    """Build reusable orphan-to-entity Splink weights from pre-API2 C2 scoring."""
+    weight_by_orphan: dict[str, dict[str, float]] = {}
+    for row, candidate_rows in zip(group.a, per_orphan_rows.a, strict=False):
+        weights: dict[str, float] = {}
+        for candidate in candidate_rows:
+            if (
+                candidate.entity_uid != ""
+                and candidate.splink_match_weight is not None
+            ):
+                weights[candidate.entity_uid] = _as_float(
+                    candidate.splink_match_weight, 0.0
+                )
+        weight_by_orphan[row.orphan_id] = weights
+    return weight_by_orphan
+
+
+def _candidate_gate_key_v2(
+    candidate: C2Candidate,
+) -> tuple[str, int | None, int | None, str]:
+    return (
+        candidate.entity_uid,
+        candidate.source_article_id,
+        candidate.source_incident_idx,
+        candidate.anchor_text,
+    )
+
+
+def _top_candidates_with_ties_v2(
+    candidates: list[C2Candidate],
+    *,
+    score_fn: Any,
+    limit: int,
+) -> set[tuple[str, int | None, int | None, str]]:
+    if len(candidates) == 0:
+        return set()
+    ordered = sorted(
+        candidates,
+        key=lambda candidate: (
+            -_as_float(score_fn(candidate), float("-inf")),
+            candidate.entity_uid,
+            candidate.anchor_text,
+            candidate.query_variant,
+        ),
+    )
+    threshold_index = min(limit, len(ordered)) - 1
+    threshold = _as_float(score_fn(ordered[threshold_index]), float("-inf"))
+    return {
+        _candidate_gate_key_v2(candidate)
+        for candidate in ordered
+        if _as_float(score_fn(candidate), float("-inf")) >= threshold
+    }
+
+
+def _gate_group_candidates_for_api2_v2(
+    candidates: Array[C2Candidate],
+) -> Array[C2Candidate]:
+    if candidates.length == 0:
+        return Array.empty()
+    candidate_list = list(candidates)
+    selected_keys = (
+        _top_candidates_with_ties_v2(
+            candidate_list,
+            score_fn=lambda candidate: candidate.det_score,
+            limit=ANCHOR_GATE_TOP_N,
+        )
+        | _top_candidates_with_ties_v2(
+            candidate_list,
+            score_fn=lambda candidate: (
+                candidate.splink_match_weight
+                if candidate.splink_match_weight is not None
+                else float("-inf")
+            ),
+            limit=ANCHOR_GATE_TOP_N,
+        )
+    )
+    by_anchor: dict[str, list[C2Candidate]] = {}
+    for candidate in candidate_list:
+        by_anchor.setdefault(candidate.anchor_text, []).append(candidate)
+    for anchor_candidates in by_anchor.values():
+        selected_keys |= _top_candidates_with_ties_v2(
+            anchor_candidates,
+            score_fn=lambda candidate: candidate.det_score,
+            limit=PER_ANCHOR_GATE_TOP_N,
+        )
+        selected_keys |= _top_candidates_with_ties_v2(
+            anchor_candidates,
+            score_fn=lambda candidate: (
+                candidate.splink_match_weight
+                if candidate.splink_match_weight is not None
+                else float("-inf")
+            ),
+            limit=PER_ANCHOR_GATE_TOP_N,
+        )
+    return Array.make(
+        tuple(
+            candidate
+            for candidate in candidate_list
+            if _candidate_gate_key_v2(candidate) in selected_keys
+        )
+    )
+
+
 def _candidate_incident_rows_run_v2(
     candidates: Array[C2Candidate],
 ) -> Run[list[dict[str, Any]]]:
@@ -3304,9 +3674,10 @@ def _candidate_incident_rows_run_v2(
             incident_map[incident_key] = {
                 "source_article_id": candidate.source_article_id,
                 "source_incident_idx": candidate.source_incident_idx,
-                "query_variants": (
-                    [] if candidate.query_variant == "" else [candidate.query_variant]
+                "anchor_themes": (
+                    [] if candidate.anchor_text == "" else [candidate.anchor_text]
                 ),
+                "query_variants": list(candidate.query_variants),
                 "eligible_entity_uids": (
                     [] if candidate.entity_uid == "" else [candidate.entity_uid]
                 ),
@@ -3315,10 +3686,13 @@ def _candidate_incident_rows_run_v2(
             }
             continue
         if (
-            candidate.query_variant != ""
-            and candidate.query_variant not in existing["query_variants"]
+            candidate.anchor_text != ""
+            and candidate.anchor_text not in existing["anchor_themes"]
         ):
-            cast(list[str], existing["query_variants"]).append(candidate.query_variant)
+            cast(list[str], existing["anchor_themes"]).append(candidate.anchor_text)
+        for variant in candidate.query_variants:
+            if variant != "" and variant not in existing["query_variants"]:
+                cast(list[str], existing["query_variants"]).append(variant)
         if (
             candidate.entity_uid != ""
             and candidate.entity_uid not in existing["eligible_entity_uids"]
@@ -3354,6 +3728,7 @@ def _candidate_incident_rows_run_v2(
                 ).summary_cosine,
                 "det_score": cast(C2Candidate, record["best_det_candidate"]).det_score,
                 "splink_match_weight": record.get("max_splink_match_weight"),
+                "anchor_themes": record["anchor_themes"],
                 "query_variants": record["query_variants"],
                 "eligible_entity_uids": record["eligible_entity_uids"],
             }
@@ -3364,6 +3739,8 @@ def _candidate_incident_rows_run_v2(
 
 def _incident_representatives_from_rows_v2(
     rows: list[dict[str, Any]],
+    *,
+    limit: int | None = MAX_MERGED_CANDIDATES_FOR_API2,
 ) -> Array[IncidentRepresentativeCandidate]:
     by_incident: dict[str, dict[str, Any]] = {}
     for row in rows:
@@ -3386,6 +3763,11 @@ def _incident_representatives_from_rows_v2(
         query_variants = [
             _safe_text(value)
             for value in (row.get("query_variants") or [])
+            if _safe_text(value) != ""
+        ]
+        anchor_themes = [
+            _safe_text(value)
+            for value in (row.get("anchor_themes") or [])
             if _safe_text(value) != ""
         ]
         eligible_entity_uids = [
@@ -3417,10 +3799,15 @@ def _incident_representatives_from_rows_v2(
                     if row.get("splink_match_weight") is not None
                     else None
                 ),
+                "anchor_themes": anchor_themes,
                 "query_variants": query_variants,
                 "eligible_entity_uids": eligible_entity_uids,
             }
             continue
+
+        for anchor_theme in anchor_themes:
+            if anchor_theme not in existing["anchor_themes"]:
+                cast(list[str], existing["anchor_themes"]).append(anchor_theme)
 
         for query_variant in query_variants:
             if query_variant not in existing["query_variants"]:
@@ -3469,7 +3856,8 @@ def _incident_representatives_from_rows_v2(
                 if record.get("splink_match_weight") is not None
                 else None
             ),
-            anchor_hit_count=len(cast(list[str], record.get("query_variants") or [])),
+            anchor_hit_count=len(cast(list[str], record.get("anchor_themes") or [])),
+            anchor_themes=tuple(cast(list[str], record.get("anchor_themes") or [])),
             query_variant=(
                 cast(list[str], record.get("query_variants") or [""])[0]
                 if len(cast(list[str], record.get("query_variants") or [])) > 0
@@ -3494,7 +3882,11 @@ def _incident_representatives_from_rows_v2(
             _safe_text(candidate.entity_uid),
         )
     )
-    return Array.make(tuple(representatives[:MAX_MERGED_CANDIDATES_FOR_API2]))
+    return (
+        Array.make(tuple(representatives))
+        if limit is None
+        else Array.make(tuple(representatives[:limit]))
+    )
 
 
 def _incident_representative_rows_for_display_v2(
@@ -3698,6 +4090,254 @@ def _score_c2_candidate_weights_run_v2(
         return cleanup >> _build_weight_map
 
     return run_except(main) >> _finalize_splink_weight_scoring
+
+
+def _top_score_union_candidates_for_orphan_run_v2(
+    orphan_id: str,
+    target_article_id: int | None,
+) -> Run[Array[C2Candidate]]:
+    """Return the union of top det-score and top Splink-score entity memberships."""
+    settings = _settings_for_c2_weight_scoring(_load_dedupe_model_settings())
+    suffix = _sha256(f"top_score_union|{orphan_id}|{target_article_id}")[:12]
+    left_table = _sanitize_sql_identifier(f"adj_x_left_{suffix}", prefix="tmp")
+    right_table = _sanitize_sql_identifier(f"adj_x_right_{suffix}", prefix="tmp")
+    pairs_table = _sanitize_sql_identifier(f"adj_x_pairs_{suffix}", prefix="tmp")
+    params: tuple[Any, ...] = (orphan_id,)
+    exclusion_sql = (
+        "WHERE NOT list_contains("
+        "  string_split(COALESCE(e.article_ids_csv, ''), ','),"
+        "  CAST(? AS VARCHAR)"
+        ")"
+        if target_article_id is not None
+        else ""
+    )
+
+    main = (
+        sql_exec(
+            SQL(
+                f"""
+                CREATE OR REPLACE TEMP TABLE {left_table} AS
+                SELECT *
+                FROM entity_link_input e
+                {exclusion_sql};
+                """
+            ),
+            (
+                _sql_params((target_article_id,))
+                if target_article_id is not None
+                else _sql_params(())
+            ),
+        )
+        ^ sql_exec(
+            SQL(
+                f"CREATE OR REPLACE TEMP TABLE {right_table} AS SELECT * FROM"
+                " orphan_link_input WHERE unique_id = ?;"
+            ),
+            _sql_params((orphan_id,)),
+        )
+        ^ splink_dedupe_job(
+            input_table=PredictionInputTableNames((left_table, right_table)),
+            settings=settings,
+            predict_threshold=0.0,
+            cluster_threshold=0.0,
+            pairs_out=PairsTableName(pairs_table),
+            train_first=False,
+            skip_u_estimation=True,
+            visualize=False,
+            splink_key=SplinkType.ORPHAN_ADJ_SCORE,
+            inference_only=True,
+            capture_blocked_edges=False,
+        )
+        >> (
+            lambda _: _query_rows_run_v2(
+                f"""
+                WITH det_stats AS (
+                  SELECT
+                    l.unique_id AS entity_uid,
+                    l.midpoint_day AS midpoint_day,
+                    ABS(
+                      COALESCE(CAST(l.midpoint_day AS DOUBLE), 0)
+                      - COALESCE(r.midpoint_day, 0)
+                    ) AS day_gap,
+                    CASE WHEN l.victim_sex = r.victim_sex THEN 1 ELSE 0 END
+                      AS sex_match,
+                    CASE WHEN l.weapon = r.weapon THEN 1 ELSE 0 END
+                      AS weapon_match,
+                    CASE
+                      WHEN l.circumstance = r.circumstance THEN 1 ELSE 0
+                    END AS circumstance_match,
+                    array_cosine_similarity(l.summary_vec, r.summary_vec)
+                      AS summary_cosine,
+                    1.2
+                    + 0.8 * (
+                        CASE WHEN l.victim_sex = r.victim_sex THEN 1 ELSE 0 END
+                        + CASE WHEN l.weapon = r.weapon THEN 1 ELSE 0 END
+                        + CASE
+                            WHEN l.circumstance = r.circumstance THEN 1
+                            ELSE 0
+                          END
+                      )
+                    + 1.7 * array_cosine_similarity(l.summary_vec, r.summary_vec)
+                    - 0.01 * ABS(
+                        COALESCE(CAST(l.midpoint_day AS DOUBLE), 0)
+                        - COALESCE(r.midpoint_day, 0)
+                      ) AS det_score
+                  FROM {left_table} l
+                  CROSS JOIN {right_table} r
+                ),
+                splink_scores AS (
+                  SELECT
+                    CAST(unique_id_l AS VARCHAR) AS entity_uid,
+                    match_weight
+                  FROM {pairs_table}
+                  WHERE CAST(unique_id_r AS VARCHAR) = ?
+                ),
+                det_threshold AS (
+                  SELECT det_score
+                  FROM det_stats
+                  ORDER BY det_score DESC, entity_uid ASC
+                  LIMIT 1 OFFSET 19
+                ),
+                splink_threshold AS (
+                  SELECT match_weight
+                  FROM splink_scores
+                  ORDER BY match_weight DESC, entity_uid ASC
+                  LIMIT 1 OFFSET 19
+                ),
+                selected_entities AS (
+                  SELECT
+                    ds.entity_uid,
+                    'top_det' AS query_variant,
+                    COALESCE(ss.match_weight, 0.0) AS splink_match_weight
+                  FROM det_stats ds
+                  LEFT JOIN splink_scores ss
+                    ON ss.entity_uid = ds.entity_uid
+                  WHERE ds.det_score >= COALESCE(
+                    (SELECT det_score FROM det_threshold),
+                    -1e308
+                  )
+                  UNION ALL
+                  SELECT
+                    ds.entity_uid,
+                    'top_splink' AS query_variant,
+                    ss.match_weight AS splink_match_weight
+                  FROM det_stats ds
+                  JOIN splink_scores ss
+                    ON ss.entity_uid = ds.entity_uid
+                  WHERE ss.match_weight >= COALESCE(
+                    (SELECT match_weight FROM splink_threshold),
+                    -1e308
+                  )
+                ),
+                incident_memberships AS (
+                  SELECT DISTINCT
+                    m.victim_entity_id AS entity_uid,
+                    v.article_id AS source_article_id,
+                    v.incident_idx AS source_incident_idx
+                  FROM victim_entity_members m
+                  JOIN victims_cached_enh v
+                    ON v.victim_row_id = m.victim_row_id
+                  UNION
+                  SELECT DISTINCT
+                    CAST(fom.entity_uid AS VARCHAR) AS entity_uid,
+                    v.article_id AS source_article_id,
+                    v.incident_idx AS source_incident_idx
+                  FROM final_orphan_matches fom
+                  JOIN victims_cached_enh v
+                    ON CAST(fom.orphan_uid AS VARCHAR) = v.victim_row_id
+                )
+                SELECT DISTINCT
+                  se.entity_uid,
+                  im.source_article_id,
+                  im.source_incident_idx,
+                  ds.midpoint_day,
+                  ds.day_gap,
+                  (
+                    ds.sex_match + ds.weapon_match + ds.circumstance_match
+                  ) AS compat_count,
+                  ds.summary_cosine,
+                  ds.det_score,
+                  se.query_variant,
+                  se.splink_match_weight
+                FROM selected_entities se
+                JOIN det_stats ds
+                  ON ds.entity_uid = se.entity_uid
+                JOIN incident_memberships im
+                  ON im.entity_uid = se.entity_uid
+                ORDER BY
+                  ds.det_score DESC,
+                  se.splink_match_weight DESC,
+                  se.entity_uid ASC,
+                  im.source_article_id ASC,
+                  im.source_incident_idx ASC,
+                  se.query_variant ASC;
+                """,
+                _sql_params(params),
+            )
+        )
+    )
+    cleanup = (
+        sql_exec(SQL(f"DROP TABLE IF EXISTS {pairs_table};"))
+        ^ sql_exec(SQL(f"DROP TABLE IF EXISTS {left_table};"))
+        ^ sql_exec(SQL(f"DROP TABLE IF EXISTS {right_table};"))
+    )
+
+    def _finalize_top_score_union(result: Any) -> Run[Array[C2Candidate]]:
+        def _build_candidates(_: Any) -> Run[Array[C2Candidate]]:
+            if isinstance(result, Left):
+                return throw(
+                    ErrorPayload(
+                        "top_score_union_candidate_build_failed: "
+                        f"{_safe_text(result.l)}"
+                    )
+                )
+            return pure(
+                Array.make(
+                    tuple(
+                        C2Candidate(
+                            entity_uid=_safe_text(row.get("entity_uid")),
+                            source_article_id=(
+                                _as_int(row.get("source_article_id"), 0)
+                                if row.get("source_article_id") is not None
+                                else None
+                            ),
+                            source_incident_idx=(
+                                _as_int(row.get("source_incident_idx"), 0)
+                                if row.get("source_incident_idx") is not None
+                                else None
+                            ),
+                            midpoint_day=(
+                                _as_float(row.get("midpoint_day"), 0.0)
+                                if row.get("midpoint_day") is not None
+                                else None
+                            ),
+                            day_gap=_as_float(row.get("day_gap"), 9999.0),
+                            compat_count=_as_int(row.get("compat_count"), 0),
+                            summary_cosine=_as_float(
+                                row.get("summary_cosine"), 0.0
+                            ),
+                            det_score=_as_float(row.get("det_score"), 0.0),
+                            anchor_text=_safe_text(row.get("query_variant")),
+                            query_variant=_safe_text(row.get("query_variant")),
+                            query_variants=(
+                                (_safe_text(row.get("query_variant")),)
+                                if _safe_text(row.get("query_variant")) != ""
+                                else tuple()
+                            ),
+                            splink_match_weight=(
+                                _as_float(row.get("splink_match_weight"), 0.0)
+                                if row.get("splink_match_weight") is not None
+                                else None
+                            ),
+                        )
+                        for row in result.r
+                    )
+                )
+            )
+
+        return cleanup >> _build_candidates
+
+    return run_except(main) >> _finalize_top_score_union
 
 
 def _insert_candidates_run_v2(
@@ -4627,11 +5267,25 @@ def _process_single_orphan_run_v2(
                 ^ _build_rank_request_run_v2(dossier, merged)
             )
             >> (
-                lambda rank_request: _log_rank_api_input_run_v2(orphan_id, rank_request)
-                ^ put_line(f"[K][{orphan_id}] rank_api_call: start")
-                ^ _call_rank_run_v2(rank_request)
+                lambda rank_request: (
+                    _log_rank_api_input_run_v2(orphan_id, rank_request)
+                    ^ put_line(f"[K][{orphan_id}] rank_api_call: start")
+                    ^ _call_rank_run_v2(rank_request)
+                )
+                >> (
+                    lambda rank_t: _save_gptresults_entry_run_v2(
+                        dossier.article_id,
+                        RANK_PROMPT_KEY,
+                        cast(
+                            dict[str, str | None],
+                            rank_request.to_prompt_variables(),
+                        ),
+                        rank_t,
+                        "RankResponse",
+                    )
+                    ^ _build_ranked_work(rank_t)
+                )
             )
-            >> _build_ranked_work
         )
 
     def _candidate_stage(
@@ -4665,7 +5319,9 @@ def _process_single_orphan_run_v2(
                             compat_count=candidate.compat_count,
                             summary_cosine=candidate.summary_cosine,
                             det_score=candidate.det_score,
+                            anchor_text=candidate.anchor_text,
                             query_variant=candidate.query_variant,
+                            query_variants=candidate.query_variants,
                             splink_match_weight=weights.get(candidate.entity_uid),
                         )
                         for candidate in flattened
@@ -4818,6 +5474,16 @@ def _process_single_orphan_run_v2(
     ) -> Run[OrphanWork]:
         return (
             put_line(f"[K][{orphan_id}] pass1_api_call: completed")
+            ^ _save_gptresults_entry_run_v2(
+                dossier.article_id,
+                PASS1_PROMPT_KEY,
+                cast(
+                    dict[str, str | None],
+                    _build_pass1_request_v2(dossier).to_prompt_variables(),
+                ),
+                pass1_t,
+                "Pass1Response",
+            )
             ^ _log_api_usage_and_reasoning_run_v2(orphan_id, "pass1", pass1_t)
             ^ put_line(f"[K][{orphan_id}] pass1_result (api_call):")
             ^ put_line(
@@ -4839,7 +5505,10 @@ def _process_single_orphan_run_v2(
 
 
 def _process_group_run_v2(
-    run_id: str, group: Array[CacheReadinessRow]
+    run_id: str,
+    group: Array[CacheReadinessRow],
+    *,
+    candidate_strategy: str = "default",
 ) -> Run[Array[CaseDecision]]:
     if group.length == 0:
         return pure(Array.empty())
@@ -4848,6 +5517,7 @@ def _process_group_run_v2(
     leader_orphan_id = leader.orphan_id
     group_orphan_ids = tuple(row.orphan_id for row in group)
     group_key = _incident_group_key_from_orphan_id(leader_orphan_id)
+    strategy_is_top_score_union = candidate_strategy == "top_score_union"
 
     def _mark_group_in_progress() -> Run[Any]:
         return array_traverse_run(
@@ -5003,18 +5673,74 @@ def _process_group_run_v2(
             )
         )
 
+    def _build_pass1_stage_trace(
+        valid_anchor_count: int,
+        gate: str,
+        anchor_failures: list[str] | None = None,
+    ) -> dict[str, Any]:
+        stage_trace: dict[str, Any] = {
+            "stage": "pass1",
+            "row_count": valid_anchor_count,
+            "gate": gate,
+            "group_size": len(group_orphan_ids),
+        }
+        if strategy_is_top_score_union:
+            stage_trace["strategy"] = "top_score_union"
+        if anchor_failures:
+            stage_trace["anchor_failures"] = anchor_failures
+        return stage_trace
+
+    def _display_group_article_run(group_dossier: GroupDossier) -> Run[Any]:
+        return _display_article_run_v2(
+            _dossier_from_dict_v2(
+                {
+                    "unique_id": leader_orphan_id,
+                    "article_id": group_dossier.article_id,
+                    "city_id": group_dossier.city_id,
+                    "year": group_dossier.year,
+                    "month": group_dossier.month,
+                    "midpoint_day": group_dossier.midpoint_day,
+                    "date_precision": "",
+                    "incident_date": group_dossier.incident_date,
+                    "victim_count": group_dossier.victim_count,
+                    "weapon": "",
+                    "circumstance": "",
+                    "geo_address_norm": group_dossier.incident_location,
+                    "geo_address_short": "",
+                    "geo_address_short_2": "",
+                    "relationship": "",
+                    "incident_summary_gpt": group_dossier.incident_summary,
+                    "article_title": group_dossier.article_title,
+                    "article_text": group_dossier.article_text,
+                    "article_pub_date": group_dossier.article_pub_date,
+                }
+            )
+        )
+
     def _build_assignment_decisions(
         group_dossier: GroupDossier,
         valid_anchors: Array[ValidatedAnchor],
         variants_used: Array[str],
         representatives: Array[IncidentRepresentativeCandidate],
         ranked_candidates: list[dict[str, Any]],
+        weight_by_orphan: dict[str, dict[str, float]],
+        full_incident_rows: list[dict[str, Any]],
     ) -> Run[Array[CaseDecision]]:
         selected = ranked_candidates[0] if len(ranked_candidates) > 0 else {}
+        full_selected = next(
+            (
+                row
+                for row in full_incident_rows
+                if row.get("source_article_id") == selected.get("source_article_id")
+                and row.get("source_incident_idx")
+                == selected.get("source_incident_idx")
+            ),
+            selected,
+        )
         allowed_entities = tuple(
             sorted(
                 _safe_text(uid)
-                for uid in (selected.get("eligible_entity_uids") or [])
+                for uid in (full_selected.get("eligible_entity_uids") or [])
                 if _safe_text(uid) != ""
             )
         )
@@ -5024,89 +5750,61 @@ def _process_group_run_v2(
                     "selected_incident_has_no_eligible_entities_after_exclusion"
                 )
             )
-        entity_candidates = Array.make(
-            tuple(
-                C2Candidate(
-                    entity_uid=entity_uid,
-                    source_article_id=selected.get("source_article_id"),
-                    source_incident_idx=selected.get("source_incident_idx"),
-                    midpoint_day=None,
-                    day_gap=0.0,
-                    compat_count=0,
-                    summary_cosine=0.0,
-                    det_score=0.0,
-                    query_variant=_safe_text(selected.get("query_variant")),
-                )
-                for entity_uid in allowed_entities
-            )
+        assignment = _maximize_weight_assignment_v2(
+            group_orphan_ids, allowed_entities, weight_by_orphan
         )
-
-        def _collect_weight_maps(
-            weight_rows: Array[tuple[str, dict[str, float]]],
-        ) -> Run[Array[CaseDecision]]:
-            weight_by_orphan = dict(weight_rows)
-            assignment = _maximize_weight_assignment_v2(
-                group_orphan_ids, allowed_entities, weight_by_orphan
+        shared_stage_trace = [
+            _build_pass1_stage_trace(
+                valid_anchors.length,
+                "bypassed" if strategy_is_top_score_union else "pass",
+            ),
+            {"stage": "B", "row_count": 0, "gate": "bypassed"},
+            {"stage": "C", "row_count": 0, "gate": "bypassed"},
+            {
+                "stage": "C2",
+                "row_count": representatives.length,
+                "gate": "pass",
+            },
+            {
+                "stage": "rank",
+                "row_count": len(ranked_candidates),
+                "gate": "pass",
+            },
+            {
+                "stage": "assignment",
+                "row_count": len(assignment),
+                "gate": "pass",
+            },
+        ]
+        work_items = _build_shared_works(
+            article_id=group_dossier.article_id,
+            anchors=valid_anchors,
+            variants_used=variants_used,
+            ranked_candidates=ranked_candidates,
+            stage_trace=shared_stage_trace,
+            provisional_reason="matched incident selected but orphan unassigned",
+        )
+        assigned_candidates = {
+            orphan_id: _make_assignment_candidate_dict_v2(
+                entity_uid=entity_uid,
+                source_article_id=selected.get("source_article_id"),
+                source_incident_idx=selected.get("source_incident_idx"),
+                splink_match_weight=_as_float(
+                    weight_by_orphan.get(orphan_id, {}).get(entity_uid), 0.0
+                ),
+                ranked_incidents=ranked_candidates,
             )
-            shared_stage_trace = [
-                {
-                    "stage": "pass1",
-                    "row_count": valid_anchors.length,
-                    "gate": "pass",
-                    "group_size": len(group_orphan_ids),
-                },
-                {"stage": "B", "row_count": 0, "gate": "bypassed"},
-                {"stage": "C", "row_count": 0, "gate": "bypassed"},
-                {
-                    "stage": "C2",
-                    "row_count": representatives.length,
-                    "gate": "pass",
-                },
-                {
-                    "stage": "rank",
-                    "row_count": len(ranked_candidates),
-                    "gate": "pass",
-                },
-                {
-                    "stage": "assignment",
-                    "row_count": len(assignment),
-                    "gate": "pass",
-                },
-            ]
-            work_items = _build_shared_works(
-                article_id=group_dossier.article_id,
-                anchors=valid_anchors,
-                variants_used=variants_used,
-                ranked_candidates=ranked_candidates,
-                stage_trace=shared_stage_trace,
-                provisional_reason="matched incident selected but orphan unassigned",
-            )
-            assigned_candidates = {
-                orphan_id: _make_assignment_candidate_dict_v2(
-                    entity_uid=entity_uid,
-                    source_article_id=selected.get("source_article_id"),
-                    source_incident_idx=selected.get("source_incident_idx"),
-                    splink_match_weight=_as_float(
-                        weight_by_orphan.get(orphan_id, {}).get(entity_uid), 0.0
-                    ),
-                    ranked_incidents=ranked_candidates,
-                )
-                for orphan_id, entity_uid in assignment.items()
-            }
-            return _finalize_decisions_from_group_work(work_items, assigned_candidates)
-
-        return array_traverse_run(
-            group,
-            lambda row: _score_c2_candidate_weights_run_v2(
-                row.orphan_id, entity_candidates
-            ).map(lambda weights: (row.orphan_id, weights)),
-        ) >> _collect_weight_maps
+            for orphan_id, entity_uid in assignment.items()
+        }
+        return _finalize_decisions_from_group_work(work_items, assigned_candidates)
 
     def _finalize_rank_response(
         group_dossier: GroupDossier,
         valid_anchors: Array[ValidatedAnchor],
         variants_used: Array[str],
         representatives: Array[IncidentRepresentativeCandidate],
+        weight_by_orphan: dict[str, dict[str, float]],
+        full_incident_rows: list[dict[str, Any]],
         rank_t: GPTResponseTuple,
     ) -> Run[Array[CaseDecision]]:
         rank_response = cast(RankResponse, rank_t.parsed.output)
@@ -5118,12 +5816,10 @@ def _process_group_run_v2(
             not in {_safe_text(row.get("entity_uid")) for row in ranked}
         ]
         shared_stage_trace = [
-            {
-                "stage": "pass1",
-                "row_count": valid_anchors.length,
-                "gate": "pass",
-                "group_size": len(group_orphan_ids),
-            },
+            _build_pass1_stage_trace(
+                valid_anchors.length,
+                "bypassed" if strategy_is_top_score_union else "pass",
+            ),
             {"stage": "B", "row_count": 0, "gate": "bypassed"},
             {"stage": "C", "row_count": 0, "gate": "bypassed"},
             {"stage": "C2", "row_count": representatives.length, "gate": "pass"},
@@ -5161,6 +5857,8 @@ def _process_group_run_v2(
             variants_used,
             representatives,
             ranked_for_evidence,
+            weight_by_orphan,
+            full_incident_rows,
         )
 
     def _rank_group_candidates(
@@ -5169,21 +5867,37 @@ def _process_group_run_v2(
         variants_used: Array[str],
         c2_candidates: Array[C2Candidate],
         representatives: Array[IncidentRepresentativeCandidate],
+        weight_by_orphan: dict[str, dict[str, float]],
+        full_incident_rows: list[dict[str, Any]],
     ) -> Run[Array[CaseDecision]]:
+        c2_operation = (
+            "top_score_union" if strategy_is_top_score_union else "fts_variant_union"
+        )
+        c2_notes = (
+            f"top{TOP_SCORE_UNION_ENTITY_LIMIT}_det+"
+            f"top{TOP_SCORE_UNION_ENTITY_LIMIT}_splink_with_ties"
+            if strategy_is_top_score_union
+            else f"variants={variants_used.length}"
+        )
+        merge_notes = (
+            "full_top_score_union"
+            if strategy_is_top_score_union
+            else f"top{MAX_MERGED_CANDIDATES_FOR_API2}"
+        )
         return (
             _insert_shared_candidates(c2_candidates)
             ^ _insert_shared_representatives(representatives)
             ^ _log_shared_stage_metric(
                 "C2",
-                "fts_variant_union",
+                c2_operation,
                 c2_candidates.length,
-                f"variants={variants_used.length}",
+                c2_notes,
             )
             ^ _log_shared_stage_metric(
                 "merge",
                 "candidate_incident_merge",
                 representatives.length,
-                f"top{MAX_MERGED_CANDIDATES_FOR_API2}",
+                merge_notes,
             )
             ^ _log_anchor_and_candidates_run_v2(
                 leader_orphan_id,
@@ -5195,35 +5909,85 @@ def _process_group_run_v2(
             )
             ^ _build_rank_request_for_group_run_v2(group_dossier, representatives)
         ) >> (
-            lambda rank_request: _log_rank_api_input_run_v2(
-                leader_orphan_id, rank_request
+            lambda rank_request: (
+                _log_rank_api_input_run_v2(leader_orphan_id, rank_request)
+                ^ put_line(f"[K][{leader_orphan_id}] rank_api_call: start")
+                ^ _call_rank_run_v2(rank_request)
             )
-            ^ put_line(f"[K][{leader_orphan_id}] rank_api_call: start")
-            ^ _call_rank_run_v2(rank_request)
-        ) >> (
-            lambda rank_t: put_line(
-                f"[K][{leader_orphan_id}] rank_api_call: completed"
-            )
-            ^ _log_api_usage_and_reasoning_run_v2(leader_orphan_id, "rank", rank_t)
-            ^ put_line(f"[K][{leader_orphan_id}] rank_result (api_call):")
-            ^ put_line(
-                _pretty_json(
-                    json.loads(
-                        cast(RankResponse, rank_t.parsed.output).model_dump_json()
+            >> (
+                lambda rank_t: put_line(
+                    f"[K][{leader_orphan_id}] rank_api_call: completed"
+                )
+                ^ _save_gptresults_entry_run_v2(
+                    group_dossier.article_id,
+                    RANK_PROMPT_KEY,
+                    cast(
+                        dict[str, str | None],
+                        rank_request.to_prompt_variables(),
+                    ),
+                    rank_t,
+                    "RankResponse",
+                )
+                ^ _log_api_usage_and_reasoning_run_v2(
+                    leader_orphan_id, "rank", rank_t
+                )
+                ^ put_line(f"[K][{leader_orphan_id}] rank_result (api_call):")
+                ^ put_line(
+                    _pretty_json(
+                        json.loads(
+                            cast(
+                                RankResponse, rank_t.parsed.output
+                            ).model_dump_json()
+                        )
                     )
                 )
-            )
-            ^ _finalize_rank_response(
-                group_dossier, valid_anchors, variants_used, representatives, rank_t
+                ^ _finalize_rank_response(
+                    group_dossier,
+                    valid_anchors,
+                    variants_used,
+                    representatives,
+                    weight_by_orphan,
+                    full_incident_rows,
+                    rank_t,
+                )
             )
         )
+
+    def _rank_top_score_union_candidates(
+        group_dossier: GroupDossier,
+        per_orphan_rows: Array[Array[C2Candidate]],
+    ) -> Run[Array[CaseDecision]]:
+        aggregated_candidates = _aggregate_group_c2_candidates_v2(per_orphan_rows)
+        weight_by_orphan = _group_weight_map_from_candidates_v2(
+            group, per_orphan_rows
+        )
+
+        def _rank_with_rows(
+            full_incident_rows: list[dict[str, Any]],
+        ) -> Run[Array[CaseDecision]]:
+            return _rank_group_candidates(
+                group_dossier,
+                Array.empty(),
+                Array.empty(),
+                aggregated_candidates,
+                _incident_representatives_from_rows_v2(full_incident_rows, limit=None),
+                weight_by_orphan,
+                full_incident_rows,
+            )
+
+        return _candidate_incident_rows_run_v2(
+            aggregated_candidates
+        ) >> _rank_with_rows
 
     def _candidate_stage(
         group_dossier: GroupDossier,
         valid_anchors: Array[ValidatedAnchor],
-        variants_used: Array[str],
+        _variants_used: Array[str],
     ) -> Run[Array[CaseDecision]]:
         query_specs = _query_specs_from_validated_anchors(valid_anchors)
+        query_display_texts = Array.make(
+            tuple(query_spec.display_text for query_spec in query_specs)
+        )
 
         def _build_representatives(
             grouped_candidates: Array[Array[C2Candidate]],
@@ -5235,25 +5999,52 @@ def _process_group_run_v2(
                     for candidate in candidate_group
                 )
             )
+
+            def _rank_scored_group_candidates(
+                per_orphan_rows: Array[Array[C2Candidate]],
+            ) -> Run[Array[CaseDecision]]:
+                aggregated_candidates = _aggregate_group_c2_candidates_v2(
+                    per_orphan_rows
+                )
+                gated_candidates = _gate_group_candidates_for_api2_v2(
+                    aggregated_candidates
+                )
+                weight_by_orphan = _group_weight_map_from_candidates_v2(
+                    group, per_orphan_rows
+                )
+
+                def _rank_with_rows(
+                    full_incident_rows: list[dict[str, Any]],
+                ) -> Run[Array[CaseDecision]]:
+                    def _rank_incident_representatives(
+                        gated_incident_rows: list[dict[str, Any]],
+                    ) -> Run[Array[CaseDecision]]:
+                        return _rank_group_candidates(
+                            group_dossier,
+                            valid_anchors,
+                            query_display_texts,
+                            gated_candidates,
+                            _incident_representatives_from_rows_v2(
+                                gated_incident_rows
+                            ),
+                            weight_by_orphan,
+                            full_incident_rows,
+                        )
+
+                    return _candidate_incident_rows_run_v2(
+                        gated_candidates
+                    ) >> _rank_incident_representatives
+
+                return _candidate_incident_rows_run_v2(
+                    aggregated_candidates
+                ) >> _rank_with_rows
+
             return array_traverse_run(
                 group,
                 lambda row: _score_group_candidates_for_orphan_run_v2(
                     row.orphan_id, base_candidates
                 ),
-            ) >> (
-                lambda per_orphan_rows: _candidate_incident_rows_run_v2(
-                    _aggregate_group_c2_candidates_v2(per_orphan_rows)
-                )
-                >> (
-                    lambda incident_rows: _rank_group_candidates(
-                        group_dossier,
-                        valid_anchors,
-                        variants_used,
-                        _aggregate_group_c2_candidates_v2(per_orphan_rows),
-                        _incident_representatives_from_rows_v2(incident_rows),
-                    )
-                )
-            )
+            ) >> _rank_scored_group_candidates
 
         return (
             _log_shared_stage_metric("B", "bypassed", 0, "bypassed_focus_c2")
@@ -5265,10 +6056,17 @@ def _process_group_run_v2(
                         query_spec.fts_query, 60
                     )
                     >> (
-                        lambda article_ids: _entities_for_articles_group_run_v2(
-                            article_ids,
-                            group_dossier.article_id,
-                            query_spec.display_text,
+                        lambda article_ids: _matched_variants_for_articles_run_v2(
+                            article_ids, query_spec.variants
+                        )
+                        >> (
+                            lambda matched_variants_by_article:
+                            _entities_for_articles_group_run_v2(
+                                article_ids,
+                                group_dossier.article_id,
+                                query_spec.anchor_text,
+                                matched_variants_by_article,
+                            )
                         )
                     ),
                 )
@@ -5277,6 +6075,29 @@ def _process_group_run_v2(
             )
         ) >> _build_representatives
 
+    def _top_score_union_candidate_stage(
+        group_dossier: GroupDossier,
+    ) -> Run[Array[CaseDecision]]:
+        return (
+            _log_shared_stage_metric(
+                "pass1", "bypassed", 0, "strategy=top_score_union"
+            )
+            ^ _log_shared_stage_metric("B", "bypassed", 0, "bypassed_top_score_union")
+            ^ _log_shared_stage_metric("C", "bypassed", 0, "bypassed_top_score_union")
+            ^ put_line(
+                f"[K][{leader_orphan_id}] pass1_bypassed:"
+                " using top-score-union candidate strategy"
+            )
+            ^ array_traverse_run(
+                group,
+                lambda row: _top_score_union_candidates_for_orphan_run_v2(
+                    row.orphan_id, group_dossier.article_id
+                ),
+            )
+        ) >> (lambda per_orphan_rows: _rank_top_score_union_candidates(
+            group_dossier, per_orphan_rows
+        ))
+
     def _handle_validated_anchors(
         group_dossier: GroupDossier,
         valid_anchors: Array[ValidatedAnchor],
@@ -5284,23 +6105,21 @@ def _process_group_run_v2(
         anchor_failures: list[str],
     ) -> Run[Array[CaseDecision]]:
         shared_stage_trace = [
-            {
-                "stage": "pass1",
-                "row_count": valid_anchors.length,
-                    "gate": (
-                        "fail"
-                        if _pass1_gate_failed(
-                            [
-                                _validated_anchor_to_dict_v2(anchor)
-                                for anchor in valid_anchors
-                            ],
-                            anchor_failures,
-                        )
-                        else "pass"
+            _build_pass1_stage_trace(
+                valid_anchors.length,
+                (
+                    "fail"
+                    if _pass1_gate_failed(
+                        [
+                            _validated_anchor_to_dict_v2(anchor)
+                            for anchor in valid_anchors
+                        ],
+                        anchor_failures,
+                    )
+                    else "pass"
                 ),
-                "anchor_failures": anchor_failures,
-                "group_size": len(group_orphan_ids),
-            }
+                anchor_failures,
+            )
         ]
         return _log_shared_stage_metric(
             "pass1",
@@ -5337,39 +6156,28 @@ def _process_group_run_v2(
         )
 
     def _run_group_pipeline(group_dossier: GroupDossier) -> Run[Array[CaseDecision]]:
+        if strategy_is_top_score_union:
+            return (
+                _display_group_article_run(group_dossier)
+                ^ _top_score_union_candidate_stage(group_dossier)
+            )
+
         request = _build_pass1_request_for_group_v2(group_dossier)
         return (
-            _display_article_run_v2(
-                _dossier_from_dict_v2(
-                    {
-                        "unique_id": leader_orphan_id,
-                        "article_id": group_dossier.article_id,
-                        "city_id": group_dossier.city_id,
-                        "year": group_dossier.year,
-                        "month": group_dossier.month,
-                        "midpoint_day": group_dossier.midpoint_day,
-                        "date_precision": "",
-                        "incident_date": group_dossier.incident_date,
-                        "victim_count": group_dossier.victim_count,
-                        "weapon": "",
-                        "circumstance": "",
-                        "geo_address_norm": group_dossier.incident_location,
-                        "geo_address_short": "",
-                        "geo_address_short_2": "",
-                        "relationship": "",
-                        "incident_summary_gpt": group_dossier.incident_summary,
-                        "article_title": group_dossier.article_title,
-                        "article_text": group_dossier.article_text,
-                        "article_pub_date": group_dossier.article_pub_date,
-                    }
-                )
-            )
+            _display_group_article_run(group_dossier)
             ^ _log_pass1_api_input_run_v2(leader_orphan_id, request)
             ^ put_line(f"[K][{leader_orphan_id}] pass1_api_call: start")
             ^ _call_pass1_run_v2(request)
         ) >> (
             lambda pass1_t: put_line(
                 f"[K][{leader_orphan_id}] pass1_api_call: completed"
+            )
+            ^ _save_gptresults_entry_run_v2(
+                group_dossier.article_id,
+                PASS1_PROMPT_KEY,
+                cast(dict[str, str | None], request.to_prompt_variables()),
+                pass1_t,
+                "Pass1Response",
             )
             ^ _log_api_usage_and_reasoning_run_v2(leader_orphan_id, "pass1", pass1_t)
             ^ put_line(f"[K][{leader_orphan_id}] pass1_result (api_call):")
@@ -5647,6 +6455,7 @@ def _prompt_and_execute_k(
     limit_prompt = (
         f"Enter number of records requiring new API calls [{needs_api_total}]: "
     )
+
     def _collect_remaining_prompts(limit_raw: Any) -> Run[NextStep]:
         parsed_limit = _parse_limit(str(limit_raw), default=needs_api_total)
         if parsed_limit == 0:
@@ -5654,38 +6463,160 @@ def _prompt_and_execute_k(
                 NextStep.CONTINUE
             )
 
-        def _build_params(
-            start_after_raw: Any, group_raw: Any, dry_raw: Any, full_raw: Any
-        ) -> KParams:
+        def _build_params(start_after_raw: Any) -> KParams:
             return KParams(
                 limit=parsed_limit,
                 starting_after_orphan_id=str(start_after_raw).strip(),
-                group_same_incident=_parse_bool(str(group_raw), True),
-                dry_run=_parse_bool(str(dry_raw), False),
-                full_backfill=_parse_bool(str(full_raw), False),
+                group_same_incident=True,
+                dry_run=False,
+                full_backfill=False,
             )
 
         return input_with_prompt(PromptKey("k_start_after")) >> (
-            lambda start_after_raw: input_with_prompt(
-                PromptKey("k_group_same_incident")
-            )
-            >> (
-                lambda group_raw: input_with_prompt(PromptKey("k_dry_run"))
-                >> (
-                    lambda dry_raw: input_with_prompt(PromptKey("k_full_backfill"))
-                    >> (
-                        lambda full_raw: _execute_k(
-                            _build_params(
-                                start_after_raw, group_raw, dry_raw, full_raw
-                            ),
-                            readiness_rows,
-                        )
-                    )
-                )
+            lambda start_after_raw: _execute_k(
+                _build_params(start_after_raw), readiness_rows
             )
         )
 
     return input_with_prompt(InputPrompt(limit_prompt)) >> _collect_remaining_prompts
+
+
+def _cache_group_decisions_run_v2(
+    decisions: Array[CaseDecision],
+) -> Run[Array[CaseDecision]]:
+    """Persist terminal cache entries for one processed group and emit group logs."""
+    if decisions.length == 0:
+        return pure(Array.empty())
+
+    def _display_cached_group(
+        finalized: Array[CaseDecision],
+    ) -> Run[Array[CaseDecision]]:
+        return (
+            _log_group_match_assignments_run_v2(finalized)
+            ^ _display_group_matched_article_run_v2(finalized)
+            ^ pure(finalized)
+        )
+
+    return (
+        array_traverse_run(decisions, _cache_terminal_decision_run_v2)
+        ^ pure(decisions)
+    ) >> _display_cached_group
+
+
+def _force_article_adjudication_cache_refresh_run_v2(
+    article_id: int,
+    *,
+    candidate_strategy: str = "default",
+) -> Run[ArticleCacheRefreshSummary]:
+    """Run [K] processing for one article and persist only terminal cache rows."""
+    prefix = "f_kcache_x" if candidate_strategy == "top_score_union" else "f_kcache"
+    run_id = f"{prefix}_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
+
+    def _summarize(
+        finalized_groups: Array[Array[CaseDecision]],
+    ) -> Run[ArticleCacheRefreshSummary]:
+        finalized = Array.make(
+            tuple(
+                decision
+                for finalized_group in finalized_groups
+                for decision in finalized_group
+            )
+        )
+        matched = sum(1 for decision in finalized if decision.label == "matched")
+        not_same = sum(
+            1 for decision in finalized if decision.label == "not_same_person"
+        )
+        insufficient = sum(
+            1
+            for decision in finalized
+            if decision.label == "insufficient_information"
+        )
+        incomplete = sum(
+            1 for decision in finalized if decision.label == "analysis_incomplete"
+        )
+        return pure(
+            ArticleCacheRefreshSummary(
+                article_id=article_id,
+                orphan_rows=finalized.length,
+                groups=finalized_groups.length,
+                cached_terminal=matched + not_same + insufficient,
+                matched=matched,
+                not_same_person=not_same,
+                insufficient_information=insufficient,
+                analysis_incomplete=incomplete,
+            )
+        )
+
+    def _process_groups(
+        groups: Array[Array[CacheReadinessRow]],
+    ) -> Run[ArticleCacheRefreshSummary]:
+        return (
+            array_traverse_run(
+                groups,
+                lambda group: _process_group_run_v2(
+                    run_id,
+                    group,
+                    candidate_strategy=candidate_strategy,
+                ),
+            )
+            if groups.length > 0
+            else pure(Array.empty())
+        ) >> (
+            lambda grouped_decisions: (
+                array_traverse_run(grouped_decisions, _cache_group_decisions_run_v2)
+                if grouped_decisions.length > 0
+                else pure(Array.empty())
+            )
+            >> _summarize
+        )
+
+    def _build_groups_for_article(
+        rows: Array[CacheReadinessRow],
+    ) -> Run[ArticleCacheRefreshSummary]:
+        return _process_groups(_build_groups_v2(rows, True, run_id))
+
+    return _ensure_tables_run_v2() >> (
+        lambda _: _article_queue_rows_run_v2(article_id)
+    ) >> _build_groups_for_article
+
+
+def force_article_adjudication_cache_refresh(
+    article_id: int,
+) -> Run[ArticleCacheRefreshSummary]:
+    """Public [K] cache refresh entrypoint for the fix-article controller."""
+    prog = _force_article_adjudication_cache_refresh_run_v2(article_id)
+    return with_namespace(
+        Namespace("orphan_adj_k_refresh"),
+        to_prompts(ORPHAN_ADJ_PROMPTS),
+        with_models(
+            {
+                PASS1_MODEL_KEY: GPTModel.GPT_5,
+                RANK_MODEL_KEY: GPTModel.GPT_5,
+            },
+            with_duckdb(prog),
+        ),
+    )
+
+
+def force_article_adjudication_cache_refresh_strategy_x(
+    article_id: int,
+) -> Run[ArticleCacheRefreshSummary]:
+    """Refresh article-scoped adjudication cache using the [X] top-score strategy."""
+    prog = _force_article_adjudication_cache_refresh_run_v2(
+        article_id,
+        candidate_strategy="top_score_union",
+    )
+    return with_namespace(
+        Namespace("orphan_adj_k_refresh_x"),
+        to_prompts(ORPHAN_ADJ_PROMPTS),
+        with_models(
+            {
+                PASS1_MODEL_KEY: GPTModel.GPT_5,
+                RANK_MODEL_KEY: GPTModel.GPT_5,
+            },
+            with_duckdb(prog),
+        ),
+    )
 
 
 def adjudicate_orphans_controller() -> Run[NextStep]:
@@ -5699,8 +6630,8 @@ def adjudicate_orphans_controller() -> Run[NextStep]:
         to_prompts(ORPHAN_ADJ_PROMPTS),
         with_models(
             {
-                PASS1_MODEL_KEY: GPTModel.GPT_5_MINI,
-                RANK_MODEL_KEY: GPTModel.GPT_5_MINI,
+                PASS1_MODEL_KEY: GPTModel.GPT_5,
+                RANK_MODEL_KEY: GPTModel.GPT_5,
             },
             with_duckdb(prog),
         ),

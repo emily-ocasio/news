@@ -72,6 +72,7 @@ class OAChat:
     text_format: type[BaseModel] | None = None
     temperature: float = 0
     effort: Literal['low', 'medium', 'high'] = "low"
+    verbosity: Literal["low", "medium", "high"] = "low"
     stream: bool = False
 
 
@@ -84,12 +85,13 @@ class OAEmbedding:
     normalize: bool = True
 
 
-def gpt_response(
+def gpt_response(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     prompt: GPTPrompt,
     model: GPTModel,
     text_format: type[BaseModel] | None,
     temperature: float = 0,
     effort: Literal["low", "medium", "high"] = "low",
+    verbosity: Literal["low", "medium", "high"] = "low",
     stream: bool = False
     ) -> Run[Response | ParsedResponse[BaseModel]]:
     """
@@ -97,7 +99,7 @@ def gpt_response(
     """
     intent = OAChat(
         prompt, text_format=text_format, model=model, temperature=temperature, \
-              effort=effort, stream=stream)
+              effort=effort, verbosity=verbosity, stream=stream)
     return Run(lambda self: self._perform(intent, self), _unhandled)
 
 
@@ -128,12 +130,13 @@ def resolve_prompt_template(env: Environment, prompt_key: PromptKey) \
         return throw(ErrorPayload(f"Undefined GPT prompt: {prompt_key}"))
     return pure(gpt_prompts[prompt_key])
 
-def response_with_gpt_prompt(
+def response_with_gpt_prompt(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     prompt_key: PromptKey,
     variables: dict[str, str | None],
     text_format: type[BaseModel],
     model_key: EnvKey,
     effort: Literal["low", "medium", "high"] = "low",
+    verbosity: Literal["low", "medium", "high"] = "low",
     stream: bool = False
     ) -> Run[Response | ParsedResponse]:
     """
@@ -158,7 +161,13 @@ def response_with_gpt_prompt(
         ask() >> (lambda env:
         resolve_prompt(env) >> (lambda prompt: \
         gpt_response(
-            prompt, resolve_model(env), text_format, effort=effort, stream=stream)
+            prompt,
+            resolve_model(env),
+            text_format,
+            effort=effort,
+            verbosity=verbosity,
+            stream=stream,
+        )
         ))
 
 def _stream_response(
@@ -205,11 +214,20 @@ def run_openai(
         parent = self_run._perform
         client: OpenAI = client_ctor()
 
-        def perform(intent: Any, current: \
+        def perform(  # pylint: disable=too-many-locals
+            intent: Any, current: \
                     "Run[Response | ParsedResponse[BaseModel]]") \
             -> Any:
             match intent:
-                case OAChat(prompt, model, text_format, temperature, effort, do_stream):
+                case OAChat(
+                    prompt,
+                    model,
+                    text_format,
+                    temperature,
+                    effort,
+                    verbosity,
+                    do_stream,
+                ):
                     if text_format:
                         if do_stream:
                             ### - DO NOT USE THIS - ###
@@ -223,7 +241,7 @@ def run_openai(
                                 "effort": effort,
                                 "summary": "auto"
                             },
-                            text={"verbosity": "low"},
+                            text={"verbosity": verbosity},
                             timeout=300.0
                         ))
                     return client.responses.create(

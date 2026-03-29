@@ -159,6 +159,7 @@ class Circumstance(str, Enum):
     ARSON = "arson"
     VEHICULAR_HOMICIDE = "vehicular homicide"
     FELON_KILLED_BY_POLICE = "felon killed by police"
+    FELON_KILLED_BY_PRIVATE_CITIZEN = "felon killed by private citizen"
     INSTITUTIONAL_KILLING = "institutional killing"
     BURGLARY = "burglary"
     ROBBERY = "robbery"
