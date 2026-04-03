@@ -110,6 +110,7 @@ from .runsplink import (
     run_splink,
     comparison_level_keys,
     BlockingRuleLike,
+    CustomStringBlockingRule,
     TrainingBlockToComparisonLevelMap,
     SplinkChartType,
     PredictionInputTableName,

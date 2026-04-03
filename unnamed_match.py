@@ -11,8 +11,9 @@ import networkx as nx
 from blocking import (
     ORPHAN_VICTIM_BLOCKS,
     ORPHAN_DETERMINISTIC_BLOCKS,
-    ORPHAN_TRAINING_BLOCKS,
-    TRAINING_BLOCK_LEVEL_MAP,
+    ORPHAN_LINKAGE_TRAINING_BLOCKS,
+    ORPHAN_TRAINING_BLOCK_LEVEL_MAP,
+    with_orphan_article_exclusions,
 )
 
 from comparison import ORPHAN_COMPARISONS
@@ -112,19 +113,28 @@ def _create_linkage_input_tables() -> Run[Unit]:
                     EXTRACT(
                       YEAR FROM COALESCE(
                         incident_date,
-                        date_add(DATE '1970-01-01', INTERVAL (CAST(entity_midpoint_day AS INTEGER)) DAY)
+                        date_add(
+                          DATE '1970-01-01',
+                          INTERVAL (CAST(entity_midpoint_day AS INTEGER)) DAY
+                        )
                       )
                     ) AS year,
                     EXTRACT(
                       YEAR FROM COALESCE(
                         incident_date,
-                        date_add(DATE '1970-01-01', INTERVAL (CAST(entity_midpoint_day AS INTEGER)) DAY)
+                        date_add(
+                          DATE '1970-01-01',
+                          INTERVAL (CAST(entity_midpoint_day AS INTEGER)) DAY
+                        )
                       )
                     ) AS year_block,
                     EXTRACT(
                       MONTH FROM COALESCE(
                         incident_date,
-                        date_add(DATE '1970-01-01', INTERVAL (CAST(entity_midpoint_day AS INTEGER)) DAY)
+                        date_add(
+                          DATE '1970-01-01',
+                          INTERVAL (CAST(entity_midpoint_day AS INTEGER)) DAY
+                        )
                       )
                     ) AS month,
                     -- NEW: all article ids from cluster as CSV
@@ -142,7 +152,8 @@ def _create_linkage_input_tables() -> Run[Unit]:
                     canonical_race AS victim_race,
                     canonical_ethnicity AS victim_ethnicity,
                     canonical_relationship AS relationship,
-                    CAST(canonical_fullname AS VARCHAR) AS victim_fullname_norm,  -- Added: victim fullname from entities
+                    CAST(canonical_fullname AS VARCHAR) AS victim_fullname_norm,
+                    -- victim fullname from entities
                     CAST(canonical_fullname AS VARCHAR) AS victim_fullname_concat,
                     CAST(NULL AS VARCHAR) AS victim_forename_norm,
                     CAST(NULL AS VARCHAR) AS victim_middle_norm,
@@ -157,7 +168,8 @@ def _create_linkage_input_tables() -> Run[Unit]:
                     offender_forename AS offender_forename_norm,
                     offender_surname  AS offender_surname_norm,
                     CASE
-                      WHEN offender_forename IS NOT NULL AND offender_surname IS NOT NULL
+                      WHEN offender_forename IS NOT NULL
+                        AND offender_surname IS NOT NULL
                         THEN offender_forename || ' ' || offender_surname
                       WHEN offender_forename IS NOT NULL
                         THEN offender_forename
@@ -196,7 +208,8 @@ def _create_linkage_input_tables() -> Run[Unit]:
                     victim_race,
                     victim_ethnicity,
                     COALESCE(relationship, victim_relationship) AS relationship,
-                    CAST(NULL AS VARCHAR) AS victim_fullname_norm,  -- Added: orphans have no victim fullname
+                    CAST(NULL AS VARCHAR) AS victim_fullname_norm,
+                    -- orphans have no victim fullname
                     CAST(NULL AS VARCHAR) AS victim_fullname_concat,
                     CAST(NULL AS VARCHAR) AS victim_forename_norm,
                     CAST(NULL AS VARCHAR) AS victim_middle_norm,
@@ -229,7 +242,9 @@ def _create_linkage_input_tables() -> Run[Unit]:
               eli.unique_id AS entity_uid,
               TRY_CAST(article_id_str AS BIGINT) AS article_id
             FROM entity_link_input eli,
-                UNNEST(string_split(COALESCE(eli.article_ids_csv, ''), ',')) AS t(article_id_str)
+                UNNEST(
+                  string_split(COALESCE(eli.article_ids_csv, ''), ',')
+                ) AS t(article_id_str)
             WHERE article_id_str <> '';
             -- 2) For each orphan, find all matching entities by article_id
             CREATE OR REPLACE TEMP VIEW _orphan_entity_article_matches AS
@@ -241,48 +256,39 @@ def _create_linkage_input_tables() -> Run[Unit]:
               ON o.article_id = e.article_id;
 
             -- 3) Count how many clusters match per orphan
-            CREATE OR REPLACE TEMP VIEW _orphan_match_counts AS
+            CREATE OR REPLACE TEMP VIEW _orphan_exclusion_lists AS
             SELECT
               orphan_uid,
-              COUNT(DISTINCT entity_uid) AS n_clusters
-            FROM _orphan_entity_article_matches
+              array_agg(entity_uid ORDER BY entity_uid) AS exclusion_ids,
+              COUNT(*) AS n_clusters
+            FROM (
+              SELECT DISTINCT orphan_uid, entity_uid
+              FROM _orphan_entity_article_matches
+            )
             GROUP BY orphan_uid;
 
-            -- 4) Choose an exclusion target per orphan:
-            --    - if exactly one cluster: choose that one
-            --    - if multiple: pick a deterministic one (min by id)
-            CREATE OR REPLACE TEMP VIEW _orphan_exclusion_choice AS
-            SELECT
-              m.orphan_uid,
-              MIN(m.entity_uid) AS chosen_entity_uid,   -- deterministic pick if multiple
-              c.n_clusters
-            FROM _orphan_entity_article_matches m
-            JOIN _orphan_match_counts c USING (orphan_uid)
-            GROUP BY m.orphan_uid, c.n_clusters;
-
-            -- 5) Rebuild orphan_link_input with exclusion_id set
+            -- 4) Rebuild orphan_link_input with exclusion_ids set for all
+            --    same-article entities.
             CREATE OR REPLACE TABLE orphan_link_input AS
             SELECT
-              o.* EXCLUDE (exclusion_id),
-              COALESCE(c.chosen_entity_uid, o.exclusion_id) AS exclusion_id  -- stays '' if no match
+              o.* EXCLUDE (exclusion_id, exclusion_ids),
+              COALESCE(
+                list_extract(x.exclusion_ids, 1),
+                o.exclusion_id
+              ) AS exclusion_id,
+              COALESCE(x.exclusion_ids, o.exclusion_ids) AS exclusion_ids
             FROM orphan_link_input o
-            LEFT JOIN _orphan_exclusion_choice c
-              ON c.orphan_uid = o.unique_id;
+            LEFT JOIN _orphan_exclusion_lists x
+              ON x.orphan_uid = o.unique_id;
 
-            -- 6) Report: how many orphans had >1 matching clusters,
-            --    and how many potential exclusions "fell through the cracks"
-            --    (i.e., additional clusters beyond the chosen one)
+            -- 5) Report all same-article exclusions applied to orphan linkage.
             CREATE OR REPLACE TABLE orphan_article_exclusion_report AS
             SELECT
-              COALESCE(SUM(CASE WHEN n_clusters = 1 THEN 1 ELSE 0 END), 0) 
-                AS orphans_one_cluster_match,
-              COALESCE(SUM(CASE WHEN n_clusters > 1 THEN 1 ELSE 0 END), 0) 
-                AS orphans_multi_cluster_match,
-              -- Each orphan with k>1 has (k-1) clusters
-              -- not excluded by our single chosen id
-              COALESCE(SUM(CASE WHEN n_clusters > 1 THEN n_clusters - 1 ELSE 0 END), 0)
-                AS fell_through_pairs
-            FROM _orphan_match_counts;
+              COUNT(*) AS orphans_with_same_article_entity,
+              COALESCE(SUM(n_clusters), 0) AS same_article_pairs_excluded,
+              COALESCE(SUM(CASE WHEN n_clusters > 1 THEN 1 ELSE 0 END), 0)
+                AS orphans_multi_entity_match
+            FROM _orphan_exclusion_lists;
     """
             )
         )
@@ -290,9 +296,11 @@ def _create_linkage_input_tables() -> Run[Unit]:
         >> (
             lambda rows: put_line(
                 "[U] Orphan article exclusion report: "
-                f"one_cluster={rows[0]['orphans_one_cluster_match']}, "
-                f"multi_cluster={rows[0]['orphans_multi_cluster_match']}, "
-                f"fell_through_pairs={rows[0]['fell_through_pairs']}"
+                "orphans_with_same_article_entity="
+                f"{rows[0]['orphans_with_same_article_entity']}, "
+                "same_article_pairs_excluded="
+                f"{rows[0]['same_article_pairs_excluded']}, "
+                f"orphans_multi_entity_match={rows[0]['orphans_multi_entity_match']}"
             )
         )
         ^ sql_query(
@@ -327,9 +335,15 @@ def _debug_preview_orphans() -> Run[Unit]:
                 """--sql
                 SELECT
                   COUNT(*) AS n_orphans,
-                  SUM(CASE WHEN exclusion_id <> '' THEN 1 ELSE 0 END) AS n_with_exclusion,
-                  SUM(CASE WHEN year IS NULL OR month IS NULL THEN 1 ELSE 0 END) AS n_missing_year_month,
-                  SUM(CASE WHEN lat IS NULL OR lon IS NULL THEN 1 ELSE 0 END) AS n_missing_lat_lon
+                  SUM(
+                    CASE WHEN array_length(exclusion_ids) > 0 THEN 1 ELSE 0 END
+                  ) AS n_with_exclusion,
+                  SUM(
+                    CASE WHEN year IS NULL OR month IS NULL THEN 1 ELSE 0 END
+                  ) AS n_missing_year_month,
+                  SUM(
+                    CASE WHEN lat IS NULL OR lon IS NULL THEN 1 ELSE 0 END
+                  ) AS n_missing_lat_lon
                 FROM orphan_link_input;
                 """
             )
@@ -355,7 +369,8 @@ def _debug_preview_orphans() -> Run[Unit]:
                   lat, lon,
                   victim_age, victim_sex, weapon, circumstance,
                   article_id,
-                  exclusion_id
+                  exclusion_id,
+                  exclusion_ids
                 FROM orphan_link_input
                 ORDER BY COALESCE(year, 0) DESC,
                          COALESCE(month, 0) DESC,
@@ -376,7 +391,8 @@ def _debug_preview_orphans() -> Run[Unit]:
                     f"lat={r['lat']} lon={r['lon']} "
                     f"age={r['victim_age']} sex={r['victim_sex']} "
                     f"weap='{r['weapon']}' circ='{r['circumstance']}' "
-                    f"art={r['article_id']} excl='{r['exclusion_id']}'"
+                    f"art={r['article_id']} excl='{r['exclusion_id']}' "
+                    f"excl_ids={r['exclusion_ids']}"
                     for r in rows
                 )
             )
@@ -427,7 +443,9 @@ def _settings_for_orphan_linkage(comparisons: list) -> dict:
     return {
         "link_type": "link_only",
         "unique_id_column_name": "unique_id",
-        "blocking_rules_to_generate_predictions": ORPHAN_VICTIM_BLOCKS,
+        "blocking_rules_to_generate_predictions": with_orphan_article_exclusions(
+            ORPHAN_VICTIM_BLOCKS
+        ),
         "comparisons": comparisons,
     }
 
@@ -438,7 +456,9 @@ def _settings_for_orphan_reuse(dedupe_settings: dict) -> dict:
         {
             "link_type": "link_only",
             "unique_id_column_name": "unique_id",
-            "blocking_rules_to_generate_predictions": ORPHAN_VICTIM_BLOCKS,
+            "blocking_rules_to_generate_predictions": with_orphan_article_exclusions(
+                ORPHAN_VICTIM_BLOCKS
+            ),
         }
     )
     return settings
@@ -466,14 +486,16 @@ def _link_orphans_to_entities(
             predict_threshold=0.45,
             cluster_threshold=0.0,
             pairs_out=PairsTableName("orphan_entity_pairs"),
-            deterministic_rules=ORPHAN_DETERMINISTIC_BLOCKS,
+            deterministic_rules=with_orphan_article_exclusions(
+                ORPHAN_DETERMINISTIC_BLOCKS
+            ),
             deterministic_recall=0.1,
             train_first=train_first,
             skip_u_estimation=skip_u_estimation,
             training_blocking_rules=(
-                ORPHAN_TRAINING_BLOCKS if train_first else []
+                ORPHAN_LINKAGE_TRAINING_BLOCKS if train_first else []
             ),
-            training_block_level_map=TRAINING_BLOCK_LEVEL_MAP,
+            training_block_level_map=ORPHAN_TRAINING_BLOCK_LEVEL_MAP,
             visualize=False,
             em_max_runs=1,
             splink_key=SplinkType.ORPHAN,
@@ -499,7 +521,8 @@ def _link_orphans_to_entities(
 def _integrate_orphan_matches() -> Run[Unit]:
     """
     Integrate the final orphan matches into victim_entity_reps_new.
-    Creates victim_entity_reps_new (augmented from victim_entity_reps) based on the entity-orphan matching results.
+    Creates `victim_entity_reps_new` from `victim_entity_reps`
+    plus the entity-orphan matching results.
     """
     def _base_edge_weight(match_weight, match_probability) -> float:
         return (
@@ -514,7 +537,9 @@ def _integrate_orphan_matches() -> Run[Unit]:
         jitter = (int(digest[:8], 16) % 1000000) / 1e15
         return base_weight + jitter
 
-    def _max_weight_pairs_by_article(rows) -> list[tuple[str, str, int | None, float | None]]:
+    def _max_weight_pairs_by_article(  # pylint: disable=too-many-locals
+        rows,
+    ) -> list[tuple[str, str, int | None, float | None]]:
         by_article: dict[int | None, list[dict]] = {}
         for row in rows:
             by_article.setdefault(row["article_id"], []).append(row)
@@ -537,7 +562,11 @@ def _integrate_orphan_matches() -> Run[Unit]:
                 G.add_edge(
                     f"e:{entity_uid}",
                     f"o:{orphan_uid}",
-                    weight=_stable_edge_weight(base_weight + weight_shift, entity_uid, orphan_uid),
+                    weight=_stable_edge_weight(
+                        base_weight + weight_shift,
+                        entity_uid,
+                        orphan_uid,
+                    ),
                     raw_prob=prob,
                 )
             if not G.edges:
@@ -603,7 +632,8 @@ def _integrate_orphan_matches() -> Run[Unit]:
             )
         )
         >> _write_final_orphan_matches
-        # Create victim_entity_reps_new by augmenting victim_entity_reps with orphan data
+        # Create victim_entity_reps_new by augmenting victim_entity_reps
+        # with orphan data.
         ^ sql_exec(
             SQL(
                 """--sql
@@ -619,9 +649,15 @@ def _integrate_orphan_matches() -> Run[Unit]:
                 WITH matched_orphans AS (
                   SELECT
                     fom.entity_uid,
-                    vce.lat, vce.lon, vce.midpoint_day, vce.article_id, vce.victim_count, vce.offender_count
+                    vce.lat,
+                    vce.lon,
+                    vce.midpoint_day,
+                    vce.article_id,
+                    vce.victim_count,
+                    vce.offender_count
                   FROM final_orphan_matches fom
-                  JOIN victims_cached_enh vce ON vce.victim_row_id = CAST(fom.orphan_uid AS VARCHAR)
+                  JOIN victims_cached_enh vce
+                    ON vce.victim_row_id = CAST(fom.orphan_uid AS VARCHAR)
                 ),
                 matched_updates AS (
                   SELECT
@@ -629,28 +665,49 @@ def _integrate_orphan_matches() -> Run[Unit]:
                     COUNT(*) AS num_orphans,
                     MIN(midpoint_day) AS min_orphan_mid,
                     MAX(midpoint_day) AS max_orphan_mid,
-                    STRING_AGG(DISTINCT CAST(article_id AS VARCHAR), ',') AS orphan_article_ids,
-                    MAX(victim_count) FILTER (WHERE victim_count IS NOT NULL) AS max_orphan_victim_count,
-                    MAX(offender_count) FILTER (WHERE offender_count IS NOT NULL) AS max_orphan_offender_count
+                    STRING_AGG(
+                      DISTINCT CAST(article_id AS VARCHAR), ','
+                    ) AS orphan_article_ids,
+                    MAX(victim_count) FILTER (
+                      WHERE victim_count IS NOT NULL
+                    ) AS max_orphan_victim_count,
+                    MAX(offender_count) FILTER (
+                      WHERE offender_count IS NOT NULL
+                    ) AS max_orphan_offender_count
                   FROM matched_orphans
                   GROUP BY entity_uid
                 )
                 UPDATE victim_entity_reps_new
                 SET
                   cluster_size = cluster_size + COALESCE(mu.num_orphans, 0),
-                  min_event_day = CASE WHEN mu.num_orphans IS NOT NULL THEN LEAST(min_event_day, mu.min_orphan_mid) ELSE min_event_day END,
-                  max_event_day = CASE WHEN mu.num_orphans IS NOT NULL THEN GREATEST(max_event_day, mu.max_orphan_mid) ELSE max_event_day END,
-                  article_ids_csv = article_ids_csv || ',' || COALESCE(mu.orphan_article_ids, ''),
+                  min_event_day = CASE
+                    WHEN mu.num_orphans IS NOT NULL
+                      THEN LEAST(min_event_day, mu.min_orphan_mid)
+                    ELSE min_event_day
+                  END,
+                  max_event_day = CASE
+                    WHEN mu.num_orphans IS NOT NULL
+                      THEN GREATEST(max_event_day, mu.max_orphan_mid)
+                    ELSE max_event_day
+                  END,
+                  article_ids_csv = (
+                    article_ids_csv || ',' || COALESCE(mu.orphan_article_ids, '')
+                  ),
                   canonical_victim_count = CASE
-                    WHEN mu.max_orphan_victim_count IS NOT NULL AND canonical_victim_count IS NOT NULL
+                    WHEN mu.max_orphan_victim_count IS NOT NULL
+                      AND canonical_victim_count IS NOT NULL
                       THEN GREATEST(canonical_victim_count, mu.max_orphan_victim_count)
                     WHEN mu.max_orphan_victim_count IS NOT NULL
                       THEN mu.max_orphan_victim_count
                     ELSE canonical_victim_count
                   END,
                   canonical_offender_count = CASE
-                    WHEN mu.max_orphan_offender_count IS NOT NULL AND canonical_offender_count IS NOT NULL
-                      THEN GREATEST(canonical_offender_count, mu.max_orphan_offender_count)
+                    WHEN mu.max_orphan_offender_count IS NOT NULL
+                      AND canonical_offender_count IS NOT NULL
+                      THEN GREATEST(
+                        canonical_offender_count,
+                        mu.max_orphan_offender_count
+                      )
                     WHEN mu.max_orphan_offender_count IS NOT NULL
                       THEN mu.max_orphan_offender_count
                     ELSE canonical_offender_count
@@ -668,7 +725,8 @@ def _integrate_orphan_matches() -> Run[Unit]:
                   SELECT oli.*, vce.*
                   FROM orphan_link_input oli
                   LEFT JOIN final_orphan_matches fom ON oli.unique_id = fom.orphan_uid
-                  JOIN victims_orphan vo ON vo.victim_row_id = CAST(oli.unique_id AS VARCHAR)
+                  JOIN victims_orphan vo
+                    ON vo.victim_row_id = CAST(oli.unique_id AS VARCHAR)
                   JOIN victims_cached_enh vce ON vce.victim_row_id = vo.victim_row_id
                   WHERE fom.orphan_uid IS NULL
                 )
@@ -733,13 +791,26 @@ def _integrate_orphan_matches() -> Run[Unit]:
                 """
             )
         )
-        # Check if there are matched orphans; if so, recalculate midpoint for affected entities
-        ^ sql_query(SQL("SELECT COUNT(DISTINCT entity_uid) AS n_affected FROM final_orphan_matches"))
+        # Recalculate midpoint details only when there are matched orphans.
+        ^ sql_query(
+            SQL(
+                "SELECT COUNT(DISTINCT entity_uid) AS n_affected "
+                "FROM final_orphan_matches"
+            )
+        )
         >> (
             lambda rows: (
-                put_line(f"[U] Checking for matched orphans: {rows[0]['n_affected']} affected entities.")
+                put_line(
+                    "[U] Checking for matched orphans: "
+                    f"{rows[0]['n_affected']} affected entities."
+                )
                 ^ (
-                    sql_exec(SQL("CREATE OR REPLACE TEMP TABLE affected_entities AS SELECT DISTINCT entity_uid FROM final_orphan_matches;"))
+                    sql_exec(
+                        SQL(
+                            "CREATE OR REPLACE TEMP TABLE affected_entities AS "
+                            "SELECT DISTINCT entity_uid FROM final_orphan_matches;"
+                        )
+                    )
                     ^ sql_exec(
                         SQL(
                             """--sql
@@ -759,7 +830,8 @@ def _integrate_orphan_matches() -> Run[Unit]:
                                 m.lat,
                                 m.lon
                             FROM victim_entity_members m
-                            JOIN affected_entities ae ON m.victim_entity_id = ae.entity_uid
+                            JOIN affected_entities ae
+                              ON m.victim_entity_id = ae.entity_uid
                             UNION ALL
                             SELECT
                                 fom.entity_uid AS victim_entity_id,
@@ -776,7 +848,8 @@ def _integrate_orphan_matches() -> Run[Unit]:
                                 vce.lat,
                                 vce.lon
                             FROM final_orphan_matches fom
-                            JOIN victims_cached_enh vce ON vce.victim_row_id = CAST(fom.orphan_uid AS VARCHAR);
+                            JOIN victims_cached_enh vce
+                              ON vce.victim_row_id = CAST(fom.orphan_uid AS VARCHAR);
                             """
                         )
                     )
@@ -790,10 +863,19 @@ def _integrate_orphan_matches() -> Run[Unit]:
                                 count_if(date_precision = 'day') AS n_day,
                                 count_if(date_precision = 'month') AS n_month,
                                 count_if(date_precision = 'year') AS n_year,
-                                mode(incident_date) FILTER (WHERE date_precision = 'day' AND incident_date IS NOT NULL) AS mode_day_date,
-                                mode(midpoint_day) FILTER (WHERE date_precision = 'month') AS mode_month_mid,
-                                mode(midpoint_day) FILTER (WHERE date_precision = 'year') AS mode_year_mid,
-                                MAX(offender_count) FILTER (WHERE offender_count IS NOT NULL) AS max_offender_count
+                                mode(incident_date) FILTER (
+                                  WHERE date_precision = 'day'
+                                    AND incident_date IS NOT NULL
+                                ) AS mode_day_date,
+                                mode(midpoint_day) FILTER (
+                                  WHERE date_precision = 'month'
+                                ) AS mode_month_mid,
+                                mode(midpoint_day) FILTER (
+                                  WHERE date_precision = 'year'
+                                ) AS mode_year_mid,
+                                MAX(offender_count) FILTER (
+                                  WHERE offender_count IS NOT NULL
+                                ) AS max_offender_count
                               FROM all_members_temp
                               GROUP BY victim_entity_id
                             ),
@@ -803,8 +885,13 @@ def _integrate_orphan_matches() -> Run[Unit]:
                                 relationship,
                                 COUNT(*) AS rel_cnt,
                                 CASE
-                                  WHEN relationship IS NULL OR trim(relationship) = '' THEN 0
-                                  WHEN lower(trim(relationship)) IN ('relationship not determined', 'unknown relationship') THEN 1
+                                  WHEN relationship IS NULL
+                                    OR trim(relationship) = ''
+                                    THEN 0
+                                  WHEN lower(trim(relationship)) IN (
+                                    'relationship not determined',
+                                    'unknown relationship'
+                                  ) THEN 1
                                   ELSE 2
                                 END AS specificity_rank
                               FROM all_members_temp
@@ -919,7 +1006,12 @@ def _integrate_orphan_matches() -> Run[Unit]:
                               END AS incident_date,
                               CAST(
                                 CASE
-                                  WHEN n_day > 0 THEN date_diff('day', DATE '1970-01-01', mode_day_date)
+                                  WHEN n_day > 0
+                                    THEN date_diff(
+                                      'day',
+                                      DATE '1970-01-01',
+                                      mode_day_date
+                                    )
                                   WHEN n_month > 0 THEN mode_month_mid
                                   ELSE mode_year_mid
                                 END AS INTEGER
@@ -950,29 +1042,46 @@ def _integrate_orphan_matches() -> Run[Unit]:
                               incident_date = ra.incident_date,
                               entity_midpoint_day = ra.entity_midpoint_day,
                               canonical_relationship = ra.canonical_relationship,
-                              canonical_geo_address_norm = ra.canonical_geo_address_norm,
-                              canonical_geo_address_short = ra.canonical_geo_address_short,
-                              canonical_geo_address_short_2 = ra.canonical_geo_address_short_2,
+                              canonical_geo_address_norm = (
+                                ra.canonical_geo_address_norm
+                              ),
+                              canonical_geo_address_short = (
+                                ra.canonical_geo_address_short
+                              ),
+                              canonical_geo_address_short_2 = (
+                                ra.canonical_geo_address_short_2
+                              ),
                               canonical_geo_score = ra.canonical_geo_score,
                               canonical_address_type = ra.canonical_address_type,
                               canonical_lat = ra.canonical_lat,
                               canonical_lon = ra.canonical_lon,
                               canonical_offender_count = CASE
-                                WHEN ra.max_offender_count IS NOT NULL AND canonical_offender_count IS NOT NULL
-                                  THEN GREATEST(canonical_offender_count, ra.max_offender_count)
+                                WHEN ra.max_offender_count IS NOT NULL
+                                  AND canonical_offender_count IS NOT NULL
+                                  THEN GREATEST(
+                                    canonical_offender_count,
+                                    ra.max_offender_count
+                                  )
                                 WHEN ra.max_offender_count IS NOT NULL
                                   THEN ra.max_offender_count
                                 ELSE canonical_offender_count
                               END
                             FROM recomputed_agg ra
-                            WHERE victim_entity_reps_new.victim_entity_id = ra.victim_entity_id;
+                            WHERE victim_entity_reps_new.victim_entity_id =
+                              ra.victim_entity_id;
                             """
                         )
                     )
-                    ^ put_line("[U] Recalculated and updated midpoints for affected entities.")
+                    ^ put_line(
+                        "[U] Recalculated and updated midpoints "
+                        "for affected entities."
+                    )
                 )
                 if rows[0]['n_affected'] > 0
-                else put_line("[U] No matched orphans; skipping midpoint recalculation.")
+                else put_line(
+                    "[U] No matched orphans; "
+                    "skipping midpoint recalculation."
+                )
             )
         )
         ^ pure(unit)
@@ -989,9 +1098,11 @@ def _export_orphan_matches_debug_excel() -> Run[Unit]:
 
     Output:
       - Exactly one row per entity, one per orphan.
-      - match_id = 'match_<entity_uid>' for matched groups, otherwise 'entity_<...>' or 'orphan_<...>'.
+      - `match_id = 'match_<entity_uid>'` for matched groups; otherwise
+        `entity_<...>` or `orphan_<...>`.
       - band_key = 0 (unmatched entity), 1 (unmatched orphan), 2 (matched group).
-      - Ordering uses the entity midpoint for matched groups; otherwise row’s own midpoint.
+      - Ordering uses the entity midpoint for matched groups; otherwise
+        the row's own midpoint.
       - Output midpoint_day reflects each row's original midpoint (entity or orphan).
     """
     orphan_matches_final_select = SQL(
@@ -1005,11 +1116,16 @@ def _export_orphan_matches_debug_excel() -> Run[Unit]:
       LEFT JOIN final_orphan_matches fm
         ON o.unique_id = fm.orphan_uid
     ),
-    -- Compute match_id for entities: match_<entity_uid> if they have ≥1 orphans, else entity_<id>
+    -- Compute match_id for entities: match_<entity_uid> if they have
+    -- at least one orphan, else entity_<id>
     entity_with_match AS (
       SELECT
         e.*,
-        CASE WHEN EXISTS (SELECT 1 FROM final_orphan_matches fm WHERE fm.entity_uid = e.unique_id)
+        CASE WHEN EXISTS (
+          SELECT 1
+          FROM final_orphan_matches fm
+          WHERE fm.entity_uid = e.unique_id
+        )
             THEN CONCAT('match_', e.unique_id)
             ELSE CONCAT('entity_', e.unique_id)
         END AS match_id
@@ -1124,7 +1240,8 @@ def _export_orphan_matches_debug_excel() -> Run[Unit]:
             return (
                 sql_import(base_path, "orphan_matches_final_prev")
                 ^ put_line(
-                    "[U] Loaded existing orphan_matches_final_base.xlsx into orphan_matches_final_prev."
+                    "[U] Loaded existing orphan_matches_final_base.xlsx "
+                    "into orphan_matches_final_prev."
                 )
                 ^ pure(True)
             )
@@ -1141,7 +1258,8 @@ def _export_orphan_matches_debug_excel() -> Run[Unit]:
             return (
                 rename_file(current_path, base_path)
                 ^ put_line(
-                    "[U] Renamed orphan_matches_final.xlsx to orphan_matches_final_base.xlsx."
+                    "[U] Renamed orphan_matches_final.xlsx "
+                    "to orphan_matches_final_base.xlsx."
                 )
                 ^ _load_base()
             )
@@ -1179,7 +1297,11 @@ def _export_orphan_matches_debug_excel() -> Run[Unit]:
                         family_victim_surname_norm,
                         family_victim_forename_norm
                       ),
-                      concat(cast(source AS varchar), '::', cast(match_id AS varchar)) AS __band_group
+                      concat(
+                        cast(source AS varchar),
+                        '::',
+                        cast(match_id AS varchar)
+                      ) AS __band_group
                     FROM orphan_matches_final_diffs
                     ORDER BY
                       change_order,
@@ -1229,7 +1351,8 @@ def _export_orphan_matches_debug_excel() -> Run[Unit]:
             band_wrap=3,
         )
         ^ put_line(
-            "[U] Wrote orphan_matches_final.xlsx (final entities + orphans after integration)."
+            "[U] Wrote orphan_matches_final.xlsx "
+            "(final entities + orphans after integration)."
         )
         ^ pure(unit)
     )
@@ -1269,16 +1392,26 @@ def export_final_victim_entities_excel() -> Run[Unit]:
           b.canonical_offender_ethnicity,
           b.canonical_offender_count,
           CASE
-            WHEN b.victim_entity_id IN (SELECT victim_entity_id FROM victim_entity_reps) THEN
-              CASE WHEN b.victim_entity_id IN (SELECT DISTINCT entity_uid FROM final_orphan_matches) THEN 'newly_matched'
-                   ELSE 'unmatched_entity'
+            WHEN b.victim_entity_id IN (
+              SELECT victim_entity_id FROM victim_entity_reps
+            ) THEN
+              CASE
+                WHEN b.victim_entity_id IN (
+                  SELECT DISTINCT entity_uid FROM final_orphan_matches
+                ) THEN 'newly_matched'
+                ELSE 'unmatched_entity'
               END
             ELSE 'singleton_orphan'
           END AS category,
           CASE
-            WHEN b.victim_entity_id IN (SELECT victim_entity_id FROM victim_entity_reps) THEN
-              CASE WHEN b.victim_entity_id IN (SELECT DISTINCT entity_uid FROM final_orphan_matches) THEN 1
-                   ELSE 0
+            WHEN b.victim_entity_id IN (
+              SELECT victim_entity_id FROM victim_entity_reps
+            ) THEN
+              CASE
+                WHEN b.victim_entity_id IN (
+                  SELECT DISTINCT entity_uid FROM final_orphan_matches
+                ) THEN 1
+                ELSE 0
               END
             ELSE 2
           END AS band_key
@@ -1296,7 +1429,8 @@ def export_final_victim_entities_excel() -> Run[Unit]:
             band_wrap=3,
         )
         ^ put_line(
-            "[U] Wrote final_victim_entities.xlsx (final victim entities with color coding)."
+            "[U] Wrote final_victim_entities.xlsx "
+            "(final victim entities with color coding)."
         )
         ^ pure(unit)
     )

@@ -8,7 +8,7 @@ from blocking import (
     NAMED_VICTIM_BLOCKS,
     NAMED_VICTIM_DETERMINISTIC_BLOCKS,
     NAMED_VICTIM_BLOCKS_FOR_TRAINING,
-    TRAINING_BLOCK_LEVEL_MAP,
+    DEDUPE_TRAINING_BLOCK_LEVEL_MAP,
 )
 from comparison import (
     INCIDENT_COMPARISONS,
@@ -78,7 +78,7 @@ def _dedupe_named_victims(_: Unit) -> Run[Unit]:
         clusters_out=ClustersTableName("victim_clusters"),
         train_first=True,
         training_blocking_rules=NAMED_VICTIM_BLOCKS_FOR_TRAINING,
-        training_block_level_map=TRAINING_BLOCK_LEVEL_MAP,
+        training_block_level_map=DEDUPE_TRAINING_BLOCK_LEVEL_MAP,
         deterministic_rules=NAMED_VICTIM_DETERMINISTIC_BLOCKS,
         deterministic_recall=0.8,
         em_max_runs=1,

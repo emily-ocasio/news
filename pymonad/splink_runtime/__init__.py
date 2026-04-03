@@ -9,6 +9,7 @@ from .splink_api import (
 from .splink_eliminator import run_splink
 from .splink_types import (
     BlockingRuleLike,
+    CustomStringBlockingRule,
     TrainingBlockToComparisonLevelMap,
     SplinkChartType,
     PredictionInputTableName,
@@ -30,6 +31,7 @@ __all__ = [
     "splink_visualize_job",
     "run_splink",
     "BlockingRuleLike",
+    "CustomStringBlockingRule",
     "TrainingBlockToComparisonLevelMap",
     "SplinkChartType",
     "PredictionInputTableName",

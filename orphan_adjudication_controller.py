@@ -541,7 +541,6 @@ class OrphanWork:
     provisional_reason: str
 
 
-
 def _utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -624,10 +623,6 @@ def _as_int(v: Any, default: int) -> int:
         return int(v)
     except (TypeError, ValueError):
         return default
-
-
-
-
 
 
 def _pretty_json(payload: dict[str, Any]) -> str:
@@ -889,20 +884,6 @@ def _format_incident_date(raw: Any, *, year: Any = None, month: Any = None) -> s
     return ""
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def _count_by_year(
     rows: list[dict[str, Any]], *, status: str | None = None
 ) -> list[tuple[str, int]]:
@@ -971,8 +952,6 @@ def _select_needs_api_rows(
     return selected + trailing_group_rows
 
 
-
-
 def _incident_group_key_from_orphan_id(orphan_id: str) -> str:
     parts = _safe_text(orphan_id).split(":")
     if len(parts) >= 2 and parts[0] != "" and parts[1] != "":
@@ -1008,16 +987,6 @@ def _build_groups(
     return grouped
 
 
-
-
-
-
-
-
-
-
-
-
 def _case_fingerprint(
     payload: dict[str, Any], *, model: str, prompt_version: str
 ) -> str:
@@ -1026,8 +995,6 @@ def _case_fingerprint(
             {"model": model, "prompt_version": prompt_version, "payload": payload}
         )
     )
-
-
 
 
 def _decision_to_cache_payload(decision: CaseDecision) -> dict[str, Any]:
@@ -1142,8 +1109,6 @@ def _decision_from_cache_payload(
     )
 
 
-
-
 def _stringify_prompt_vars(payload: dict[str, Any]) -> dict[str, str]:
     out: dict[str, str] = {}
     for k, v in payload.items():
@@ -1156,10 +1121,6 @@ def _stringify_prompt_vars(payload: dict[str, Any]) -> dict[str, str]:
         else:
             out[k] = json.dumps(v, ensure_ascii=True)
     return out
-
-
-
-
 
 
 def _structured_echo_terms(dossier: dict[str, Any]) -> list[str]:
@@ -1178,10 +1139,6 @@ def _structured_echo_terms(dossier: dict[str, Any]) -> list[str]:
     return cleaned
 
 
-
-
-
-
 def _pass1_gate_failed(
     valid_anchors: list[dict[str, Any]], anchor_failures: list[str]
 ) -> bool:
@@ -1192,16 +1149,6 @@ def _pass1_gate_failed(
         in {"no_valid_anchors", "insufficient_anchor_diversity", "no_query_variants"}
         for failure in anchor_failures
     )
-
-
-
-
-
-
-
-
-
-
 
 
 def _merge_candidates(
@@ -1323,8 +1270,6 @@ def _merge_candidates(
     return merged[:MAX_MERGED_CANDIDATES_FOR_API2]
 
 
-
-
 def _validate_rank_output(
     ranked: RankResponse,
     merged: list[dict[str, Any]],
@@ -1356,32 +1301,6 @@ def _validate_rank_output(
             "source_stages": base.get("source_stages") or [],
         }
     ]
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def _compact_candidate_view(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1490,12 +1409,6 @@ def _format_c2_candidates_table(
     lines = [_fmt_row(headers), "-+-".join("-" * w for w in widths)]
     lines.extend(_fmt_row(row) for row in table_rows)
     return "\n".join(lines)
-
-
-
-
-
-
 
 
 def _assign_group(work_items: list[OrphanWork]) -> dict[str, dict[str, Any]]:
@@ -1688,8 +1601,6 @@ def _decision_from_work(
     )
 
 
-
-
 def _decision_hash_for_case(decision: CaseDecision) -> str:
     payload = {
         "label": decision.label,
@@ -1701,10 +1612,6 @@ def _decision_hash_for_case(decision: CaseDecision) -> str:
         },
     }
     return _sha256(_canonical_json(payload))
-
-
-
-
 
 
 def _prior_decision_hash(row: dict[str, Any] | None) -> str | None:
@@ -1722,24 +1629,6 @@ def _prior_decision_hash(row: dict[str, Any] | None) -> str | None:
     except json.JSONDecodeError:
         return None
     return None
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 # === Monadic [K] controller overrides ===
@@ -6420,25 +6309,22 @@ def _execute_k(
 
     def _display_k_summary(summary: RunSummary) -> Run[NextStep]:
         return put_line(
-            (
-                "[K] Orphan adjudication completed:"
-                f" needs_api_total={summary.needs_api_total},"
-                f" selected_needs_api={summary.selected_needs_api},"
-                " decision_ready_from_cache="
-                f"{summary.decision_ready_from_cache},"
-                f" processed={summary.processed},"
-                f" groups={summary.grouped},"
-                f" matched={summary.matched},"
-                " not_same_person="
-                f"{summary.not_same_person},"
-                " insufficient_information="
-                f"{summary.insufficient_information},"
-                " analysis_incomplete="
-                f"{summary.analysis_incomplete},"
-                " rebuilt_terminal_rows="
-                f"{summary.rebuilt_terminal_rows},"
-                f" dry_run={summary.dry_run}"
-            )
+            "[K] Orphan adjudication completed:"
+            f" needs_api_total={summary.needs_api_total},"
+            f" selected_needs_api={summary.selected_needs_api},"
+            " decision_ready_from_cache="
+            f"{summary.decision_ready_from_cache},"
+            f" groups={summary.grouped},"
+            f" matched={summary.matched},"
+            " not_same_person="
+            f"{summary.not_same_person},"
+            " insufficient_information="
+            f"{summary.insufficient_information},"
+            " analysis_incomplete="
+            f"{summary.analysis_incomplete},"
+            " rebuilt_terminal_rows="
+            f"{summary.rebuilt_terminal_rows},"
+            f" dry_run={summary.dry_run}"
         ) ^ pure(NextStep.CONTINUE)
 
     return ask() >> (

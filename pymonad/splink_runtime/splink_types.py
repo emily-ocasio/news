@@ -490,7 +490,7 @@ class SplinkContext:
     cluster_nodes: ClusterNodes = field(default_factory=Array.empty)
     cluster_edges: ClusterEdges = field(default_factory=Array.empty)
     cluster_result: Maybe[ClusterResult] = field(default_factory=nothing)
-    deterministic_rules: StringBlockingRules = field(default_factory=Array.empty)
+    deterministic_rules: BlockingRuleLikes = field(default_factory=Array.empty)
     deterministic_recall: float = 0.5
     train_first: bool = False
     skip_u_estimation: bool = False
@@ -578,12 +578,12 @@ class SplinkDedupeJob:
     predict_threshold: float
     cluster_threshold: float
     pairs_out: PairsTableName
-    deterministic_rules: StringBlockingRules
+    deterministic_rules: BlockingRuleLikes
     deterministic_recall: float
     clusters_out: ClustersTableName = ClustersTableName("")
     train_first: bool = False
     skip_u_estimation: bool = False
-    training_blocking_rules: StringBlockingRules | BlockingRuleCreators | None = None
+    training_blocking_rules: BlockingRuleLikes | None = None
     training_block_level_map: TrainingBlockToComparisonLevelMap = field(
         default_factory=HashMap.empty
     )

@@ -161,21 +161,39 @@ class ComparisonComp(StrEnum):
     RELATIONSHIP_SAME_GROUP = (
         """
         CASE
-          WHEN "relationship_l" IN ('husband','wife','ex-wife','ex-husband','boyfriend','girlfriend','homosexual relationship')
+          WHEN "relationship_l" IN (
+            'husband', 'wife', 'ex-wife', 'ex-husband', 'boyfriend',
+            'girlfriend', 'homosexual relationship'
+          )
             THEN 'intimate'
-          WHEN "relationship_l" IN ('son','daughter','brother','sister','other family','stepfather','stepmother','stepson','mother','father','in-law')
+          WHEN "relationship_l" IN (
+            'son', 'daughter', 'brother', 'sister', 'other family',
+            'stepfather', 'stepmother', 'stepson', 'mother', 'father',
+            'in-law'
+          )
             THEN 'family'
-          WHEN "relationship_l" IN ('acquaintance','friend','neighbor','employee','employer')
+          WHEN "relationship_l" IN (
+            'acquaintance', 'friend', 'neighbor', 'employee', 'employer'
+          )
             THEN 'known_nonfamily'
           ELSE NULL
         END
         =
         CASE
-          WHEN "relationship_r" IN ('husband','wife','ex-wife','ex-husband','boyfriend','girlfriend','homosexual relationship')
+          WHEN "relationship_r" IN (
+            'husband', 'wife', 'ex-wife', 'ex-husband', 'boyfriend',
+            'girlfriend', 'homosexual relationship'
+          )
             THEN 'intimate'
-          WHEN "relationship_r" IN ('son','daughter','brother','sister','other family','stepfather','stepmother','stepson','mother','father','in-law')
+          WHEN "relationship_r" IN (
+            'son', 'daughter', 'brother', 'sister', 'other family',
+            'stepfather', 'stepmother', 'stepson', 'mother', 'father',
+            'in-law'
+          )
             THEN 'family'
-          WHEN "relationship_r" IN ('acquaintance','friend','neighbor','employee','employer')
+          WHEN "relationship_r" IN (
+            'acquaintance', 'friend', 'neighbor', 'employee', 'employer'
+          )
             THEN 'known_nonfamily'
           ELSE NULL
         END
@@ -651,8 +669,8 @@ DIST_STREET_TYPE = cllc.Or(
     cll.LiteralMatchLevel("address_type", "INTERSECTION", "string", "right"),
     cll.LiteralMatchLevel("address_type", "BLOCK", "string", "left"),
     cll.LiteralMatchLevel("address_type", "BLOCK", "string", "right"),
-    cll.LiteralMatchLevel("address_type", "STREET ONLY", "string", "left"),
-    cll.LiteralMatchLevel("address_type", "STREET ONLY", "string", "right"),
+    cll.LiteralMatchLevel("address_type", "STREET_ONLY", "string", "left"),
+    cll.LiteralMatchLevel("address_type", "STREET_ONLY", "string", "right"),
     cll.LiteralMatchLevel("address_type", "NO_SUCCESS_ADDRESS", "string", "left"),
     cll.LiteralMatchLevel("address_type", "NO_SUCCESS_ADDRESS", "string", "right"),
     cll.LiteralMatchLevel("address_type", "NO_SUCCESS_INTERSECTION", "string", "left"),
@@ -733,40 +751,106 @@ DIST_COMP_NEW = cl.CustomComparison(
             ),
             cllc.And(
                 cllc.Or(
-                    cll.LiteralMatchLevel("address_type", "INTERSECTION", "string", "right"),
-                    cll.LiteralMatchLevel("address_type", "NO_SUCCESS_INTERSECTION", "string", "right"),
-                    cll.LiteralMatchLevel("address_type", "NO_RESULT_INTERSECTION", "string", "right"),
+                    cll.LiteralMatchLevel(
+                        "address_type", "INTERSECTION", "string", "right"
+                    ),
+                    cll.LiteralMatchLevel(
+                        "address_type",
+                        "NO_SUCCESS_INTERSECTION",
+                        "string",
+                        "right",
+                    ),
+                    cll.LiteralMatchLevel(
+                        "address_type",
+                        "NO_RESULT_INTERSECTION",
+                        "string",
+                        "right",
+                    ),
                 ),
                 cll.CustomLevel(
-                    'jaro_winkler_similarity("geo_address_short_l", "geo_address_short_2_r") >= 0.90',
-                    label_for_charts="short vs short2 jw >= 0.90 (right intersection)"
+                    (
+                        'jaro_winkler_similarity("geo_address_short_l", '
+                        '"geo_address_short_2_r") >= 0.90'
+                    ),
+                    label_for_charts=(
+                        "short vs short2 jw >= 0.90 "
+                        "(right intersection)"
+                    ),
                 ),
             ),
             cllc.And(
                 cllc.Or(
-                    cll.LiteralMatchLevel("address_type", "INTERSECTION", "string", "left"),
-                    cll.LiteralMatchLevel("address_type", "NO_SUCCESS_INTERSECTION", "string", "left"),
-                    cll.LiteralMatchLevel("address_type", "NO_RESULT_INTERSECTION", "string", "left"),
+                    cll.LiteralMatchLevel(
+                        "address_type", "INTERSECTION", "string", "left"
+                    ),
+                    cll.LiteralMatchLevel(
+                        "address_type",
+                        "NO_SUCCESS_INTERSECTION",
+                        "string",
+                        "left",
+                    ),
+                    cll.LiteralMatchLevel(
+                        "address_type",
+                        "NO_RESULT_INTERSECTION",
+                        "string",
+                        "left",
+                    ),
                 ),
                 cll.CustomLevel(
-                    'jaro_winkler_similarity("geo_address_short_2_l", "geo_address_short_r") >= 0.90',
-                    label_for_charts="short2 vs short jw >= 0.90 (left intersection)"
+                    (
+                        'jaro_winkler_similarity("geo_address_short_2_l", '
+                        '"geo_address_short_r") >= 0.90'
+                    ),
+                    label_for_charts=(
+                        "short2 vs short jw >= 0.90 "
+                        "(left intersection)"
+                    ),
                 ),
             ),
             cllc.And(
                 cllc.Or(
-                    cll.LiteralMatchLevel("address_type", "INTERSECTION", "string", "left"),
-                    cll.LiteralMatchLevel("address_type", "NO_SUCCESS_INTERSECTION", "string", "left"),
-                    cll.LiteralMatchLevel("address_type", "NO_RESULT_INTERSECTION", "string", "left"),
+                    cll.LiteralMatchLevel(
+                        "address_type", "INTERSECTION", "string", "left"
+                    ),
+                    cll.LiteralMatchLevel(
+                        "address_type",
+                        "NO_SUCCESS_INTERSECTION",
+                        "string",
+                        "left",
+                    ),
+                    cll.LiteralMatchLevel(
+                        "address_type",
+                        "NO_RESULT_INTERSECTION",
+                        "string",
+                        "left",
+                    ),
                 ),
                 cllc.Or(
-                    cll.LiteralMatchLevel("address_type", "INTERSECTION", "string", "right"),
-                    cll.LiteralMatchLevel("address_type", "NO_SUCCESS_INTERSECTION", "string", "right"),
-                    cll.LiteralMatchLevel("address_type", "NO_RESULT_INTERSECTION", "string", "right"),
+                    cll.LiteralMatchLevel(
+                        "address_type", "INTERSECTION", "string", "right"
+                    ),
+                    cll.LiteralMatchLevel(
+                        "address_type",
+                        "NO_SUCCESS_INTERSECTION",
+                        "string",
+                        "right",
+                    ),
+                    cll.LiteralMatchLevel(
+                        "address_type",
+                        "NO_RESULT_INTERSECTION",
+                        "string",
+                        "right",
+                    ),
                 ),
                 cll.CustomLevel(
-                    'jaro_winkler_similarity("geo_address_short_2_l", "geo_address_short_2_r") >= 0.90',
-                    label_for_charts="short2 vs short2 jw >= 0.90 (both intersection)"
+                    (
+                        'jaro_winkler_similarity("geo_address_short_2_l", '
+                        '"geo_address_short_2_r") >= 0.90'
+                    ),
+                    label_for_charts=(
+                        "short2 vs short2 jw >= 0.90 "
+                        "(both intersection)"
+                    ),
                 ),
             ),
             cllc.And(
@@ -783,6 +867,10 @@ DIST_COMP_NEW = cl.CustomComparison(
     ]
 )
 
+MULTI_OFFENDER_NULL_LEVEL = cll.Not(
+    cll.LiteralMatchLevel("offender_count", "1", "int")
+).configure(label_for_charts="multiple offenders", is_null_level=True)
+
 OFFENDER_COMP = cl.CustomComparison(
     output_column_name="offender",
     comparison_levels=[
@@ -794,6 +882,7 @@ OFFENDER_COMP = cl.CustomComparison(
             "offender names close",
             ComparisonComp.OFFENDER_CLOSE.value
         ).to_dict(),
+        MULTI_OFFENDER_NULL_LEVEL,
         cll.ElseLevel()
     ]
 )
@@ -965,6 +1054,7 @@ OFFENDER_AGE_COMP = cl.CustomComparison(
             "offender ages within 2 years",
             ComparisonComp.OFFENDER_AGE_2YEAR.value
         ).to_dict(),
+        MULTI_OFFENDER_NULL_LEVEL,
         cll.ElseLevel()
     ]
 )
@@ -981,6 +1071,7 @@ OFFENDER_SEX_COMP = cl.CustomComparison(
             ComparisonComp.EXACT_OFFENDER_SEX.value,
             "offender_sex"
         ).to_dict(),
+        MULTI_OFFENDER_NULL_LEVEL,
         cll.ElseLevel()
     ]
 )
@@ -996,6 +1087,7 @@ OFFENDER_RACE_COMP = cl.CustomComparison(
             "exact match offender race",
             ComparisonComp.EXACT_OFFENDER_RACE.value
         ).to_dict(),
+        MULTI_OFFENDER_NULL_LEVEL,
         cll.ElseLevel()
     ]
 )
@@ -1011,6 +1103,7 @@ OFFENDER_ETHNICITY_COMP = cl.CustomComparison(
             "exact match offender ethnicity",
             ComparisonComp.EXACT_OFFENDER_ETHNICITY.value
         ).to_dict(),
+        MULTI_OFFENDER_NULL_LEVEL,
         cll.ElseLevel()
     ]
 )
@@ -1031,6 +1124,10 @@ SUMMARY_COMP = cl.CustomComparison(
         cll.CosineSimilarityLevel(
             col_name="summary_vec",
             similarity_threshold=0.65
+        ),
+        cll.CosineSimilarityLevel(
+            col_name="summary_vec",
+            similarity_threshold=0.60
         ),
         cll.CosineSimilarityLevel(
             col_name="summary_vec",
@@ -1062,12 +1159,13 @@ INCIDENT_COMPARISONS = [
     TF_WEAPON_COMP,
     CIRC_COMP,
     SUMMARY_COMP,
+    cl.ExactMatch("victim_race").configure(term_frequency_adjustments=True),
 ]
 
 ORPHAN_COMPARISONS = [
-    DATE_COMP_ORPHAN,
-    AGE_COMP_ORPHAN,
-    DIST_COMP,
+    DATE_COMP,
+    AGE_COMP,
+    DIST_COMP_NEW,
     VICTIM_SEX_COMP,
     OFFENDER_COMP,
     TF_WEAPON_COMP,
@@ -1077,6 +1175,7 @@ ORPHAN_COMPARISONS = [
     VICTIM_COUNT_COMP,
     OFFENDER_AGE_COMP,
     OFFENDER_SEX_COMP,
+    cl.ExactMatch("victim_race").configure(term_frequency_adjustments=True),
 ]
 
 SHR_COMPARISONS = [

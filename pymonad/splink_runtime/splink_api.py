@@ -12,7 +12,9 @@ from ..array import Array
 from ..hashmap import HashMap
 from ..run import Run
 from .splink_types import (
+    BlockingRuleLike,
     BlockingRuleCreator,
+    BlockingRuleLikes,
     ComparisonLevelKey,
     PredictionInputTableName,
     PredictionInputTableNames,
@@ -44,10 +46,10 @@ def splink_dedupe_job(
     clusters_out: ClustersTableName = ClustersTableName(""),
     train_first: bool = False,
     skip_u_estimation: bool = False,
-    training_blocking_rules: StringBlockingRules | Sequence[StringBlockingRule] | Sequence[BlockingRuleCreator] | None = None,
+    training_blocking_rules: BlockingRuleLikes | Sequence[BlockingRuleLike] | None = None,
     training_block_level_map: TrainingBlockToComparisonLevelMap = HashMap.empty(),
     post_train_ratio_copy_comparisons: Sequence[ComparisonCreator | SplinkComparison] | None = None,
-    deterministic_rules: StringBlockingRules | Sequence[StringBlockingRule] | None = None,
+    deterministic_rules: BlockingRuleLikes | Sequence[BlockingRuleLike] | None = None,
     deterministic_recall: float = 0.5,
     visualize: bool = False,
     unique_matching: bool = False,

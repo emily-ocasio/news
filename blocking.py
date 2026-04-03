@@ -3,6 +3,7 @@ Classes and helper functions for defining blocking rules in Splink
 """
 
 from enum import StrEnum
+from collections.abc import Sequence
 
 from splink import block_on
 from splink.internals.blocking_rule_library import (
@@ -15,7 +16,7 @@ from splink.internals.blocking_rule_library import (
 from splink.internals.blocking_rule_creator import BlockingRuleCreator
 
 from pymonad import (
-    Array,
+    CustomStringBlockingRule,
     HashMap,
     TrainingBlockToComparisonLevelMap,
     comparison_level_keys,
@@ -24,7 +25,7 @@ from comparison import (
     _clause_from_comps,
     DATE_COMP,
     DATE_COMP_ORPHAN,
-    DIST_COMP,
+    DIST_COMP_NEW,
 )
 
 SAME_CITY = block_on("city_id")
@@ -116,14 +117,6 @@ class BlockComp(StrEnum):
     CLOSE_LONG_LAT = "abs(l.lat - r.lat) <= 0.0045 AND abs(l.lon - r.lon) <= 0.0055"
     CLOSE_SUMMARY = "array_cosine_similarity(l.summary_vec, r.summary_vec) >= 0.7"
     RIGHT_NOT_EARLIER = "r.year >= l.year"
-
-
-def _add_city(*creators: BlockingRuleCreator) -> list[BlockingRuleCreator]:
-    """
-    Adds city check to each creator and returns as a list
-        List is needed for settings
-    """
-    return list((_and_city & Array(creators)).a)
 
 
 def _block_from_comps(
@@ -300,12 +293,17 @@ NAMED_VICTIM_BLOCKS = [
     DedupBlockRule.YEAR_AGE_SEX
 ]
 
-NAMED_VICTIM_BLOCKS_FOR_TRAINING = _add_city(
-    YEAR_MONTH,
-    FULLNAME,
-    AGE_SEX,
-    OFFENDER_AGE_SEX
-)
+NAMED_VICTIM_YEAR_MONTH_TRAINING_BLOCK = _and_city(YEAR_MONTH)
+NAMED_VICTIM_FULLNAME_TRAINING_BLOCK = _and_city(FULLNAME)
+NAMED_VICTIM_AGE_SEX_TRAINING_BLOCK = _and_city(AGE_SEX)
+NAMED_VICTIM_OFFENDER_AGE_SEX_TRAINING_BLOCK = _and_city(OFFENDER_AGE_SEX)
+
+NAMED_VICTIM_BLOCKS_FOR_TRAINING = [
+    NAMED_VICTIM_YEAR_MONTH_TRAINING_BLOCK,
+    NAMED_VICTIM_FULLNAME_TRAINING_BLOCK,
+    NAMED_VICTIM_AGE_SEX_TRAINING_BLOCK,
+    NAMED_VICTIM_OFFENDER_AGE_SEX_TRAINING_BLOCK,
+]
 
 NAMED_VICTIM_BLOCKS_FOR_TRAINING_OLD = [
     DedupBlockRule.YEAR_MONTH,
@@ -344,9 +342,45 @@ ORPHAN_TRAINING_BLOCKS = [
     TrainBlockRule.OFFENDER_AGE_SEX_WITHIN_YEAR,
 ]
 
+ORPHAN_ARTICLE_EXCLUSION_CLAUSE = "NOT list_contains(r.exclusion_ids, l.unique_id)"
+
+
+def with_orphan_article_exclusions(
+    rules: Sequence[object],
+) -> list[CustomStringBlockingRule]:
+    """Add orphan article-exclusion guards to each blocking rule."""
+    return [
+        CustomStringBlockingRule(
+            f"({rule}) AND {ORPHAN_ARTICLE_EXCLUSION_CLAUSE}"
+        )
+        for rule in rules
+    ]
+
+
+ORPHAN_YEAR_MONTH_TRAINING_BLOCK = with_orphan_article_exclusions(
+    [TrainBlockRule.YEAR_MONTH]
+)[0]
+ORPHAN_AGE_SEX_WITHIN_YEAR_TRAINING_BLOCK = with_orphan_article_exclusions(
+    [TrainBlockRule.AGE_SEX_WITHIN_YEAR]
+)[0]
+ORPHAN_SEX_GEO_SHORT_TRAINING_BLOCK = with_orphan_article_exclusions(
+    [TrainBlockRule.SEX_GEO_SHORT]
+)[0]
+ORPHAN_OFFENDER_AGE_SEX_WITHIN_YEAR_TRAINING_BLOCK = with_orphan_article_exclusions(
+    [TrainBlockRule.OFFENDER_AGE_SEX_WITHIN_YEAR]
+)[0]
+
+ORPHAN_LINKAGE_TRAINING_BLOCKS = [
+    ORPHAN_YEAR_MONTH_TRAINING_BLOCK,
+    ORPHAN_AGE_SEX_WITHIN_YEAR_TRAINING_BLOCK,
+    ORPHAN_SEX_GEO_SHORT_TRAINING_BLOCK,
+    ORPHAN_OFFENDER_AGE_SEX_WITHIN_YEAR_TRAINING_BLOCK,
+]
+
 class ShrLinkRule(StrEnum):
     """
-    SHR linkage blocking rules intentionally exclude article-level exclusion_id constraints.
+    SHR linkage blocking rules intentionally exclude article-level
+    exclusion_id constraints.
     """
 
     MIDPOINT_7MONTH_BASE = _train_block_from_comps(
@@ -405,23 +439,22 @@ YEAR_MONTH_COMPARISON = [
     "exact yr/mon or within 2 days or year precision match"
 ]
 
-TRAINING_BLOCK_LEVEL_MAP: TrainingBlockToComparisonLevelMap = HashMap.make({
-    DedupBlockRule.YEAR_MONTH: comparison_level_keys(
+DEDUPE_TRAINING_BLOCK_LEVEL_MAP: TrainingBlockToComparisonLevelMap = HashMap.make({
+    NAMED_VICTIM_YEAR_MONTH_TRAINING_BLOCK: comparison_level_keys(
         DATE_COMP,
         YEAR_MONTH_COMPARISON,
     ),
-    TrainBlockRule.YEAR_MONTH: comparison_level_keys(
+})
+
+ORPHAN_TRAINING_BLOCK_LEVEL_MAP: TrainingBlockToComparisonLevelMap = HashMap.make({
+    ORPHAN_YEAR_MONTH_TRAINING_BLOCK: comparison_level_keys(
         DATE_COMP_ORPHAN,
         [
             "exact date or month precision match",
             "exact yr/mon or year precision match",
         ],
     ),
-    YEAR_MONTH: comparison_level_keys(
-        DATE_COMP,
-        YEAR_MONTH_COMPARISON,
-    ),
-    TrainBlockRule.SEX_WITHIN_YEAR: comparison_level_keys(
+    ORPHAN_AGE_SEX_WITHIN_YEAR_TRAINING_BLOCK: comparison_level_keys(
         DATE_COMP_ORPHAN,
         [
             "exact date or month precision match",
@@ -429,14 +462,14 @@ TRAINING_BLOCK_LEVEL_MAP: TrainingBlockToComparisonLevelMap = HashMap.make({
             "within a year",
         ],
     ),
-    TrainBlockRule.GEO_SHORT: comparison_level_keys(
-        DIST_COMP,
+    ORPHAN_SEX_GEO_SHORT_TRAINING_BLOCK: comparison_level_keys(
+        DIST_COMP_NEW,
         [
             "exact location match",
-            "within 0.4 km or similar address",
+            "within 0.3 km or similar address",
         ],
     ),
-    TrainBlockRule.OFFENDER_SEX_WITHIN_YEAR: comparison_level_keys(
+    ORPHAN_OFFENDER_AGE_SEX_WITHIN_YEAR_TRAINING_BLOCK: comparison_level_keys(
         DATE_COMP_ORPHAN,
         [
             "exact date or month precision match",
