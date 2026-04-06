@@ -17,18 +17,18 @@ This workflow runs after the core extraction and linkage pipeline steps have alr
 5. This adjudication step investigates the remaining unlinked orphans for likely missed matches beyond expected deterministic/Splink coverage.
 
 Downstream expectation:
-- Adjudication outputs are persisted so they can be re-applied after future reruns of incident setup, clustering, and orphan linkage without repeating agent reasoning.
+- Adjudication outputs are persisted so they can be re-applied after future reruns of incident setup, clustering, and orphan linkage without repeating controller-guided case analysis.
 
 ## Scope
 - This workflow is for post-Splink adjudication only.
 - It is not bug-finding and not a replacement for Splink clustering/linkage.
-- It is an interactive agent workflow with direct-write persistence.
+- It is a controller-driven interactive workflow with direct-write persistence via controller `[K]`.
 
 ## Execution Mode
 - Default mode: `interactive_casewise`.
 - Optional mode: `batch_scoring` (only when explicitly requested by user).
 - If no mode is specified in the user prompt, use `interactive_casewise`.
-- In `interactive_casewise`, the agent must adjudicate each orphan/group with direct narrative reasoning and case-specific evidence.
+- In `interactive_casewise`, `[K]` must adjudicate each orphan/group with direct narrative reasoning and case-specific evidence.
 - In `batch_scoring`, outputs are screening-only unless user explicitly approves terminal adjudication criteria.
 - Primary task type: qualitative textual analysis and reasoning per case; scripting is allowed only for data retrieval support, not for autonomous terminal adjudication.
 
@@ -37,7 +37,7 @@ Downstream expectation:
 - Use direct incremental SQL per stage (DuckDB and SQLite) for each orphan/group.
 - Do not use a single monolithic Python batch script to perform terminal adjudication in `interactive_casewise`.
 - Scripted helpers are allowed only for retrieval support and must still emit stage-by-stage SQL summaries and row counts.
-- Retrieval strategy is adaptive: agents may iteratively reformulate queries based on intermediate findings as long as they log what changed and why.
+- Retrieval strategy is adaptive: the implementation may iteratively reformulate queries based on intermediate findings as long as it logs what changed and why.
 
 ## Inputs
 - Required:
@@ -63,7 +63,7 @@ Downstream expectation:
   - locate that orphan in the same ordering,
   - start strictly after it,
   - then take next `limit` rows.
-- Agent should report the queue-order key and first/last selected orphan IDs in the run summary.
+- The run summary should report the queue-order key and first/last selected orphan IDs.
 
 ## Loop Contract
 Process queue items, where each item is either a single orphan or a grouped incident batch:
@@ -166,7 +166,7 @@ Before a terminal label (`matched`, `not_same_person`, `insufficient_information
   - Stage B candidate cap policy:
     - minimum `LIMIT` is `75`.
     - if source narrative is secondary/reference style or orphan fields are sparse (`unknown`/`NULL` location, age, sex, weapon, or weak date precision), minimum `LIMIT` is `125`.
-    - agent must record chosen Stage B `LIMIT` and rationale in the stage trace.
+    - the implementation must record the chosen Stage B `LIMIT` and rationale in the stage trace.
 
 2. Stage C: relaxed expansion (mandatory when Stage B is sparse/empty)
 - Widen date and location tolerances.
@@ -231,7 +231,7 @@ Use DuckDB direct writes unless `dry_run=true`.
   - `confidence` (nullable/score)
   - `reason_summary`
   - `evidence_json`
-  - `analyst_mode` (set to `interactive_agent`)
+  - `analyst_mode` (currently set by `[K]` to `interactive_agent_k`)
   - timestamps
 - Do not upsert rows with terminal status `analysis_incomplete`.
 - Do not upsert rows with boilerplate `reason_summary`.

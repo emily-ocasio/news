@@ -49,7 +49,7 @@
 - Behavior: follow `docs/orphan_adjudication_playbook.md`.
 - Do not prepend the General Development greeting line while running orphan adjudication workflows.
 - Default batch behavior includes same-incident consecutive orphan grouping unless the user explicitly disables it (`group_same_incident=false`).
-- Enforce required analysis stages and terminal-decision gate from the playbook; zero pair rows alone cannot produce a terminal `unlikely`.
+- Enforce required analysis stages and terminal-decision gate from the playbook; zero pair rows alone cannot produce a terminal `not_same_person`.
 - Default execution mode is `interactive_casewise`; do not use bulk scripted terminal labeling unless the user explicitly requests `batch_scoring`.
 - In `interactive_casewise`, enforce `interactive_sql` stage-by-stage query execution and adaptive text retrieval (FTS-first default with dynamic query refinement and auditable fallback/supplement rationale).
 

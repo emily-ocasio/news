@@ -1109,6 +1109,27 @@ def _decision_from_cache_payload(
     )
 
 
+def _decision_from_override_row_v2(row: dict[str, Any]) -> CaseDecision:
+    raw_evidence = row.get("evidence_json")
+    evidence_json = raw_evidence if isinstance(raw_evidence, dict) else {}
+    confidence_raw = row.get("confidence")
+    confidence = float(confidence_raw) if confidence_raw is not None else None
+    article_raw = row.get("article_id")
+    try:
+        article_id = int(article_raw) if article_raw is not None else None
+    except (TypeError, ValueError):
+        article_id = None
+    return CaseDecision(
+        orphan_id=_safe_text(row.get("orphan_id")),
+        article_id=article_id,
+        label=_safe_text(row.get("resolution_label")),
+        resolved_entity_id=_safe_text(row.get("resolved_entity_id")) or None,
+        confidence=confidence,
+        reason_summary=_safe_text(row.get("reason_summary")),
+        evidence_json=evidence_json,
+    )
+
+
 def _stringify_prompt_vars(payload: dict[str, Any]) -> dict[str, str]:
     out: dict[str, str] = {}
     for k, v in payload.items():
@@ -1494,6 +1515,52 @@ def _decision_from_work(
 
     top = work.ranked_candidates[:3]
     if assigned_candidate is None:
+        if (
+            work.provisional_reason
+            == "partial_group_match_unresolved_after_rank_retry"
+        ):
+            evidence = {
+                "stage_trace": work.stage_trace,
+                "narrative_evidence": {
+                    "orphan_anchors": work.anchors,
+                    "candidate_anchors": top,
+                    "conflict_analysis": (
+                        "a partial same-incident group match was found, and after"
+                        " rerunning API 2 with already-matched entities excluded,"
+                        " the remaining orphan still had no defensible match"
+                    ),
+                },
+                "top_candidates": [
+                    _safe_text(c.get("entity_uid"))
+                    for c in top
+                    if _safe_text(c.get("entity_uid")) != ""
+                ],
+                "reason_code": "no_match_after_partial_group_rerank",
+                "execution_audit": {
+                    "query_mode": "interactive_sql",
+                    "fts_used": len(work.valid_variants) > 0,
+                    "fts_query_list": work.valid_variants,
+                },
+                "policy_enforcement": {
+                    "one_to_one_mapping": True,
+                    "same_article_entity_uniqueness": True,
+                    "partial_group_rerank_completed": True,
+                },
+            }
+            return CaseDecision(
+                orphan_id=work.orphan_id,
+                article_id=work.article_id,
+                label="not_same_person",
+                resolved_entity_id=None,
+                confidence=None,
+                reason_summary=(
+                    "The group produced a defensible partial match, and API 2 was"
+                    " rerun for the remaining orphan(s) with already-matched entities"
+                    " excluded. That rerank did not identify a defensible remaining"
+                    " match, so this orphan is finalized as not_same_person."
+                ),
+                evidence_json=evidence,
+            )
         reason_code = "no_valid_winner_after_rank_and_constraints"
         reason_summary = (
             "Candidate generation and ranking were completed, but no entity passed"
@@ -2255,6 +2322,19 @@ def _llm_cache_put_run_v2(
     )
 
 
+def _llm_cache_delete_run_v2(stage: str, idempotency_key: str) -> Run[Any]:
+    return sql_exec(
+        SQL(
+            """
+            DELETE FROM llm_cache
+            WHERE stage = ?
+              AND idempotency_key = ?;
+            """
+        ),
+        _sql_params((stage, idempotency_key)),
+    )
+
+
 def _materialize_cache_readiness_run_v2(
     run_id: str, rows: Array[CacheReadinessRow]
 ) -> Run[Any]:
@@ -2665,32 +2745,34 @@ def _save_gptresults_entry_run_v2(
     return view(user_name) >> (
         lambda user: ask() >> (
             lambda env: resolve_prompt_template(env, PromptKey(prompt_key)) >> (
-                lambda prompt_template: sql_exec(
-                    SQL(insert_gptresults_sql()),
-                    SQLParams(
-                        (
-                            article_id,
-                            String(user),
-                            timestamp,
-                            String(prompt_key),
-                            String(prompt_template.id),
+                lambda prompt_template: _with_sqlite(
+                    sql_exec(
+                        SQL(insert_gptresults_sql()),
+                        SQLParams(
                             (
-                                String(prompt_template.version)
-                                if prompt_template.version is not None
-                                else None
-                            ),
-                            String(variables_json),
-                            model,
-                            String(format_type_name),
-                            String(output_json),
-                            String(str(response_t.parsed.reasoning)),
-                            usage.input_tokens,
-                            usage.cached_tokens,
-                            usage.output_tokens,
-                            usage.reasoning_tokens,
-                            usage.cost(),
+                                article_id,
+                                String(user),
+                                timestamp,
+                                String(prompt_key),
+                                String(prompt_template.id),
+                                (
+                                    String(prompt_template.version)
+                                    if prompt_template.version is not None
+                                    else None
+                                ),
+                                String(variables_json),
+                                model,
+                                String(format_type_name),
+                                String(output_json),
+                                String(str(response_t.parsed.reasoning)),
+                                usage.input_tokens,
+                                usage.cached_tokens,
+                                usage.output_tokens,
+                                usage.reasoning_tokens,
+                                usage.cost(),
+                            )
                         )
-                    ),
+                    )
                 )
             )
         )
@@ -2788,6 +2870,10 @@ def _anchor_doc_threshold_run_v2() -> Run[int]:
             )
         )
     )
+
+
+def _fts_article_hit_limit_run_v2() -> Run[int]:
+    return _anchor_doc_threshold_run_v2()
 
 
 def _validate_anchors_run_v2(
@@ -2900,6 +2986,7 @@ def _fts_article_hits_query_run_v2(match_q: str, limit_n: int) -> Run[Array[int]
         WHERE a.Dataset='CLASS_WP'
           AND a.gptClass='M'
           AND articles_wp_m_fts MATCH ?
+        ORDER BY bm25(articles_wp_m_fts)
         LIMIT ?;
         """,
             _sql_params((match_q, limit_n)),
@@ -2923,15 +3010,25 @@ def _fts_article_hits_query_run_v2(match_q: str, limit_n: int) -> Run[Array[int]
     )
 
 
-def _fts_article_hits_run_v2(fts_query: str, limit_n: int = 60) -> Run[Array[int]]:
+def _fts_article_hits_run_v2(
+    fts_query: str, limit_n: int | None = None
+) -> Run[Array[int]]:
     if fts_query.strip() == "":
         return pure(Array.empty())
 
     def _handle_fts_query_result(result: Any) -> Run[Array[int]]:
         return pure(result.r) if isinstance(result, Right) else pure(Array.empty())
 
-    return run_except(_fts_article_hits_query_run_v2(fts_query, limit_n)) >> (
-        _handle_fts_query_result
+    def _run_with_limit(resolved_limit: int) -> Run[Array[int]]:
+        safe_limit = max(1, resolved_limit)
+        return run_except(_fts_article_hits_query_run_v2(fts_query, safe_limit)) >> (
+            _handle_fts_query_result
+        )
+
+    return (
+        _run_with_limit(limit_n)
+        if limit_n is not None
+        else _fts_article_hit_limit_run_v2() >> _run_with_limit
     )
 
 
@@ -4624,6 +4721,217 @@ def _make_assignment_candidate_dict_v2(
     }
 
 
+def _normalized_incident_candidate_v2(
+    candidate: dict[str, Any],
+    full_incident_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    source_article_id = _candidate_source_article_id(candidate)
+    source_incident_idx = _int_or_none(candidate.get("source_incident_idx"))
+    full_selected = next(
+        (
+            row
+            for row in full_incident_rows
+            if row.get("source_article_id") == source_article_id
+            and row.get("source_incident_idx") == source_incident_idx
+        ),
+        None,
+    )
+    normalized = dict(candidate)
+    if full_selected is not None:
+        normalized["eligible_entity_uids"] = (
+            full_selected.get("eligible_entity_uids")
+            or normalized.get("eligible_entity_uids")
+            or []
+        )
+    return normalized
+
+
+def _assigned_candidates_for_incident_v2(
+    orphan_ids: tuple[str, ...],
+    incident_candidate: dict[str, Any],
+    weight_by_orphan: dict[str, dict[str, float]],
+    *,
+    used_entities: set[str] | None = None,
+) -> dict[str, dict[str, Any]]:
+    source_article_id = _candidate_source_article_id(incident_candidate)
+    source_incident_idx = _int_or_none(incident_candidate.get("source_incident_idx"))
+    eligible_entity_uids = tuple(
+        sorted(
+            _safe_text(uid)
+            for uid in (incident_candidate.get("eligible_entity_uids") or [])
+            if _safe_text(uid) != ""
+            and (used_entities is None or _safe_text(uid) not in used_entities)
+        )
+    )
+    if len(orphan_ids) == 0 or len(eligible_entity_uids) == 0:
+        return {}
+    assignment = _maximize_weight_assignment_v2(
+        orphan_ids, eligible_entity_uids, weight_by_orphan
+    )
+    return {
+        orphan_id: _make_assignment_candidate_dict_v2(
+            entity_uid=entity_uid,
+            source_article_id=source_article_id,
+            source_incident_idx=source_incident_idx,
+            splink_match_weight=_as_float(
+                weight_by_orphan.get(orphan_id, {}).get(entity_uid), 0.0
+            ),
+            ranked_incidents=[incident_candidate],
+        )
+        for orphan_id, entity_uid in assignment.items()
+    }
+
+
+def _incident_rows_excluding_entities_v2(
+    full_incident_rows: list[dict[str, Any]],
+    excluded_entities: set[str],
+) -> list[dict[str, Any]]:
+    filtered_rows: list[dict[str, Any]] = []
+    for row in full_incident_rows:
+        remaining_entities = [
+            _safe_text(uid)
+            for uid in (row.get("eligible_entity_uids") or [])
+            if _safe_text(uid) != ""
+            and _safe_text(uid) not in excluded_entities
+        ]
+        if len(remaining_entities) == 0:
+            continue
+        filtered_rows.append(
+            {
+                **row,
+                "entity_uid": sorted(remaining_entities)[0],
+                "eligible_entity_uids": remaining_entities,
+            }
+        )
+    return filtered_rows
+
+
+def _call_group_rank_attempt_run_v2(
+    leader_orphan_id: str,
+    group_dossier: GroupDossier,
+    representatives: Array[IncidentRepresentativeCandidate],
+    *,
+    attempt_num: int,
+) -> Run[list[dict[str, Any]]]:
+    attempt_label = f"api_call retry {attempt_num}"
+
+    def _after_request(rank_request: RankRequest) -> Run[list[dict[str, Any]]]:
+        return (
+            put_line(f"[K][{leader_orphan_id}] rank_input_variables ({attempt_label}):")
+            ^ put_line(_pretty_json(rank_request.to_display_payload()))
+            ^ put_line(
+                f"[K][{leader_orphan_id}] rank_api_call ({attempt_label}): start"
+            )
+            ^ _call_rank_run_v2(rank_request)
+        ) >> (
+            lambda rank_t: put_line(
+                f"[K][{leader_orphan_id}] rank_api_call ({attempt_label}): completed"
+            )
+            ^ _save_gptresults_entry_run_v2(
+                group_dossier.article_id,
+                RANK_PROMPT_KEY,
+                cast(dict[str, str | None], rank_request.to_prompt_variables()),
+                rank_t,
+                "RankResponse",
+            )
+            ^ _log_api_usage_and_reasoning_run_v2(
+                leader_orphan_id, f"rank {attempt_label}", rank_t
+            )
+            ^ put_line(f"[K][{leader_orphan_id}] rank_result ({attempt_label}):")
+            ^ put_line(
+                _pretty_json(
+                    json.loads(
+                        cast(RankResponse, rank_t.parsed.output).model_dump_json()
+                    )
+                )
+            )
+            ^ pure(
+                _validate_incident_rank_output_v2(
+                    cast(RankResponse, rank_t.parsed.output),
+                    representatives,
+                )
+            )
+        )
+
+    return _build_rank_request_for_group_run_v2(group_dossier, representatives) >> (
+        _after_request
+    )
+
+
+def _rerank_remaining_group_assignments_run_v2(
+    leader_orphan_id: str,
+    group_orphan_ids: tuple[str, ...],
+    group_dossier: GroupDossier,
+    current_assignment: dict[str, dict[str, Any]],
+    weight_by_orphan: dict[str, dict[str, float]],
+    full_incident_rows: list[dict[str, Any]],
+) -> Run[tuple[dict[str, dict[str, Any]], int]]:
+    def _loop(
+        assigned: dict[str, dict[str, Any]],
+        api2_retries: int,
+    ) -> Run[tuple[dict[str, dict[str, Any]], int]]:
+        remaining_orphans = tuple(
+            orphan_id for orphan_id in group_orphan_ids if orphan_id not in assigned
+        )
+        if len(remaining_orphans) == 0:
+            return pure((assigned, api2_retries))
+        used_entities = {
+            _safe_text(assigned_candidate.get("entity_uid"))
+            for assigned_candidate in assigned.values()
+            if _safe_text(assigned_candidate.get("entity_uid")) != ""
+        }
+        filtered_incident_rows = _incident_rows_excluding_entities_v2(
+            full_incident_rows, used_entities
+        )
+        retry_representatives = _incident_representatives_from_rows_v2(
+            filtered_incident_rows
+        )
+        if retry_representatives.length == 0:
+            return pure((assigned, api2_retries))
+        return _call_group_rank_attempt_run_v2(
+            leader_orphan_id,
+            group_dossier,
+            retry_representatives,
+            attempt_num=api2_retries + 1,
+        ) >> (
+            lambda ranked_retry: pure((assigned, api2_retries + 1))
+            if len(ranked_retry) == 0
+            else _continue_after_retry(
+                assigned,
+                api2_retries + 1,
+                remaining_orphans,
+                ranked_retry,
+                filtered_incident_rows,
+                used_entities,
+            )
+        )
+
+    def _continue_after_retry(
+        assigned: dict[str, dict[str, Any]],
+        api2_retries: int,
+        remaining_orphans: tuple[str, ...],
+        ranked_retry: list[dict[str, Any]],
+        filtered_incident_rows: list[dict[str, Any]],
+        used_entities: set[str],
+    ) -> Run[tuple[dict[str, dict[str, Any]], int]]:
+        selected_retry = _normalized_incident_candidate_v2(
+            ranked_retry[0], filtered_incident_rows
+        )
+        retry_assignment = _assigned_candidates_for_incident_v2(
+            remaining_orphans,
+            selected_retry,
+            weight_by_orphan,
+            used_entities=used_entities,
+        )
+        if len(retry_assignment) == 0:
+            return pure((assigned, api2_retries))
+        updated_assignment = dict(assigned)
+        updated_assignment.update(retry_assignment)
+        return _loop(updated_assignment, api2_retries)
+
+    return _loop(current_assignment, 0)
+
+
 def _maximize_weight_assignment_v2(
     orphan_ids: tuple[str, ...],
     entity_uids: tuple[str, ...],
@@ -4689,7 +4997,7 @@ def _cache_terminal_decision_run_v2(decision: CaseDecision) -> Run[Any]:
     """Persist a terminal decision in the end-to-end adjudication cache."""
 
     if decision.label not in {"matched", "not_same_person", "insufficient_information"}:
-        return pure(None)
+        return _llm_cache_delete_run_v2(E2E_CACHE_STAGE, decision.orphan_id)
     return _load_orphan_dossier_run_v2(decision.orphan_id) >> (
         lambda dossier: _llm_cache_put_run_v2(
             stage=E2E_CACHE_STAGE,
@@ -4910,6 +5218,37 @@ def _rebuild_overrides_table_run_v2(
     )
 
 
+def _refresh_overrides_for_article_run_v2(
+    run_id: str, article_id: int, decisions: Array[CaseDecision]
+) -> Run[int]:
+    def _combine_with_preserved(
+        preserved: list[dict[str, Any]],
+    ) -> Run[int]:
+        preserved_decisions = Array.make(
+            tuple(_decision_from_override_row_v2(row) for row in preserved)
+        )
+        combined = Array.make(tuple(preserved_decisions.a + decisions.a))
+        return _rebuild_overrides_table_run_v2(run_id, combined, dry_run=False)
+
+    return _query_rows_run_v2(
+        """
+        SELECT
+          o.orphan_id,
+          li.article_id,
+          o.resolution_label,
+          o.resolved_entity_id,
+          o.confidence,
+          o.reason_summary,
+          o.evidence_json
+        FROM orphan_adjudication_overrides o
+        LEFT JOIN orphan_link_input li
+          ON li.unique_id = o.orphan_id
+        WHERE COALESCE(li.article_id, -1) <> ?;
+        """,
+        _sql_params((article_id,)),
+    ) >> _combine_with_preserved
+
+
 def _finalize_decision_run_v2(
     run_id: str,
     decision: CaseDecision,
@@ -4999,6 +5338,26 @@ def _display_group_matched_article_run_v2(
     )
 
 
+def _display_group_boundary_run_v2(group: Array[CacheReadinessRow]) -> Run[Any]:
+    """Render a visible boundary before processing the next orphan/group."""
+    if group.length == 0:
+        return pure(None)
+    leader_orphan_id = group[0].orphan_id
+    orphan_ids = ", ".join(_display_safe_id(row.orphan_id) for row in group)
+    label = "orphan group" if group.length > 1 else "orphan"
+    return (
+        put_line("")
+        ^ put_line("")
+        ^ put_line("____________________________________________________________")
+        ^ put_line(
+            f"[K][{leader_orphan_id}] Starting {label}"
+            f" ({group.length} row{'s' if group.length != 1 else ''}):"
+        )
+        ^ put_line(orphan_ids)
+        ^ put_line("")
+    )
+
+
 def _finalize_group_decisions_run_v2(
     run_id: str,
     decisions: Array[CaseDecision],
@@ -5024,6 +5383,30 @@ def _finalize_group_decisions_run_v2(
     ) >> _display_group_outcome
 
 
+def _process_and_finalize_group_run_v2(
+    run_id: str,
+    group: Array[CacheReadinessRow],
+    *,
+    candidate_strategy: str = "default",
+) -> Run[Array[CaseDecision]]:
+    """Process one group and display its outcome before moving on."""
+    return _process_group_run_v2(
+        run_id, group, candidate_strategy=candidate_strategy
+    ) >> (lambda decisions: _finalize_group_decisions_run_v2(run_id, decisions))
+
+
+def _process_and_cache_group_run_v2(
+    run_id: str,
+    group: Array[CacheReadinessRow],
+    *,
+    candidate_strategy: str = "default",
+) -> Run[Array[CaseDecision]]:
+    """Process one article-scoped group and cache/display it immediately."""
+    return _process_group_run_v2(
+        run_id, group, candidate_strategy=candidate_strategy
+    ) >> _cache_group_decisions_run_v2
+
+
 def _processing_error_work_v2(
     orphan_id: str, article_id: int | None, message: str
 ) -> OrphanWork:
@@ -5041,6 +5424,64 @@ def _processing_error_work_v2(
         ranked_candidates=[],
         provisional_reason="processing error",
     )
+
+
+def _group_analysis_incomplete_decisions_v2(
+    group: Array[CacheReadinessRow], message: str
+) -> Array[CaseDecision]:
+    return Array.make(
+        tuple(
+            CaseDecision(
+                orphan_id=row.orphan_id,
+                article_id=row.article_id,
+                label="analysis_incomplete",
+                resolved_entity_id=None,
+                confidence=None,
+                reason_summary=(
+                    "Required adjudication stages failed due to execution error"
+                    " and the case must be retried."
+                ),
+                evidence_json={
+                    "stage_trace": [
+                        {
+                            "stage": "error",
+                            "row_count": 0,
+                            "gate": "fail",
+                            "error": message,
+                        }
+                    ],
+                    "reason_code": "execution_failure",
+                    "execution_audit": {
+                        "query_mode": "interactive_sql",
+                        "fts_used": False,
+                        "fts_query_list": [],
+                    },
+                },
+            )
+            for row in group
+        )
+    )
+
+
+def _group_pass1_stage_trace_v2(
+    *,
+    group_size: int,
+    valid_anchor_count: int,
+    gate: str,
+    strategy_is_top_score_union: bool,
+    anchor_failures: list[str] | None = None,
+) -> dict[str, Any]:
+    stage_trace: dict[str, Any] = {
+        "stage": "pass1",
+        "row_count": valid_anchor_count,
+        "gate": gate,
+        "group_size": group_size,
+    }
+    if strategy_is_top_score_union:
+        stage_trace["strategy"] = "top_score_union"
+    if anchor_failures:
+        stage_trace["anchor_failures"] = anchor_failures
+    return stage_trace
 
 
 def _process_single_orphan_run_v2(
@@ -5280,9 +5721,7 @@ def _process_single_orphan_run_v2(
             ^ (
                 array_traverse_run(
                     query_specs,
-                    lambda query_spec: _fts_article_hits_run_v2(
-                        query_spec.fts_query, 60
-                    )
+                    lambda query_spec: _fts_article_hits_run_v2(query_spec.fts_query)
                     >> (
                         lambda article_ids: _entities_for_articles_run_v2(
                             article_ids, orphan_id, query_spec.display_text
@@ -5491,38 +5930,7 @@ def _process_group_run_v2(
         )
 
     def _analysis_incomplete_decisions(message: str) -> Array[CaseDecision]:
-        return Array.make(
-            tuple(
-                CaseDecision(
-                    orphan_id=row.orphan_id,
-                    article_id=row.article_id,
-                    label="analysis_incomplete",
-                    resolved_entity_id=None,
-                    confidence=None,
-                    reason_summary=(
-                        "Required adjudication stages failed due to execution error"
-                        " and the case must be retried."
-                    ),
-                    evidence_json={
-                        "stage_trace": [
-                            {
-                                "stage": "error",
-                                "row_count": 0,
-                                "gate": "fail",
-                                "error": message,
-                            }
-                        ],
-                        "reason_code": "execution_failure",
-                        "execution_audit": {
-                            "query_mode": "interactive_sql",
-                            "fts_used": False,
-                            "fts_query_list": [],
-                        },
-                    },
-                )
-                for row in group
-            )
-        )
+        return _group_analysis_incomplete_decisions_v2(group, message)
 
     def _handle_group_result(result: Any) -> Run[Array[CaseDecision]]:
         if isinstance(result, Right):
@@ -5562,23 +5970,6 @@ def _process_group_run_v2(
             )
         )
 
-    def _build_pass1_stage_trace(
-        valid_anchor_count: int,
-        gate: str,
-        anchor_failures: list[str] | None = None,
-    ) -> dict[str, Any]:
-        stage_trace: dict[str, Any] = {
-            "stage": "pass1",
-            "row_count": valid_anchor_count,
-            "gate": gate,
-            "group_size": len(group_orphan_ids),
-        }
-        if strategy_is_top_score_union:
-            stage_trace["strategy"] = "top_score_union"
-        if anchor_failures:
-            stage_trace["anchor_failures"] = anchor_failures
-        return stage_trace
-
     def _display_group_article_run(group_dossier: GroupDossier) -> Run[Any]:
         return _display_article_run_v2(
             _dossier_from_dict_v2(
@@ -5615,21 +6006,14 @@ def _process_group_run_v2(
         weight_by_orphan: dict[str, dict[str, float]],
         full_incident_rows: list[dict[str, Any]],
     ) -> Run[Array[CaseDecision]]:
-        selected = ranked_candidates[0] if len(ranked_candidates) > 0 else {}
-        full_selected = next(
-            (
-                row
-                for row in full_incident_rows
-                if row.get("source_article_id") == selected.get("source_article_id")
-                and row.get("source_incident_idx")
-                == selected.get("source_incident_idx")
-            ),
-            selected,
+        selected = _normalized_incident_candidate_v2(
+            ranked_candidates[0] if len(ranked_candidates) > 0 else {},
+            full_incident_rows,
         )
         allowed_entities = tuple(
             sorted(
                 _safe_text(uid)
-                for uid in (full_selected.get("eligible_entity_uids") or [])
+                for uid in (selected.get("eligible_entity_uids") or [])
                 if _safe_text(uid) != ""
             )
         )
@@ -5639,53 +6023,113 @@ def _process_group_run_v2(
                     "selected_incident_has_no_eligible_entities_after_exclusion"
                 )
             )
-        assignment = _maximize_weight_assignment_v2(
-            group_orphan_ids, allowed_entities, weight_by_orphan
+        primary_assignment = _assigned_candidates_for_incident_v2(
+            group_orphan_ids,
+            selected,
+            weight_by_orphan,
         )
-        shared_stage_trace = [
-            _build_pass1_stage_trace(
-                valid_anchors.length,
-                "bypassed" if strategy_is_top_score_union else "pass",
-            ),
-            {"stage": "B", "row_count": 0, "gate": "bypassed"},
-            {"stage": "C", "row_count": 0, "gate": "bypassed"},
-            {
-                "stage": "C2",
-                "row_count": representatives.length,
-                "gate": "pass",
-            },
-            {
-                "stage": "rank",
-                "row_count": len(ranked_candidates),
-                "gate": "pass",
-            },
-            {
-                "stage": "assignment",
-                "row_count": len(assignment),
-                "gate": "pass",
-            },
-        ]
-        work_items = _build_shared_works(
-            article_id=group_dossier.article_id,
-            anchors=valid_anchors,
-            variants_used=variants_used,
-            ranked_candidates=ranked_candidates,
-            stage_trace=shared_stage_trace,
-            provisional_reason="matched incident selected but orphan unassigned",
+        partial_group_match = (
+            len(primary_assignment) > 0
+            and len(primary_assignment) < len(group_orphan_ids)
         )
-        assigned_candidates = {
-            orphan_id: _make_assignment_candidate_dict_v2(
-                entity_uid=entity_uid,
-                source_article_id=selected.get("source_article_id"),
-                source_incident_idx=selected.get("source_incident_idx"),
-                splink_match_weight=_as_float(
-                    weight_by_orphan.get(orphan_id, {}).get(entity_uid), 0.0
-                ),
-                ranked_incidents=ranked_candidates,
+
+        def _finalize_assignment(
+            assignment: dict[str, dict[str, Any]],
+            api2_retries: int,
+        ) -> Run[Array[CaseDecision]]:
+            retried_matches = max(0, len(assignment) - len(primary_assignment))
+            unresolved_after_retry = tuple(
+                orphan_id
+                for orphan_id in group_orphan_ids
+                if orphan_id not in assignment
             )
-            for orphan_id, entity_uid in assignment.items()
-        }
-        return _finalize_decisions_from_group_work(work_items, assigned_candidates)
+            assignment_gate = (
+                "fail"
+                if partial_group_match and len(unresolved_after_retry) > 0
+                else "pass"
+            )
+            assignment_notes = (
+                f"primary={len(primary_assignment)};"
+                f" retried_matches={retried_matches};"
+                f" unresolved={len(unresolved_after_retry)};"
+                f" api2_retries={api2_retries}"
+            )
+            shared_stage_trace = [
+                _group_pass1_stage_trace_v2(
+                    group_size=len(group_orphan_ids),
+                    valid_anchor_count=valid_anchors.length,
+                    gate="bypassed" if strategy_is_top_score_union else "pass",
+                    strategy_is_top_score_union=strategy_is_top_score_union,
+                ),
+                {"stage": "B", "row_count": 0, "gate": "bypassed"},
+                {"stage": "C", "row_count": 0, "gate": "bypassed"},
+                {
+                    "stage": "C2",
+                    "row_count": representatives.length,
+                    "gate": "pass",
+                },
+                {
+                    "stage": "rank",
+                    "row_count": len(ranked_candidates) + api2_retries,
+                    "gate": "pass",
+                },
+                {
+                    "stage": "assignment",
+                    "row_count": len(assignment),
+                    "gate": assignment_gate,
+                    "notes": assignment_notes,
+                },
+            ]
+            work_items = _build_shared_works(
+                article_id=group_dossier.article_id,
+                anchors=valid_anchors,
+                variants_used=variants_used,
+                ranked_candidates=ranked_candidates,
+                stage_trace=shared_stage_trace,
+                provisional_reason=(
+                    "partial_group_match_unresolved_after_rank_retry"
+                    if partial_group_match and len(unresolved_after_retry) > 0
+                    else "matched incident selected but orphan unassigned"
+                ),
+            )
+            return (
+                _log_shared_stage_metric(
+                    "assignment",
+                    "maximum_weight_matching",
+                    len(assignment),
+                    assignment_notes,
+                )
+                ^ (
+                    put_line(
+                        f"[K][{leader_orphan_id}] partial_group_match_retry:"
+                        f" primary={len(primary_assignment)},"
+                        f" retried_matches={retried_matches},"
+                        f" unresolved={len(unresolved_after_retry)},"
+                        f" api2_retries={api2_retries}"
+                    )
+                    if partial_group_match
+                    else pure(None)
+                )
+                ^ _finalize_decisions_from_group_work(work_items, assignment)
+            )
+
+        return (
+            _rerank_remaining_group_assignments_run_v2(
+                leader_orphan_id,
+                group_orphan_ids,
+                group_dossier,
+                dict(primary_assignment),
+                weight_by_orphan,
+                full_incident_rows,
+            )
+            >> (
+                lambda retry_result: _finalize_assignment(
+                    retry_result[0], retry_result[1]
+                )
+            )
+            if partial_group_match
+            else _finalize_assignment(dict(primary_assignment), 0)
+        )
 
     def _finalize_rank_response(
         group_dossier: GroupDossier,
@@ -5705,9 +6149,11 @@ def _process_group_run_v2(
             not in {_safe_text(row.get("entity_uid")) for row in ranked}
         ]
         shared_stage_trace = [
-            _build_pass1_stage_trace(
-                valid_anchors.length,
-                "bypassed" if strategy_is_top_score_union else "pass",
+            _group_pass1_stage_trace_v2(
+                group_size=len(group_orphan_ids),
+                valid_anchor_count=valid_anchors.length,
+                gate="bypassed" if strategy_is_top_score_union else "pass",
+                strategy_is_top_score_union=strategy_is_top_score_union,
             ),
             {"stage": "B", "row_count": 0, "gate": "bypassed"},
             {"stage": "C", "row_count": 0, "gate": "bypassed"},
@@ -5941,9 +6387,7 @@ def _process_group_run_v2(
             ^ (
                 array_traverse_run(
                     query_specs,
-                    lambda query_spec: _fts_article_hits_run_v2(
-                        query_spec.fts_query, 60
-                    )
+                    lambda query_spec: _fts_article_hits_run_v2(query_spec.fts_query)
                     >> (
                         lambda article_ids: _matched_variants_for_articles_run_v2(
                             article_ids, query_spec.variants
@@ -5994,9 +6438,10 @@ def _process_group_run_v2(
         anchor_failures: list[str],
     ) -> Run[Array[CaseDecision]]:
         shared_stage_trace = [
-            _build_pass1_stage_trace(
-                valid_anchors.length,
-                (
+            _group_pass1_stage_trace_v2(
+                group_size=len(group_orphan_ids),
+                valid_anchor_count=valid_anchors.length,
+                gate=(
                     "fail"
                     if _pass1_gate_failed(
                         [
@@ -6007,7 +6452,8 @@ def _process_group_run_v2(
                     )
                     else "pass"
                 ),
-                anchor_failures,
+                strategy_is_top_score_union=strategy_is_top_score_union,
+                anchor_failures=anchor_failures,
             )
         ]
         return _log_shared_stage_metric(
@@ -6083,7 +6529,8 @@ def _process_group_run_v2(
         )
 
     return (
-        _mark_group_in_progress()
+        _display_group_boundary_run_v2(group)
+        ^ _mark_group_in_progress()
         ^ run_except(_load_group_dossier() >> _run_group_pipeline)
     ) >> _handle_group_result
 
@@ -6097,10 +6544,6 @@ def _run_pipeline_run(
     selected_ids = {row.orphan_id for row in selected}
 
     def _finish(grouped_decisions: Array[Array[CaseDecision]]) -> Run[RunSummary]:
-        new_decisions = Array.make(
-            tuple(decision for group in grouped_decisions for decision in group)
-        )
-
         def _combine_cached_and_live_decisions(
             finalized: Array[CaseDecision],
         ) -> Run[RunSummary]:
@@ -6201,14 +6644,7 @@ def _run_pipeline_run(
                 )
             )
 
-        return (
-            array_traverse_run(
-                grouped_decisions,
-                lambda decisions: _finalize_group_decisions_run_v2(run_id, decisions),
-            )
-            if new_decisions.length > 0
-            else pure(Array.empty())
-        ) >> _flatten_finalized_groups
+        return _flatten_finalized_groups(grouped_decisions)
 
     return (
         _ensure_tables_run_v2()
@@ -6229,7 +6665,8 @@ def _run_pipeline_run(
         >> (
             lambda _: run_except(
                 array_traverse_run(
-                    groups, lambda group: _process_group_run_v2(run_id, group)
+                    groups,
+                    lambda group: _process_and_finalize_group_run_v2(run_id, group),
                 )
                 if groups.length > 0
                 else pure(Array.empty())
@@ -6433,28 +6870,33 @@ def _force_article_adjudication_cache_refresh_run_v2(
             )
         )
 
+    def _refresh_article_overrides(
+        finalized_groups: Array[Array[CaseDecision]],
+    ) -> Run[ArticleCacheRefreshSummary]:
+        finalized = Array.make(
+            tuple(
+                decision
+                for finalized_group in finalized_groups
+                for decision in finalized_group
+            )
+        )
+        return _refresh_overrides_for_article_run_v2(
+            run_id, article_id, finalized
+        ) >> (lambda _: _summarize(finalized_groups))
+
     def _process_groups(
         groups: Array[Array[CacheReadinessRow]],
     ) -> Run[ArticleCacheRefreshSummary]:
         return (
             array_traverse_run(
                 groups,
-                lambda group: _process_group_run_v2(
-                    run_id,
-                    group,
-                    candidate_strategy=candidate_strategy,
+                lambda group: _process_and_cache_group_run_v2(
+                    run_id, group, candidate_strategy=candidate_strategy
                 ),
             )
             if groups.length > 0
             else pure(Array.empty())
-        ) >> (
-            lambda grouped_decisions: (
-                array_traverse_run(grouped_decisions, _cache_group_decisions_run_v2)
-                if grouped_decisions.length > 0
-                else pure(Array.empty())
-            )
-            >> _summarize
-        )
+        ) >> _refresh_article_overrides
 
     def _build_groups_for_article(
         rows: Array[CacheReadinessRow],

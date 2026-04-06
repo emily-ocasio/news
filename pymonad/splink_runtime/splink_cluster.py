@@ -201,6 +201,9 @@ def _constrained_greedy_clusters(
     known = set(parent.keys())
     blocked_rows: list[dict[str, Any]] = []
     accepted_edges: list[tuple[str, str, float]] = []
+    blocked_union_count = 0
+    blocked_shared_exclusion_ids: set[str] = set()
+    blocked_shared_overlap_count = 0
     id_left_col, id_right_col = blocked_id_cols
     for uid_l, uid_r, prob in edges:
         if uid_l in known and uid_r in known:
@@ -209,18 +212,22 @@ def _constrained_greedy_clusters(
                 union(uid_l, uid_r)
                 accepted_edges.append((uid_l, uid_r, prob))
             elif capture_blocked and not same_component and shared:
-                print(
-                    "Blocked union: "
-                    f"{uid_l} vs {uid_r} "
-                    f"shared_exclusion_ids={sorted(shared)} "
-                    f"match_probability={prob}"
-                )
+                blocked_union_count += 1
+                blocked_shared_exclusion_ids.update(shared)
+                blocked_shared_overlap_count += len(shared)
                 blocked_rows.append({
                     id_left_col: uid_l,
                     id_right_col: uid_r,
                     "match_probability": prob,
                     "shared_exclusion_ids": ",".join(sorted(shared)),
                 })
+    if capture_blocked and blocked_union_count > 0:
+        print(
+            "Blocked union summary: "
+            f"blocked_edges={blocked_union_count} "
+            f"distinct_shared_exclusion_ids={len(blocked_shared_exclusion_ids)} "
+            f"shared_exclusion_overlaps={blocked_shared_overlap_count}"
+        )
 
     components: dict[str, list[str]] = {}
     for uid in unique_ids:

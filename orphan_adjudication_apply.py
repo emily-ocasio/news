@@ -38,7 +38,7 @@ def _build_adjudication_candidates() -> Run[Unit]:
                   created_at,
                   updated_at
                 FROM orphan_adjudication_overrides
-                WHERE resolution_label IN ('matched', 'likely_missed_match')
+                WHERE resolution_label = 'matched'
                   AND resolved_entity_id IS NOT NULL;
                 """
             )
@@ -736,7 +736,9 @@ def _build_orphan_matches_postadj_current() -> Run[Unit]:
         ),
         entity_with_match AS (
           SELECT
-            e.*,
+            e.* REPLACE (
+              COALESCE(vep.article_ids_csv, e.article_ids_csv) AS article_ids_csv
+            ),
             CASE WHEN e.unique_id IN (
               SELECT entity_uid
               FROM display_matched_entities
@@ -766,6 +768,8 @@ def _build_orphan_matches_postadj_current() -> Run[Unit]:
               ELSE 'none'
             END AS adjudication_flag
           FROM entity_link_input e
+          LEFT JOIN victim_entity_reps_postadj vep
+            ON vep.victim_entity_id = e.unique_id
         ),
         combined AS (
           SELECT
@@ -848,20 +852,20 @@ def _build_orphan_matches_postadj_current() -> Run[Unit]:
             o.adjudication_confidence AS confidence,
             CASE
               WHEN o.entity_uid IS NOT NULL THEN 'adjudication_matched_orphan'
-              WHEN o.adjudication_label IN ('not_same_person', 'unlikely') THEN 'left_behind_not_same'
+              WHEN o.adjudication_label = 'not_same_person' THEN 'left_behind_not_same'
               WHEN o.adjudication_label = 'insufficient_information' THEN 'left_behind_insufficient'
               ELSE 'left_behind_other'
             END AS display_category,
             CASE
               WHEN o.entity_uid IS NOT NULL THEN 2
-              WHEN o.adjudication_label IN ('not_same_person', 'unlikely') THEN 3
+              WHEN o.adjudication_label = 'not_same_person' THEN 3
               WHEN o.adjudication_label = 'insufficient_information' THEN 4
               ELSE 1
             END AS display_band_key,
             o.adjudication_label,
             CASE
               WHEN o.entity_uid IS NOT NULL THEN 'adjudication_applied'
-              WHEN o.adjudication_label IN ('not_same_person', 'unlikely') THEN 'adjudication_not_same'
+              WHEN o.adjudication_label = 'not_same_person' THEN 'adjudication_not_same'
               WHEN o.adjudication_label = 'insufficient_information' THEN 'adjudication_insufficient'
               ELSE 'none'
             END AS adjudication_flag,

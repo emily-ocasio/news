@@ -117,6 +117,8 @@ class BlockComp(StrEnum):
     CLOSE_LONG_LAT = "abs(l.lat - r.lat) <= 0.0045 AND abs(l.lon - r.lon) <= 0.0055"
     CLOSE_SUMMARY = "array_cosine_similarity(l.summary_vec, r.summary_vec) >= 0.7"
     RIGHT_NOT_EARLIER = "r.year >= l.year"
+    LEFT_FORENAME_MISSING = "l.victim_forename_norm IS NULL"
+    RIGHT_FORENAME_MISSING = "r.victim_forename_norm IS NULL"
 
 
 def _block_from_comps(
@@ -278,6 +280,16 @@ class DedupBlockRule(StrEnum):
         BlockComp.SAME_WEAPON
     )
     SUMMARY = _block_from_comps(BlockComp.CLOSE_SUMMARY)
+    LEFT_FORENAME_MISSING_SAME_SURNAME_DIFF2 = _block_from_comps(
+        BlockComp.LEFT_FORENAME_MISSING,
+        BlockComp.SAME_SURNAME_SOUNDEX,
+        BlockComp.YEAR_DIFF_2
+    )
+    RIGHT_FORENAME_MISSING_SAME_SURNAME_DIFF2 = _block_from_comps(
+        BlockComp.RIGHT_FORENAME_MISSING,
+        BlockComp.SAME_SURNAME_SOUNDEX,
+        BlockComp.YEAR_DIFF_2
+    )
 
 
 # Backwards-compatible aliases for refactors still in flight.
@@ -285,12 +297,14 @@ class DedupBlockRule(StrEnum):
 
 NAMED_VICTIM_BLOCKS = [
     DedupBlockRule.SAME_NAMES_YEAR_DIFF2,
+    DedupBlockRule.LEFT_FORENAME_MISSING_SAME_SURNAME_DIFF2,
+    DedupBlockRule.RIGHT_FORENAME_MISSING_SAME_SURNAME_DIFF2,
     DedupBlockRule.YEAR_MONTH,
     DedupBlockRule.DATE_LOCATION,
     DedupBlockRule.DATE_LOCATION_SHIFTED,
     DedupBlockRule.YEAR_SURNAME_SOUNDEX,
     DedupBlockRule.YEAR_FORENAME_SOUNDEX,
-    DedupBlockRule.YEAR_AGE_SEX
+    DedupBlockRule.YEAR_AGE_SEX,
 ]
 
 NAMED_VICTIM_YEAR_MONTH_TRAINING_BLOCK = _and_city(YEAR_MONTH)

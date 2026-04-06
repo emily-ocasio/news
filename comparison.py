@@ -662,7 +662,7 @@ DIST_COMP = cl.CustomComparison(
     ],
 )
 
-DIST_STREET_TYPE = cllc.Or(
+DIST_STREET_RESULT_TYPE = cllc.Or(
     cll.LiteralMatchLevel("address_type", "ADDRESS", "string", "left"),
     cll.LiteralMatchLevel("address_type", "ADDRESS", "string", "right"),
     cll.LiteralMatchLevel("address_type", "INTERSECTION", "string", "left"),
@@ -671,22 +671,38 @@ DIST_STREET_TYPE = cllc.Or(
     cll.LiteralMatchLevel("address_type", "BLOCK", "string", "right"),
     cll.LiteralMatchLevel("address_type", "STREET_ONLY", "string", "left"),
     cll.LiteralMatchLevel("address_type", "STREET_ONLY", "string", "right"),
+)
+
+DIST_STREET_NO_RESULT_PRECISE = cllc.Or(
     cll.LiteralMatchLevel("address_type", "NO_SUCCESS_ADDRESS", "string", "left"),
     cll.LiteralMatchLevel("address_type", "NO_SUCCESS_ADDRESS", "string", "right"),
     cll.LiteralMatchLevel("address_type", "NO_SUCCESS_INTERSECTION", "string", "left"),
     cll.LiteralMatchLevel("address_type", "NO_SUCCESS_INTERSECTION", "string", "right"),
     cll.LiteralMatchLevel("address_type", "NO_SUCCESS_BLOCK", "string", "left"),
     cll.LiteralMatchLevel("address_type", "NO_SUCCESS_BLOCK", "string", "right"),
-    cll.LiteralMatchLevel("address_type", "NO_SUCCESS_STREET_ONLY", "string", "left"),
-    cll.LiteralMatchLevel("address_type", "NO_SUCCESS_STREET_ONLY", "string", "right"),
     cll.LiteralMatchLevel("address_type", "NO_RESULT_ADDRESS", "string", "left"),
     cll.LiteralMatchLevel("address_type", "NO_RESULT_ADDRESS", "string", "right"),
     cll.LiteralMatchLevel("address_type", "NO_RESULT_INTERSECTION", "string", "left"),
     cll.LiteralMatchLevel("address_type", "NO_RESULT_INTERSECTION", "string", "right"),
     cll.LiteralMatchLevel("address_type", "NO_RESULT_BLOCK", "string", "left"),
     cll.LiteralMatchLevel("address_type", "NO_RESULT_BLOCK", "string", "right"),
+)
+
+DIST_STREET_NO_RESULT_STREET_ONLY = cllc.Or(
+    cll.LiteralMatchLevel("address_type", "NO_SUCCESS_STREET_ONLY", "string", "left"),
+    cll.LiteralMatchLevel("address_type", "NO_SUCCESS_STREET_ONLY", "string", "right"),
     cll.LiteralMatchLevel("address_type", "NO_RESULT_STREET_ONLY", "string", "left"),
     cll.LiteralMatchLevel("address_type", "NO_RESULT_STREET_ONLY", "string", "right"),
+)
+
+DIST_STREET_NO_RESULT_TYPE = cllc.Or(
+    DIST_STREET_NO_RESULT_PRECISE,
+    DIST_STREET_NO_RESULT_STREET_ONLY
+)
+
+DIST_STREET_TYPE = cllc.Or(
+    DIST_STREET_RESULT_TYPE,
+    DIST_STREET_NO_RESULT_TYPE,
 )
 
 DIST_STREET_ONLY_TYPE = cllc.Or(
@@ -734,7 +750,10 @@ DIST_COMP_NEW = cl.CustomComparison(
                 )
             ),
             cllc.And(
-                cll.LiteralMatchLevel("address_type", "NAMED_PLACE", "string"),
+                cllc.Or(
+                    cll.LiteralMatchLevel("address_type", "NAMED_PLACE", "string"),
+                    DIST_STREET_NO_RESULT_PRECISE
+                ),
                 cll.ExactMatchLevel("geo_address_norm")
             ),
         ).configure(label_for_charts="exact location match"),
@@ -743,7 +762,10 @@ DIST_COMP_NEW = cl.CustomComparison(
             cllc.And(
                 DIST_STREET_TYPE,
                 cll.JaroWinklerLevel( "geo_address_short", 0.90),
-                cll.DistanceInKMLevel("lat", "lon", 0.5)
+                cll.Or(
+                    cll.DistanceInKMLevel("lat", "lon", 0.5),
+                    DIST_STREET_NO_RESULT_TYPE
+                )
             ),
             cllc.And(
                 DIST_STREET_ONLY_TYPE,
@@ -777,6 +799,10 @@ DIST_COMP_NEW = cl.CustomComparison(
                         "(right intersection)"
                     ),
                 ),
+                cllc.Or(
+                    DIST_STREET_NO_RESULT_TYPE,
+                    cll.DistanceInKMLevel("lat", "lon", 0.5)
+                )
             ),
             cllc.And(
                 cllc.Or(
@@ -806,6 +832,10 @@ DIST_COMP_NEW = cl.CustomComparison(
                         "(left intersection)"
                     ),
                 ),
+                cllc.Or(
+                    DIST_STREET_NO_RESULT_TYPE,
+                    cll.DistanceInKMLevel("lat", "lon", 0.5)
+                )
             ),
             cllc.And(
                 cllc.Or(
@@ -852,6 +882,10 @@ DIST_COMP_NEW = cl.CustomComparison(
                         "(both intersection)"
                     ),
                 ),
+                cll.Or(
+                    DIST_STREET_NO_RESULT_TYPE,
+                    cll.DistanceInKMLevel("lat", "lon", 0.5)
+                )
             ),
             cllc.And(
                 DIST_PLACE_TYPE,
@@ -1124,6 +1158,10 @@ SUMMARY_COMP = cl.CustomComparison(
         cll.CosineSimilarityLevel(
             col_name="summary_vec",
             similarity_threshold=0.65
+        ),
+        cll.CosineSimilarityLevel(
+            col_name="summary_vec",
+            similarity_threshold=0.625
         ),
         cll.CosineSimilarityLevel(
             col_name="summary_vec",
