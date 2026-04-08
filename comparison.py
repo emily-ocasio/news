@@ -1229,9 +1229,9 @@ SHR_COMPARISONS = [
     cl.ExactMatch("victim_race").configure(term_frequency_adjustments=True),
 ]
 
-SHR_POST_TRAIN_RATIO_COPY_COMPARISONS = [
-    DATE_COMP_SHR,
-    AGE_COMP_SHR,
-    TF_WEAPON_COMP_SHR,
-    RELATIONSHIP_COMP_SHR
-]
+SHR_POST_TRAIN_RATIO_COPY_COMPARISONS: list = []
+    # DATE_COMP_SHR,
+    # AGE_COMP_SHR,
+    # TF_WEAPON_COMP_SHR,
+    # RELATIONSHIP_COMP_SHR
+#]

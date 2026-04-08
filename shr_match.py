@@ -63,6 +63,30 @@ def _assert_postadj_orphancluster_canonical_exists() -> Run[Unit]:
     )
 
 
+def _assert_postadj_orphancluster_months_available() -> Run[Unit]:
+    return (
+        sql_query(
+            SQL(
+                """--sql
+                SELECT COUNT(*) AS n
+                FROM victim_entity_reps_postadj_orphancluster
+                WHERE entity_midpoint_day IS NOT NULL;
+                """
+            )
+        )
+        >> (
+            lambda rows: pure(unit)
+            if rows[0]["n"] > 0
+            else throw(
+                ErrorPayload(
+                    "[L] victim_entity_reps_postadj_orphancluster has no non-null "
+                    "entity_midpoint_day values. Run [O] again or inspect upstream entity dates."
+                )
+            )
+        )
+    )
+
+
 def _export_shr_final_matches_excel() -> Run[Unit]:
     """
     Build a single worksheet that lists every article victim entity and every SHR record,
@@ -543,11 +567,76 @@ def match_article_to_shr_victims() -> Run[NextStep]:
     Export SHR and article victim data to DuckDB, then run Splink linkage.
     """
     return with_duckdb(
+        _assert_postadj_orphancluster_canonical_exists() ^
+        _assert_postadj_orphancluster_months_available() ^
+        sql_exec(
+            SQL(
+                """
+                CREATE OR REPLACE TABLE shr_linkage_months AS
+                WITH entity_months AS (
+                    SELECT DISTINCT
+                        date_trunc('month', DATE '1970-01-01' + to_days(entity_midpoint_day)) AS month_start
+                    FROM victim_entity_reps_postadj_orphancluster
+                    WHERE entity_midpoint_day IS NOT NULL
+                    AND date_trunc('month', DATE '1970-01-01' + to_days(entity_midpoint_day)) >= DATE '1977-01-01'
+                    AND date_trunc('month', DATE '1970-01-01' + to_days(entity_midpoint_day)) < DATE '1996-01-01'
+                ),
+                shr_months AS (
+                    SELECT DISTINCT
+                        make_date(
+                            CAST(substring(YearMonth, 1, 4) AS BIGINT),
+                            CAST(substring(YearMonth, 6, 2) AS BIGINT),
+                            1
+                        ) AS month_start
+                    FROM sqldb.shr
+                    WHERE State = 'District of Columbia'
+                    AND Year >= 1977
+                    AND Year <= 1995
+                    AND YearMonth IS NOT NULL
+                )
+                SELECT em.month_start
+                FROM entity_months em
+                INNER JOIN shr_months sm
+                    ON em.month_start = sm.month_start
+                ORDER BY em.month_start
+                """
+            )
+        ) ^
         put_line("Exporting SHR data to DuckDB...") ^
         sql_exec(
             SQL(
                 """
                 CREATE OR REPLACE TABLE shr_cached AS
+                WITH shr_source AS (
+                    SELECT
+                        *,
+                        DENSE_RANK() OVER (
+                            PARTITION BY YearMonth
+                            ORDER BY Incident
+                        ) AS month_incident_rank
+                    FROM sqldb.shr
+                    WHERE State = 'District of Columbia' -- Only DC for now
+                    AND Year >= 1977
+                    AND Year <= 1995
+                    AND YearMonth IS NOT NULL
+                    AND EXISTS (
+                        SELECT 1
+                        FROM shr_linkage_months lm
+                        WHERE lm.month_start = make_date(
+                            CAST(substring(YearMonth, 1, 4) AS BIGINT),
+                            CAST(substring(YearMonth, 6, 2) AS BIGINT),
+                            1
+                        )
+                    )
+                ),
+                shr_ranked AS (
+                    SELECT
+                        *,
+                        MAX(month_incident_rank) OVER (
+                            PARTITION BY YearMonth
+                        ) AS month_incident_count
+                    FROM shr_source
+                )
                 SELECT
                     *,
                     midpoint_day AS midpoint_day_block,
@@ -639,9 +728,22 @@ def match_article_to_shr_victims() -> Run[NextStep]:
                         'month' AS date_precision,
                         CASE WHEN YearMonth IS NOT NULL THEN
                             ROUND(
-                                date_diff('day', DATE '1970-01-01', make_date(CAST(substring(YearMonth, 1, 4) AS BIGINT), CAST(substring(YearMonth, 6, 2) AS BIGINT), 1)) - 1 +
-                                Incident * day(make_date(CAST(substring(YearMonth, 1, 4) AS BIGINT), CAST(substring(YearMonth, 6, 2) AS BIGINT), 1) + INTERVAL 1 MONTH - INTERVAL 1 DAY) /
-                                COUNT(*) OVER (PARTITION BY YearMonth)
+                                date_diff(
+                                    'day',
+                                    DATE '1970-01-01',
+                                    make_date(
+                                        CAST(substring(YearMonth, 1, 4) AS BIGINT),
+                                        CAST(substring(YearMonth, 6, 2) AS BIGINT),
+                                        1
+                                    )
+                                ) - 1 +
+                                month_incident_rank * day(
+                                    make_date(
+                                        CAST(substring(YearMonth, 1, 4) AS BIGINT),
+                                        CAST(substring(YearMonth, 6, 2) AS BIGINT),
+                                        1
+                                    ) + INTERVAL 1 MONTH - INTERVAL 1 DAY
+                                ) / month_incident_count
                             )
                         ELSE NULL END AS midpoint_day,
                         CAST(substring(YearMonth, 1, 4) AS INTEGER) AS year,
@@ -649,14 +751,11 @@ def match_article_to_shr_victims() -> Run[NextStep]:
                         -- NULL AS lat,  -- SHR may not have precise coords; use NULL or default DC
                         -- NULL AS lon,
                         2 AS city_id  -- Corresponds to DC (PublicationID of Washi Post)
-                    FROM sqldb.shr
-                    WHERE State = 'District of Columbia' -- Only DC for now
-                    AND Year >= 1977 AND Year <= 1988 -- Limit to 1977-88 for now
+                    FROM shr_ranked
                 ) AS shr_rows
                 """
             )
         ) ^
-        _assert_postadj_orphancluster_canonical_exists() ^
         put_line("Exporting article victim entities to DuckDB...") ^
         sql_exec(
             SQL(
@@ -693,6 +792,17 @@ def match_article_to_shr_victims() -> Run[NextStep]:
                         END AS weapon,
                         mode_circumstance AS circumstance
                     FROM victim_entity_reps_postadj_orphancluster
+                    WHERE entity_midpoint_day IS NOT NULL
+                    AND date_trunc('month', DATE '1970-01-01' + to_days(entity_midpoint_day)) >= DATE '1977-01-01'
+                    AND date_trunc('month', DATE '1970-01-01' + to_days(entity_midpoint_day)) < DATE '1996-01-01'
+                    AND EXISTS (
+                        SELECT 1
+                        FROM shr_linkage_months lm
+                        WHERE lm.month_start = date_trunc(
+                            'month',
+                            DATE '1970-01-01' + to_days(entity_midpoint_day)
+                        )
+                    )
                 ) AS article_rows
                 """
             )

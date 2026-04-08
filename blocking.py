@@ -422,6 +422,11 @@ class ShrLinkRule(StrEnum):
         BlockComp.SAME_WEAPON,
         add_article_exclusion=False,
     )
+    AGE_SEX_WEAPON = _train_block_from_comps(
+        BlockComp.SAME_AGE_SEX,
+        BlockComp.SAME_WEAPON,
+        add_article_exclusion=False,
+    )
     YEAR_MONTH = _train_block_from_comps(
         BlockComp.EXACT_YEAR_MONTH,
         add_article_exclusion=False,
@@ -430,6 +435,12 @@ class ShrLinkRule(StrEnum):
         BlockComp.SAME_OFFENDER_AGE_SEX,
         add_article_exclusion=False,
     )
+    OFFENDER_AGE_SEX_WEAPON = _train_block_from_comps(
+        BlockComp.SAME_OFFENDER_AGE_SEX,
+        BlockComp.SAME_WEAPON,
+        add_article_exclusion=False,
+    )
+
 
 
 SHR_OVERALL_BLOCKS = [
@@ -445,7 +456,7 @@ SHR_DETERMINISTIC_BLOCKS = [
 SHR_TRAINING_BLOCKS = [
     ShrLinkRule.YEAR_MONTH,
     ShrLinkRule.AGE_SEX,
-    ShrLinkRule.OFFENDER_AGE_SEX,
+    ShrLinkRule.OFFENDER_AGE_SEX_WEAPON,
 ]
 
 YEAR_MONTH_COMPARISON = [
