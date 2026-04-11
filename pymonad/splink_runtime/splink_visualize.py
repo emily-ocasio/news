@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import html
+from math import nextafter
 import re
 import sys
 import uuid
@@ -24,7 +25,7 @@ from splink.internals.pipeline import CTEPipeline
 from calculations import distance_km
 from ..array import Array
 from ..maybe import Just, Maybe, Nothing
-from .splink_cluster import drop_all_splink_tables
+from .splink_cluster import drop_all_splink_tables_detach_sqldb
 from .splink_types import (
     BlockingRuleLike,
     CustomStringBlockingRule,
@@ -49,6 +50,9 @@ _FLOAT_RE = re.compile(
     """,
     re.VERBOSE,
 )
+
+COMPARISON_PREDICT_THRESHOLD = nextafter(0.5, 1.0)
+COMPARISON_COMPLEX_VALUE_PLACEHOLDER = "[complex value omitted]"
 
 
 @dataclass
@@ -125,6 +129,60 @@ def _midpoint_blocking_rule(
 def _sql_literal(value: Any) -> str:
     """Quote a SQL literal value for inline filter clauses."""
     return "'" + str(value).replace("'", "''") + "'"
+
+
+def _sql_ident(value: str) -> str:
+    """Quote an identifier for inline SQL generation."""
+    return '"' + str(value).replace('"', '""') + '"'
+
+
+def _is_complex_comparison_type(type_name: str) -> bool:
+    """Return True for value types that would bloat comparison-viewer HTML."""
+    normalized = type_name.strip().upper()
+    return (
+        "[" in normalized
+        or normalized.startswith("ARRAY")
+        or normalized.startswith("LIST")
+        or normalized.startswith("MAP")
+        or normalized.startswith("STRUCT")
+        or normalized.startswith("UNION")
+    )
+
+
+def _compact_comparison_pairs(linker: Linker, df_pairs: Any) -> Any:
+    """Replace complex-valued columns with a compact placeholder for HTML output."""
+    table_name = df_pairs.physical_name
+    schema_rel = linker._db_api._execute_sql_against_backend(
+        f"PRAGMA table_info('{table_name}')"
+    )
+    rows = schema_rel.fetchall()
+    complex_cols = [
+        str(row[1])
+        for row in rows
+        if len(row) >= 3 and _is_complex_comparison_type(str(row[2]))
+    ]
+    if not complex_cols:
+        return df_pairs
+
+    exclude_sql = ", ".join(_sql_ident(col) for col in complex_cols)
+    replacement_sql = ",\n              ".join(
+        f"{_sql_literal(COMPARISON_COMPLEX_VALUE_PLACEHOLDER)} AS {_sql_ident(col)}"
+        for col in complex_cols
+    )
+    print(
+        "Compacting comparison viewer payload by replacing complex columns: "
+        + ", ".join(complex_cols)
+    )
+    return linker._db_api.sql_to_splink_dataframe_checking_cache(
+        f"""
+        SELECT
+          * EXCLUDE ({exclude_sql}),
+          {replacement_sql}
+        FROM {_sql_ident(table_name)}
+        """,
+        "__splink__df_predict",
+        use_cache=False,
+    )
 
 
 def _distinct_sources(linker: Linker, self_link_table: str, source_col: str) -> list[Any]:
@@ -327,6 +385,12 @@ def _predict_pairs_for_visualization(
     ctx: VisualizeContext,
 ):
     """Predict pairwise records for visualization, applying midpoint blocking when requested."""
+    _ = ctx
+    threshold = (
+        COMPARISON_PREDICT_THRESHOLD
+        if job.chart_type == SplinkChartType.COMPARISON
+        else 0
+    )
     use_midpoint_blocking = job.chart_type in (
         SplinkChartType.WATERFALL,
         SplinkChartType.CLUSTER,
@@ -338,9 +402,9 @@ def _predict_pairs_for_visualization(
             return _with_temp_blocking_rules_on_linker_sync(
                 linker,
                 Array.pure(rule),
-                lambda: linker.inference.predict(threshold_match_probability=0),
+                lambda: linker.inference.predict(threshold_match_probability=threshold),
             )
-    return linker.inference.predict(threshold_match_probability=0)
+    return linker.inference.predict(threshold_match_probability=threshold)
 
 
 def _handle_model_charts(linker: Linker, job: SplinkVisualizeJob) -> bool:
@@ -470,8 +534,9 @@ def _handle_comparison_chart(linker: Linker, job: SplinkVisualizeJob, df_pairs: 
     if job.chart_type != SplinkChartType.COMPARISON:
         return False
     print("\nGenerating comparison viewer dashboard…")
+    comparison_pairs = _compact_comparison_pairs(linker, df_pairs)
     linker.visualisations.comparison_viewer_dashboard(
-        df_pairs,
+        comparison_pairs,
         "comparison_viewer.html",
         overwrite=True,
         num_example_rows=5,
@@ -901,13 +966,20 @@ def run_splink_visualize(linker: Linker, job: SplinkVisualizeJob) -> None:
 
         try:
             linker.table_management.invalidate_cache()
-            drop_all_splink_tables(linker._db_api._execute_sql_against_backend, _query_dicts)
+            drop_all_splink_tables_detach_sqldb(
+                linker._db_api._execute_sql_against_backend,
+                _query_dicts,
+            )
         except Exception:  # pylint: disable=W0718
             pass
 
     ctx.df_pairs = _predict_pairs_for_visualization(linker, job, ctx)
-    ctx.pd_pairs = ctx.df_pairs.as_pandas_dataframe()
-    ctx.inspect_df = ctx.pd_pairs
+    if job.chart_type in (SplinkChartType.WATERFALL, SplinkChartType.CLUSTER):
+        ctx.pd_pairs = ctx.df_pairs.as_pandas_dataframe()
+        ctx.inspect_df = ctx.pd_pairs
+    else:
+        ctx.pd_pairs = None
+        ctx.inspect_df = None
     ctx.inspect_ids = set()
 
     print_df = _prepare_inspection_subset(linker, job, ctx)

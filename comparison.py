@@ -319,8 +319,20 @@ DATE_COMP = cl.CustomComparison(
         ).configure(label_for_charts="exact date / month precision match"),
         cllc.Or(
             cllc.And(
-                cll.AbsoluteDifferenceLevel("midpoint_day", 2),
-                DAY_PRECISION
+                DAY_PRECISION,
+                cll.Or(
+                    cll.AbsoluteDifferenceLevel("midpoint_day", 2),
+                    cll.And(
+                        cll.ExactMatchLevel("month"),
+                        cll.ExactMatchLevel("day"),
+                        cll.AbsoluteDifferenceLevel("year", 1)
+                    ),
+                    cll.And(
+                        cll.ExactMatchLevel("day"),
+                        cll.ExactMatchLevel("year"),
+                        cll.AbsoluteDifferenceLevel("month", 1)
+                    )
+                )
             ),
             cllc.And(
                 cll.AbsoluteDifferenceLevel("midpoint_day", 60),
@@ -330,28 +342,46 @@ DATE_COMP = cl.CustomComparison(
                 cll.ExactMatchLevel("year"),
                 YEAR_PRECISION
             ),
-        ).configure(label_for_charts="2d day prec or 2m month prec or year prec match"),
+        ).configure(
+            label_for_charts="2d or off by 1y/m d prec / 2m prec / exact yr prec"
+        ),
         cll.Or(
             cll.And(
-                cll.AbsoluteDifferenceLevel("midpoint_day", 15),
-                DAY_PRECISION
+                DAY_PRECISION,
+                cll.AbsoluteDifferenceLevel("midpoint_day", 15)
             ),
             cll.And(
                 cll.AbsoluteDifferenceLevel("midpoint_day", 90),
                 MONTH_PRECISION
             ),
             cll.And(
-                cll.AbsoluteDifferenceLevel("year", 2),
+                cll.AbsoluteDifferenceLevel("year", 1),
                 YEAR_PRECISION
             ),
-        ).configure(label_for_charts="15d day prec or 3m prec or 2yr year prec"),
-        cll.And(
-            NOT_DAY_PRECISION,
-            cll.AbsoluteDifferenceLevel("midpoint_day", 740).configure(
-                label_for_charts="within 2 years"
+        ).configure(label_for_charts="15d prec / 3m prec / 1yr prec"),
+        cll.Or(
+            cll.And(
+                DAY_PRECISION,
+                cll.AbsoluteDifferenceLevel("midpoint_day", 30)
             ),
+            cll.And(
+                NOT_DAY_PRECISION,
+                cll.AbsoluteDifferenceLevel("midpoint_day", 740)
+            )
         ).configure(
-            label_for_charts="within about 2 years month or year precision"
+            label_for_charts="30 day prec / 2 yrs mon/yr prec"
+        ),
+        cll.Or(
+            cll.And(
+                DAY_PRECISION,
+                cll.AbsoluteDifferenceLevel("midpoint_day", 60)
+            ),
+            cll.And(
+                NOT_DAY_PRECISION,
+                cll.AbsoluteDifferenceLevel("year", 5)
+            )
+        ).configure(
+            label_for_charts="60d prec / 5yr mon/yr prec"
         ),
         cll.ElseLevel()
     ]
@@ -405,8 +435,6 @@ DATE_COMP_ORPHAN = cl.CustomComparison(
     ]
 )
 
-
-
 DATE_COMP_SHR = cl.CustomComparison(
     output_column_name="incident_date",
     comparison_levels=[
@@ -422,21 +450,22 @@ DATE_COMP_SHR = cl.CustomComparison(
             cll.And(
                 cll.LiteralMatchLevel("date_precision", "day", "string", "left"),
                 cll.AbsoluteDifferenceLevel("midpoint_day", 45),
-                cll.Or(
-                    cll.And(
-                        cll.ExactMatchLevel("year"),
-                        cl.CustomLevel("month_r > month_l")
-                    ),
-                    cll.And(
-                        cl.CustomLevel("year_r - year_l = 1"),
-                        cll.LiteralMatchLevel("month", "1", "int", "right"),
-                        cll.LiteralMatchLevel("month", "12", "int", "left"),
-                    )
-                )
+                cl.CustomLevel("midpoint_day_r >= midpoint_day_l")
+                # cll.Or(
+                #     cll.And(
+                #         cll.ExactMatchLevel("year"),
+                #         cl.CustomLevel("month_r > month_l")
+                #     ),
+                #     cll.And(
+                #         cl.CustomLevel("year_r - year_l = 1"),
+                #         cll.LiteralMatchLevel("month", "1", "int", "right"),
+                #         cll.LiteralMatchLevel("month", "12", "int", "left"),
+                    # )
+                # )
             ),
             cll.And(
                 cll.LiteralMatchLevel("date_precision", "month", "string", "left"),
-                cl.CustomLevel("midpoint_day_r - midpoint_day_l <= 45"),
+                cl.CustomLevel("midpoint_day_r - midpoint_day_l <= 90"),
                 cl.CustomLevel("midpoint_day_r >= midpoint_day_l")
             ),
             cll.And(
@@ -456,6 +485,7 @@ DATE_COMP_SHR = cl.CustomComparison(
         #         ComparisonComp.MONTH_PRECISION
         #     )
         # ).to_dict(),
+        cll.ExactMatchLevel("year").configure(label_for_charts="exact year match"),
         cll.ElseLevel()
     ]
 )
@@ -589,14 +619,19 @@ AGE_COMP_SHR = cl.CustomComparison(
             ComparisonComp.EXACT_AGE.value,
             "victim_age"
         ).to_dict(),
-        # TFComparisonLevel(
-        #     "victim ages within 1 year",
-        #     ComparisonComp.AGE_1YEAR.value,
-        #     "victim_age"
-        # ).to_dict(),
+        TFComparisonLevel(
+            "victim ages within 1 year",
+            ComparisonComp.AGE_1YEAR.value,
+            "victim_age"
+        ).to_dict(),
         TFComparisonLevel(
             "victim ages within 2 years",
             ComparisonComp.AGE_2YEAR.value,
+            "victim_age"
+        ).to_dict(),
+        TFComparisonLevel(
+            "victim ages within 5 years",
+            ComparisonComp.AGE_5YEARS.value,
             "victim_age"
         ).to_dict(),
         TFComparisonLevel(
@@ -727,6 +762,118 @@ DIST_PLACE_TYPE = cllc.Or(
     cll.LiteralMatchLevel("address_type", "APPROXIMATE_PLACE", "string", "right"),
 )
 
+DIST_NO_SUCCESS = cllc.Or(
+    DIST_STREET_NO_RESULT_TYPE,
+    cll.LiteralMatchLevel("address_type", "NO_SUCCESS", "string", "left"),
+    cll.LiteralMatchLevel("address_type", "NO_SUCCESS", "string", "right"),
+    cll.LiteralMatchLevel("address_type", "UNRECOGNIZED_PLACE", "string", "left"),
+    cll.LiteralMatchLevel("address_type", "UNRECOGNIZED_PLACE", "string", "right"),
+    cll.LiteralMatchLevel("address_type", "NO_RESULT", "string", "left"),
+    cll.LiteralMatchLevel("address_type", "NO_RESULT", "string", "right"),
+)
+
+END_QUAD_ABBR = cll.ColumnExpression(
+    "RIGHT(geo_address_norm, 2)"
+)
+
+BEFORE_END_QUAD = cll.ColumnExpression(
+    "LEFT(geo_address_norm, length(geo_address_norm) - 3)"
+)
+
+END_QUAD_NW_RIGHT = cll.LiteralMatchLevel(END_QUAD_ABBR, "NW", "string", "right")
+END_QUAD_NW_LEFT = cll.LiteralMatchLevel(END_QUAD_ABBR, "NW", "string", "left")
+END_QUAD_NE_RIGHT = cll.LiteralMatchLevel(END_QUAD_ABBR, "NE", "string", "right")
+END_QUAD_NE_LEFT = cll.LiteralMatchLevel(END_QUAD_ABBR, "NE", "string", "left")
+END_QUAD_SW_RIGHT = cll.LiteralMatchLevel(END_QUAD_ABBR, "SW", "string", "right")
+END_QUAD_SW_LEFT = cll.LiteralMatchLevel(END_QUAD_ABBR, "SW", "string", "left")
+END_QUAD_SE_RIGHT = cll.LiteralMatchLevel(END_QUAD_ABBR, "SE", "string", "right")
+END_QUAD_SE_LEFT = cll.LiteralMatchLevel(END_QUAD_ABBR, "SE", "string", "left")
+
+END_QUAD_ONE_OFF = cllc.And(
+    cll.ExactMatchLevel(BEFORE_END_QUAD),
+    cllc.Or(
+        cll.And(
+            END_QUAD_NW_RIGHT,
+            cll.Or(
+                END_QUAD_NE_LEFT,
+                END_QUAD_SW_LEFT,
+            )
+        ),
+        cll.And(
+            END_QUAD_NE_RIGHT,
+            cll.Or(
+                END_QUAD_NW_LEFT,
+                END_QUAD_SE_LEFT,
+            )
+        ),
+        cll.And(
+            END_QUAD_SW_RIGHT,
+            cll.Or(
+                END_QUAD_NW_LEFT,
+                END_QUAD_SE_LEFT,
+            )
+        ),
+        cll.And(
+            END_QUAD_SE_RIGHT,
+            cll.Or(
+                END_QUAD_NE_LEFT,
+                END_QUAD_SW_LEFT,
+            )
+        )
+    )
+)
+
+DIST_SAME_QUAD_LEFT = cllc.And(
+    cll.LiteralMatchLevel("address_type", "QUADRANT", "string", "left"),
+    cll.Or(
+        cll.And(
+            cll.LiteralMatchLevel("geo_address_norm", "NORTHWEST", "string", "left"),
+            END_QUAD_NW_RIGHT
+        ),
+        cll.And(
+            cll.LiteralMatchLevel("geo_address_norm", "NORTHEAST", "string", "left"),
+            END_QUAD_NE_RIGHT
+        ),
+        cll.And(
+            cll.LiteralMatchLevel("geo_address_norm", "SOUTHWEST", "string", "left"),
+            END_QUAD_SW_RIGHT
+        ),
+        cll.And(
+            cll.LiteralMatchLevel("geo_address_norm", "SOUTHEAST", "string", "left"),
+            END_QUAD_SE_RIGHT
+        ),
+    )
+)
+
+DIST_SAME_QUAD_RIGHT = cllc.And(
+    cll.LiteralMatchLevel("address_type", "QUADRANT", "string", "right"),
+    cll.Or(
+        cll.And(
+            cll.LiteralMatchLevel("geo_address_norm", "NORTHWEST", "string", "right"),
+            END_QUAD_NW_LEFT
+        ),
+        cll.And(
+            cll.LiteralMatchLevel("geo_address_norm", "NORTHEAST", "string", "right"),
+            END_QUAD_NE_LEFT
+        ),
+        cll.And(
+            cll.LiteralMatchLevel("geo_address_norm", "SOUTHWEST", "string", "right"),
+            END_QUAD_SW_LEFT
+        ),
+        cll.And(
+            cll.LiteralMatchLevel("geo_address_norm", "SOUTHEAST", "string", "right"),
+            END_QUAD_SE_LEFT
+        ),
+    )
+)
+
+DIST_SAME_QUAD = cllc.Or(
+    DIST_SAME_QUAD_LEFT,
+    DIST_SAME_QUAD_RIGHT
+)
+
+QUAD_SINGLE_CHAR = cl
+
 DIST_COMP_NEW = cl.CustomComparison(
     output_column_name = "location",
     comparison_levels = [
@@ -758,13 +905,14 @@ DIST_COMP_NEW = cl.CustomComparison(
             ),
         ).configure(label_for_charts="exact location match"),
         cllc.Or(
-            cll.DistanceInKMLevel("lat", "lon", 0.3),
+            cll.DistanceInKMLevel("lat", "lon", 0.15),
             cllc.And(
                 DIST_STREET_TYPE,
                 cll.JaroWinklerLevel( "geo_address_short", 0.90),
                 cll.Or(
                     cll.DistanceInKMLevel("lat", "lon", 0.5),
-                    DIST_STREET_NO_RESULT_TYPE
+                    DIST_STREET_NO_RESULT_TYPE,
+                    cll.ExactMatchLevel("geo_address_short")
                 )
             ),
             cllc.And(
@@ -889,14 +1037,22 @@ DIST_COMP_NEW = cl.CustomComparison(
             ),
             cllc.And(
                 DIST_PLACE_TYPE,
-                cll.JaroLevel(
-                    "geo_address_norm", 0.5)
+                cll.DistanceInKMLevel("lat", "lon", 0.5)
             ),
-        ).configure(label_for_charts="within 0.3 km or similar address"),
-        cllc.And(
-            cll.DistanceInKMLevel("lat", "lon", 1.5),
-            DIST_PLACE_TYPE
-        ).configure(label_for_charts="within 1.5 km and one place type"),
+            END_QUAD_ONE_OFF
+        ).configure(label_for_charts="within 0.15 km or similar address"),
+        cllc.Or(
+            cll.DistanceInKMLevel("lat", "lon", 0.5),
+            DIST_SAME_QUAD,
+            cllc.And(
+                cll.DistanceInKMLevel("lat", "lon", 1.5),
+                DIST_PLACE_TYPE
+            ),
+        ).configure(label_for_charts="within 0.5km or 1.5 km place or same quadrant"),
+        DIST_NO_SUCCESS.configure(
+            label_for_charts="no successful geocoding null",
+            is_null_level=True
+        ),
         cll.ElseLevel()
     ]
 )
@@ -945,12 +1101,29 @@ TF_WEAPON_COMP = cl.CustomComparison(
         ).to_dict(),
         cll.ExactMatchLevel("weapon").configure(
             tf_adjustment_column="weapon",
-            tf_minimum_u_value=0.001),
-        TFComparisonLevel(
-            "firearm class weapon match",
-            ComparisonComp.WEAPON_FIREARM.value,
+            tf_minimum_u_value=0.00001),
+        cll.Or(
+            _comparison_level_within_group(
+                "weapon",
+                Array(("firearm","shotgun"))
+            ),
+            _comparison_level_within_group(
+                "weapon",
+                Array(("firearm","handgun"))
+            ),
+            _comparison_level_within_group(
+                "weapon",
+                Array(("personal weapon", "blunt object"))
+            )
+        ).configure(
             tf_adjustment_column="weapon",
-        ).to_dict(),
+            label_for_charts="weapon group match"
+        ),
+        # TFComparisonLevel(
+        #     "firearm class weapon match",
+        #     ComparisonComp.WEAPON_FIREARM.value,
+        #     tf_adjustment_column="weapon",
+        # ).to_dict(),
         cll.ElseLevel()
     ]
 )
@@ -992,27 +1165,40 @@ CIRC_COMP = cl.CustomComparison(
         cll.Or(
             _comparison_level_within_group(
                 "circumstance",
-                Array(("other felony related", "robbery", "burglary"))
+                Array(("other felony related", "robbery", "burglary", "rape"))
             ),
-            cll.And(
-                cll.Or(
-                    _safe_literal_match_level("circumstance", "argument", "left"),
-                    _safe_literal_match_level("circumstance", "argument", "right")
-                ),
-                _comparison_level_within_group(
-                    "circumstance",
-                    Array((
-                        "argument",
-                        "brawl",
-                        "rape",
-                        "gang killing",
-                        "lover's triangle",
-                        "narcotics related",
-                        "other felony related"
-                    ))
-                )
+            _comparison_level_within_group(
+                "circumstance",
+                Array((
+                    "argument",
+                    "brawl",
+                    "gang killing",
+                    "other felony related",
+                    "narcotics related"
+                    "felon killed by police"
+                ))
+            ),
+            _comparison_level_within_group(
+                "circumstance",
+                Array((
+                    "argument",
+                    "brawl",
+                    "lover's triangle",
+                    "rape"
+                ))
+            ),
+            _comparison_level_within_group(
+                "circumstance",
+                Array((
+                    "child killed by babysitter",
+                    "negligence"
+                ))
             )
-        ).configure(label_for_charts="closely related circumstance group match"),
+        ).configure(label_for_charts="closely related circumstance match"),
+        cll.Or(
+            cll.LiteralMatchLevel("circumstance", "other", "string", "left"),
+            cll.LiteralMatchLevel("circumstance", "other", "string", "right")
+        ).configure(label_for_charts="other as null", is_null_level=True),
         cll.ElseLevel()
     ]
 )
@@ -1157,6 +1343,10 @@ SUMMARY_COMP = cl.CustomComparison(
         ),
         cll.CosineSimilarityLevel(
             col_name="summary_vec",
+            similarity_threshold=0.70
+        ),
+        cll.CosineSimilarityLevel(
+            col_name="summary_vec",
             similarity_threshold=0.65
         ),
         cll.CosineSimilarityLevel(
@@ -1222,8 +1412,8 @@ SHR_COMPARISONS = [
     VICTIM_COUNT_COMP_SHR,
     OFFENDER_AGE_COMP,
     OFFENDER_SEX_COMP,
-    RELATIONSHIP_COMP_SHR,
-    TF_WEAPON_COMP_SHR,
+    RELATIONSHIP_COMP,
+    TF_WEAPON_COMP,
     CIRC_COMP,
     VICTIM_SEX_COMP,
     cl.ExactMatch("victim_race").configure(term_frequency_adjustments=True),

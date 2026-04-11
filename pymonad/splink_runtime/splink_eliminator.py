@@ -7,6 +7,7 @@ from typing import Any, cast
 
 from ..environment import DbBackend, Environment
 from ..run import ErrorPayload, HasSplinkLinker, Run, ask, get_splink_linker, put_splink_linker, throw
+from .splink_cluster import cleanup_transient_splink_tables_after_run
 from .splink_engine import run_splink_dedupe_monadic
 from .splink_model_store import load_splink_model, save_splink_model
 from .splink_types import SplinkDedupeJob, SplinkVisualizeJob
@@ -29,6 +30,10 @@ def run_splink(prog: Run[A]) -> Run[A]:
                     out = run_splink_dedupe_monadic(intent)._step(current)
                     put_splink_linker(intent.splink_key, out.linker)._step(current)
                     save_splink_model(intent.splink_key, out.linker, intent.input_table)
+                    try:
+                        cleanup_transient_splink_tables_after_run()._step(current)
+                    except Exception:  # pylint: disable=W0718
+                        pass
                     return out
                 case SplinkVisualizeJob():
                     linker = get_splink_linker(intent.splink_key)._step(current)

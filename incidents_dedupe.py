@@ -72,15 +72,15 @@ def _dedupe_named_victims(_: Unit) -> Run[Unit]:
     return splink_dedupe_job(
         input_table=PredictionInputTableName("victims_named"),
         settings=_settings_for_victim_dedupe(),
-        predict_threshold=0.1,
-        cluster_threshold=0.85,
+        predict_threshold=0.6,
+        cluster_threshold=0.75,
         pairs_out=PairsTableName("victim_pairs"),
         clusters_out=ClustersTableName("victim_clusters"),
         train_first=True,
         training_blocking_rules=NAMED_VICTIM_BLOCKS_FOR_TRAINING,
         training_block_level_map=DEDUPE_TRAINING_BLOCK_LEVEL_MAP,
         deterministic_rules=NAMED_VICTIM_DETERMINISTIC_BLOCKS,
-        deterministic_recall=0.8,
+        deterministic_recall=0.6,
         em_max_runs=1,
         visualize=False,
         splink_key=SplinkType.DEDUP,
@@ -728,7 +728,8 @@ def _export_final_clusters_excel() -> Run[Unit]:
 	      v.geo_score,
 	      COALESCE(v.geo_address_norm, '') AS address,
 	      COALESCE(v.offender_name_norm, '') AS offender,
-	      COALESCE(v.weapon, '') AS weapon
+	      COALESCE(v.weapon, '') AS weapon,
+	      COALESCE(v.circumstance, '') AS circumstance
 	    FROM victim_clusters_counts c
 	    JOIN victim_clusters vc
 	      ON c.cluster_id = vc.cluster_id
@@ -832,10 +833,11 @@ def _export_final_clusters_excel() -> Run[Unit]:
                       address_type,
                       geo_address_short,
                       geo_address_short_2,
-                      geo_score,
+	                      geo_score,
 	                      address,
 	                      offender,
 	                      weapon,
+	                      circumstance,
 	                      concat(cast(source AS varchar), '::', cast(cluster_id AS varchar)) AS __band_group
 	                    FROM cluster_diffs
                     ORDER BY

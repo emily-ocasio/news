@@ -38,6 +38,8 @@ YEAR_MONTH = block_on("year", "month")
 FULLNAME =  block_on("victim_fullname_concat")
 AGE_SEX =   block_on("victim_age", "victim_sex")
 OFFENDER_AGE_SEX = block_on("offender_age", "offender_sex")
+SURNAME_SOUNDEX = block_on("victim_surname_soundex")
+EITHER_NAME = block_on("victim_surname_norm", "victim_forename_norm")
 
 
 class BlockComp(StrEnum):
@@ -86,6 +88,7 @@ class BlockComp(StrEnum):
     SAME_SURNAME_SOUNDEX = "l.victim_surname_soundex = r.victim_surname_soundex"
     SAME_FORENAME_SOUNDEX = "l.victim_forename_soundex = r.victim_forename_soundex"
     SAME_AGE_SEX = "l.victim_age = r.victim_age AND l.victim_sex = r.victim_sex"
+    SAME_OFFENDER_AGE = "l.offender_age = r.offender_age"
     SAME_OFFENDER_AGE_SEX = (
         "l.offender_age = r.offender_age AND l.offender_sex = r.offender_sex"
     )
@@ -119,6 +122,9 @@ class BlockComp(StrEnum):
     RIGHT_NOT_EARLIER = "r.year >= l.year"
     LEFT_FORENAME_MISSING = "l.victim_forename_norm IS NULL"
     RIGHT_FORENAME_MISSING = "r.victim_forename_norm IS NULL"
+    SAME_RELATION = "l.relationship = r.relationship"
+    SAME_OFFENDER_SURNAME = "l.offender_surname_norm = r.offender_surname_norm"
+    SAME_OFFENDER_FORENAME = "l.offender_forename_norm = r.offender_forename_norm"
 
 
 def _block_from_comps(
@@ -290,6 +296,23 @@ class DedupBlockRule(StrEnum):
         BlockComp.SAME_SURNAME_SOUNDEX,
         BlockComp.YEAR_DIFF_2
     )
+    NAME_DATE_LOCATION = _block_from_comps(
+        BlockComp.SAME_NAMES,
+        BlockComp.EXACT_YEAR_MONTH_DAY,
+        BlockComp.LONG_LAT_EXISTS,
+        BlockComp.CLOSE_LONG_LAT
+    )
+    WEAPON_CIRCUMSTANCE = _block_from_comps(
+        BlockComp.SAME_WEAPON,
+        BlockComp.SAME_CIRCUMSTANCE
+    )
+    RELATION_WEAPON = _block_from_comps(
+        BlockComp.SAME_RELATION,
+        BlockComp.SAME_WEAPON
+    )
+    SAME_OFFENDER_SURNAME = _block_from_comps(BlockComp.SAME_OFFENDER_SURNAME)
+    SAME_OFFENDER_FORENAME = _block_from_comps(BlockComp.SAME_OFFENDER_FORENAME)
+
 
 
 # Backwards-compatible aliases for refactors still in flight.
@@ -309,12 +332,13 @@ NAMED_VICTIM_BLOCKS = [
 
 NAMED_VICTIM_YEAR_MONTH_TRAINING_BLOCK = _and_city(YEAR_MONTH)
 NAMED_VICTIM_FULLNAME_TRAINING_BLOCK = _and_city(FULLNAME)
+NAMED_VICTIM_EITHER_NAME_TRAINING_BLOCK = _and_city(EITHER_NAME)
 NAMED_VICTIM_AGE_SEX_TRAINING_BLOCK = _and_city(AGE_SEX)
 NAMED_VICTIM_OFFENDER_AGE_SEX_TRAINING_BLOCK = _and_city(OFFENDER_AGE_SEX)
 
 NAMED_VICTIM_BLOCKS_FOR_TRAINING = [
     NAMED_VICTIM_YEAR_MONTH_TRAINING_BLOCK,
-    NAMED_VICTIM_FULLNAME_TRAINING_BLOCK,
+    NAMED_VICTIM_EITHER_NAME_TRAINING_BLOCK,
     NAMED_VICTIM_AGE_SEX_TRAINING_BLOCK,
     NAMED_VICTIM_OFFENDER_AGE_SEX_TRAINING_BLOCK,
 ]
@@ -327,8 +351,7 @@ NAMED_VICTIM_BLOCKS_FOR_TRAINING_OLD = [
 ]
 
 NAMED_VICTIM_DETERMINISTIC_BLOCKS = [
-    DedupBlockRule.SAME_NAMES_30DAYS,
-    DedupBlockRule.DATE_LOCATION_AGE_SEX
+    DedupBlockRule.NAME_DATE_LOCATION
 ]
 
 ORPHAN_WIDE_BLOCKS = [
@@ -342,7 +365,11 @@ ORPHAN_VICTIM_BLOCKS = [
     DedupBlockRule.YEAR2_AGE_SEX,
     DedupBlockRule.YEAR2_AGE_WEAPON,
     DedupBlockRule.OFFENDER_AGE_SEX,
-    DedupBlockRule.SUMMARY,
+    DedupBlockRule.WEAPON_CIRCUMSTANCE,
+    DedupBlockRule.RELATION_WEAPON,
+    DedupBlockRule.SAME_OFFENDER_SURNAME,
+    DedupBlockRule.SAME_OFFENDER_FORENAME,
+    #DedupBlockRule.SUMMARY,
 ]
 
 ORPHAN_DETERMINISTIC_BLOCKS = [
@@ -416,10 +443,11 @@ class ShrLinkRule(StrEnum):
         BlockComp.RIGHT_NOT_EARLIER,
         add_article_exclusion=False,
     )
-    MONTH_AGE_SEX_WEAPON = _train_block_from_comps(
+    MONTH_AGE_SEX_WEAPON_CIRC = _train_block_from_comps(
         BlockComp.EXACT_YEAR_MONTH,
         BlockComp.SAME_AGE_SEX,
         BlockComp.SAME_WEAPON,
+        BlockComp.SAME_CIRCUMSTANCE,
         add_article_exclusion=False,
     )
     AGE_SEX_WEAPON = _train_block_from_comps(
@@ -427,6 +455,18 @@ class ShrLinkRule(StrEnum):
         BlockComp.SAME_WEAPON,
         add_article_exclusion=False,
     )
+    AGE_SEX_CIRC = _train_block_from_comps(
+        BlockComp.SAME_AGE_SEX,
+        BlockComp.SAME_CIRCUMSTANCE,
+        add_article_exclusion=False,
+    )
+    AGE_SEX_CIRC_OFFENDER_AGE = _train_block_from_comps(
+        BlockComp.SAME_AGE_SEX,
+        BlockComp.SAME_CIRCUMSTANCE,
+        BlockComp.SAME_OFFENDER_AGE,
+        add_article_exclusion=False,
+    )
+
     YEAR_MONTH = _train_block_from_comps(
         BlockComp.EXACT_YEAR_MONTH,
         add_article_exclusion=False,
@@ -440,6 +480,12 @@ class ShrLinkRule(StrEnum):
         BlockComp.SAME_WEAPON,
         add_article_exclusion=False,
     )
+    OFFENDER_AGE_SEX_WEAPON_RELATION = _train_block_from_comps(
+        BlockComp.SAME_OFFENDER_AGE,
+        BlockComp.SAME_WEAPON,
+        BlockComp.SAME_RELATION,
+        add_article_exclusion=False,
+    )
 
 
 
@@ -450,13 +496,13 @@ SHR_OVERALL_BLOCKS = [
 ]
 
 SHR_DETERMINISTIC_BLOCKS = [
-    ShrLinkRule.MONTH_AGE_SEX_WEAPON
+    ShrLinkRule.MONTH_AGE_SEX_WEAPON_CIRC
 ]
 
 SHR_TRAINING_BLOCKS = [
     ShrLinkRule.YEAR_MONTH,
-    ShrLinkRule.AGE_SEX,
-    ShrLinkRule.OFFENDER_AGE_SEX_WEAPON,
+    ShrLinkRule.AGE_SEX_CIRC_OFFENDER_AGE,
+    ShrLinkRule.OFFENDER_AGE_SEX_WEAPON_RELATION,
 ]
 
 YEAR_MONTH_COMPARISON = [

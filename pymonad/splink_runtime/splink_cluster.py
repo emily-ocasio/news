@@ -39,7 +39,9 @@ from .splink_types import (
     ExclusionId,
     PairLeftIdColumnName,
     PairRightIdColumnName,
+    PairsCaptureTableName,
     PairsTableName,
+    PairsTop1TableName,
     ResultClustersTableName,
     ResultPairsTableName,
     ResultProvenanceTableName,
@@ -428,6 +430,18 @@ def _persist_link_only_results(ctx: SplinkContext) -> Run[Unit]:
     )
 
 
+def _drop_owned_transient_tables_step(ctx: SplinkContext) -> Run[Unit]:
+    """Drop runtime-owned derived tables that should not persist after a run."""
+    cleanup = pure(unit)
+    for table_name in (
+        tables_get_optional(ctx.tables, PairsTop1TableName),
+        tables_get_optional(ctx.tables, PairsCaptureTableName),
+    ):
+        if table_name.is_present():
+            cleanup = cleanup ^ sql_exec(SQL(f"DROP TABLE IF EXISTS {table_name}"))
+    return cleanup
+
+
 def drop_all_splink_tables(exec_fn, query_fn) -> None:
     """Drop all transient Splink-managed tables/views from the active database."""
     rows = query_fn(
@@ -440,6 +454,33 @@ def drop_all_splink_tables(exec_fn, query_fn) -> None:
         table_type = str(row["table_type"]).upper()
         stmt = f"DROP VIEW IF EXISTS {name}" if table_type == "VIEW" else f"DROP TABLE IF EXISTS {name}"
         exec_fn(stmt)
+
+
+def drop_all_splink_tables_detach_sqldb(exec_fn, query_fn) -> None:
+    """
+    Drop transient Splink tables while temporarily detaching `sqldb`.
+
+    DuckDB metadata scans against `information_schema.tables` can stall badly
+    when a SQLite database is attached as `sqldb`.
+    """
+    rows = query_fn("PRAGMA database_list")
+    sqldb_file = None
+    for row in rows:
+        if str(row.get("name", "")) == "sqldb":
+            sqldb_file = str(row.get("file", ""))
+            break
+
+    if not sqldb_file:
+        drop_all_splink_tables(exec_fn, query_fn)
+        return
+
+    escaped = sqldb_file.replace("'", "''")
+    exec_fn("DETACH sqldb")
+    try:
+        drop_all_splink_tables(exec_fn, query_fn)
+    finally:
+        exec_fn("LOAD sqlite_scanner")
+        exec_fn(f"ATTACH '{escaped}' AS sqldb (TYPE SQLITE)")
 
 
 def _drop_all_splink_tables_step() -> Run[Unit]:
@@ -494,10 +535,17 @@ def _drop_all_splink_tables_detach_sqldb_step() -> Run[Unit]:
 
 
 def _invalidate_and_drop_splink_tables(ctx: SplinkContext, linker: Any) -> Run[Unit]:
-    _ = ctx
     try:
         linker.table_management.invalidate_cache()
-        return _drop_all_splink_tables_detach_sqldb_step()
+    except Exception:  # pylint: disable=W0718
+        pass
+    return _drop_owned_transient_tables_step(ctx) ^ _drop_all_splink_tables_detach_sqldb_step()
+
+
+def cleanup_transient_splink_tables_after_run() -> Run[Unit]:
+    """Best-effort cleanup for runtime-owned transient Splink tables after a job completes."""
+    try:
+        return with_splink_context_linker(_invalidate_and_drop_splink_tables)
     except Exception:  # pylint: disable=W0718
         return pure(unit)
 

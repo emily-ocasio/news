@@ -415,7 +415,9 @@ class HumanizationExtractResponse(BaseModel):
     Step 1 response model for incident-specific verbatim extraction.
     """
     incident_excerpt: str = Field(
-        description="Verbatim excerpt containing only text relevant to the target incident."
+        description=(
+            "Verbatim excerpt containing only text relevant to the target incident."
+        )
     )
 
 
