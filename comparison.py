@@ -508,6 +508,16 @@ AGE_COMP = cl.CustomComparison(
             ComparisonComp.AGE_2YEAR.value,
             "victim_age"
         ).to_dict(),
+        TFComparisonLevel(
+            "victim ages within 5 years",
+            ComparisonComp.AGE_5YEARS.value,
+            "victim_age"
+        ).to_dict(),
+        TFComparisonLevel(
+            "victim ages within 10 years",
+            ComparisonComp.AGE_10YEARS.value,
+            "victim_age"
+        ).to_dict(),
         cll.ElseLevel()
     ]
 )
@@ -872,7 +882,6 @@ DIST_SAME_QUAD = cllc.Or(
     DIST_SAME_QUAD_RIGHT
 )
 
-QUAD_SINGLE_CHAR = cl
 
 DIST_COMP_NEW = cl.CustomComparison(
     output_column_name = "location",
@@ -1043,16 +1052,36 @@ DIST_COMP_NEW = cl.CustomComparison(
         ).configure(label_for_charts="within 0.15 km or similar address"),
         cllc.Or(
             cll.DistanceInKMLevel("lat", "lon", 0.5),
+            cllc.And(
+                DIST_STREET_ONLY_TYPE,
+                cll.DistanceInKMLevel("lat", "lon", 1.0)
+            ),
             DIST_SAME_QUAD,
             cllc.And(
                 cll.DistanceInKMLevel("lat", "lon", 1.5),
                 DIST_PLACE_TYPE
             ),
-        ).configure(label_for_charts="within 0.5km or 1.5 km place or same quadrant"),
+        ).configure(
+            label_for_charts="within 0.5km / 1.0km st only / 1.5 km place or same quad"
+        ),
         DIST_NO_SUCCESS.configure(
             label_for_charts="no successful geocoding null",
             is_null_level=True
         ),
+        cllc.And(
+            cllc.Or(
+                cll.LiteralMatchLevel("address_type", "QUADRANT", "string", "left"),
+                cll.LiteralMatchLevel("address_type", "QUADRANT", "string", "right"),
+            ),
+            cllc.Or(
+                cll.LiteralMatchLevel(
+                    "address_type", "APPROXIMATE_PLACE", "string", "left"
+                ),
+                cll.LiteralMatchLevel(
+                    "address_type", "APPROXIMATE_PLACE", "string", "right"
+                ),
+            )
+        ).configure(label_for_charts="approximate+quad null", is_null_level=True),
         cll.ElseLevel()
     ]
 )
@@ -1174,7 +1203,7 @@ CIRC_COMP = cl.CustomComparison(
                     "brawl",
                     "gang killing",
                     "other felony related",
-                    "narcotics related"
+                    "narcotics related",
                     "felon killed by police"
                 ))
             ),

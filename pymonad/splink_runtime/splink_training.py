@@ -78,9 +78,10 @@ def print_prediction_counts(ctx: SplinkContext) -> Run[Unit]:
 
 def _train_linker_setup(ctx: SplinkContext, linker: Linker, _: PredictPlan) -> Run[Unit]:
     def _run() -> Run[Unit]:
-        linker.training.estimate_probability_two_random_records_match(
-            list(ctx.deterministic_rules), recall=ctx.deterministic_recall
-        )
+        if not ctx.skip_lambda_estimation:
+            linker.training.estimate_probability_two_random_records_match(
+                list(ctx.deterministic_rules), recall=ctx.deterministic_recall
+            )
         if not ctx.skip_u_estimation:
             linker.training.estimate_u_using_random_sampling(ctx.u_estimation_max_pairs)
         return pure(unit)

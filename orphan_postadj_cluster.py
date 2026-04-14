@@ -145,6 +145,12 @@ def _build_postadj_orphan_cluster_input() -> Run[Unit]:
                       date_add(DATE '1970-01-01', INTERVAL (CAST(vep.entity_midpoint_day AS INTEGER)) DAY)
                     )
                   ) AS month,
+                  CASE
+                    WHEN vep.entity_date_precision = 'day'
+                      AND vep.incident_date IS NOT NULL
+                      THEN EXTRACT(DAY FROM vep.incident_date)
+                    ELSE NULL
+                  END AS day,
                   vep.canonical_geo_address_norm AS geo_address_norm,
                   vep.canonical_geo_address_short AS geo_address_short,
                   vep.canonical_geo_address_short_2 AS geo_address_short_2,
@@ -743,6 +749,12 @@ def _export_postadj_orphan_clusters_excel() -> Run[Unit]:
             v.entity_midpoint_day AS midpoint_day,
             v.entity_date_precision AS date_precision,
             v.incident_date,
+            CASE
+              WHEN v.entity_date_precision = 'day'
+                AND v.incident_date IS NOT NULL
+                THEN EXTRACT(DAY FROM v.incident_date)
+              ELSE NULL
+            END AS day,
             v.canonical_fullname,
             v.canonical_sex,
             v.canonical_race,
@@ -799,6 +811,7 @@ def _export_postadj_orphan_clusters_excel() -> Run[Unit]:
             m.midpoint_day,
             m.date_precision,
             m.incident_date,
+            m.day,
             CAST(NULL AS VARCHAR) AS canonical_fullname,
             m.victim_sex AS canonical_sex,
             m.victim_race AS canonical_race,
@@ -845,6 +858,7 @@ def _export_postadj_orphan_clusters_excel() -> Run[Unit]:
             i.midpoint_day,
             i.date_precision,
             i.incident_date,
+            i.day,
             CAST(NULL AS VARCHAR) AS canonical_fullname,
             i.victim_sex AS canonical_sex,
             i.victim_race AS canonical_race,
@@ -888,6 +902,7 @@ def _export_postadj_orphan_clusters_excel() -> Run[Unit]:
           midpoint_day,
           date_precision,
           incident_date,
+          day,
           canonical_fullname,
           canonical_sex,
           canonical_race,

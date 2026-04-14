@@ -137,6 +137,12 @@ def _create_linkage_input_tables() -> Run[Unit]:
                         )
                       )
                     ) AS month,
+                    CASE
+                      WHEN entity_date_precision = 'day'
+                        AND incident_date IS NOT NULL
+                        THEN EXTRACT(DAY FROM incident_date)
+                      ELSE NULL
+                    END AS day,
                     -- NEW: all article ids from cluster as CSV
                     article_ids_csv,
                     canonical_geo_address_norm AS geo_address_norm,
@@ -183,7 +189,8 @@ def _create_linkage_input_tables() -> Run[Unit]:
         ^ sql_exec(
             SQL(
                 """--sql
-                -- orphan_link_input: pass through date_precision from victims_orphan
+                -- orphan_link_input: pass through date/day precision
+                -- from victims_orphan
                 CREATE OR REPLACE TABLE orphan_link_input AS
                 SELECT
                     cast(victim_row_id AS varchar) AS unique_id,
@@ -195,6 +202,7 @@ def _create_linkage_input_tables() -> Run[Unit]:
                     year,
                     year AS year_block,
                     month,
+                    day,
                     geo_address_norm,
                     geo_address_short,
                     geo_address_short_2,
@@ -364,7 +372,7 @@ def _debug_preview_orphans() -> Run[Unit]:
                 """--sql
                 SELECT
                   unique_id, city_id,
-                  year, month, date_precision,
+                  year, month, day, date_precision,
                   incident_date, midpoint_day,
                   lat, lon,
                   victim_age, victim_sex, weapon, circumstance,
@@ -386,7 +394,8 @@ def _debug_preview_orphans() -> Run[Unit]:
                 + "\n".join(
                     "  "
                     f"id={r['unique_id']} city={r['city_id']} "
-                    f"Y={r['year']} M={r['month']} prec={r['date_precision']} "
+                    f"Y={r['year']} M={r['month']} D={r['day']} "
+                    f"prec={r['date_precision']} "
                     f"date={r['incident_date']} mid={r['midpoint_day']} "
                     f"lat={r['lat']} lon={r['lon']} "
                     f"age={r['victim_age']} sex={r['victim_sex']} "
@@ -1143,7 +1152,7 @@ def _export_orphan_matches_debug_excel() -> Run[Unit]:
         e.date_precision,
         CAST(NULL AS BIGINT) AS article_id,
         e.article_ids_csv,
-        e.city_id, e.year, e.month,
+        e.city_id, e.year, e.month, e.day,
         e.geo_address_norm,
         e.geo_address_short,
         e.geo_address_short_2,
@@ -1178,7 +1187,7 @@ def _export_orphan_matches_debug_excel() -> Run[Unit]:
         o.date_precision,
         o.article_id,
         o.article_ids_csv,
-        o.city_id, o.year, o.month,
+        o.city_id, o.year, o.month, o.day,
         o.geo_address_norm,
         o.geo_address_short,
         o.geo_address_short_2,
@@ -1208,7 +1217,7 @@ def _export_orphan_matches_debug_excel() -> Run[Unit]:
       midpoint_day,
       uid,
       article_id,
-        city_id, year, month,
+        city_id, year, month, day,
       date_precision, incident_date,
       geo_address_norm, geo_address_short, geo_address_short_2,
       geo_score, address_type,

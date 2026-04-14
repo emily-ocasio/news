@@ -9,7 +9,6 @@ from typing import Any
 from menuprompts import NextStep
 from pymonad import (
     DbBackend,
-    Left,
     Namespace,
     PromptKey,
     Run,
@@ -20,7 +19,6 @@ from pymonad import (
     local,
     pure,
     put_line,
-    run_except,
     sql_query,
     to_prompts,
     with_duckdb,
@@ -33,6 +31,7 @@ from humanization_pipeline import (
     build_humanization_candidates_current,
     ensure_humanization_tables,
     resolve_candidate,
+    validate_humanization_prerequisites,
 )
 
 REVIEW_PROMPTS: dict[str, str | tuple[str, str] | tuple[str,]] = {
@@ -53,36 +52,6 @@ HUMANIZATION_KEYS = (
 
 def _with_sqlite(subprog: Run[Any]) -> Run[Any]:
     return local(lambda env: {**env, "current_backend": DbBackend.SQLITE}, subprog)
-
-
-def _table_ready(table_name: str) -> Run[bool]:
-    return run_except(sql_query(SQL(f"SELECT 1 FROM {table_name} LIMIT 1;"))) >> (
-        lambda result: pure(not isinstance(result, Left))
-    )
-
-
-def _validate_prerequisites() -> Run[bool]:
-    required = (
-        "shr_cached",
-        "shr_max_weight_matches",
-        "victim_entity_members",
-    )
-
-    def _loop(idx: int) -> Run[bool]:
-        if idx >= len(required):
-            return pure(True)
-        table = required[idx]
-        return _table_ready(table) >> (
-            lambda ok: _loop(idx + 1)
-            if ok
-            else put_line(
-                "[R] Required linkage table is missing or unavailable: "
-                f"{table}. Run [L] (and required upstream steps) first."
-            )
-            ^ pure(False)
-        )
-
-    return _loop(0)
 
 
 def _shr_exists(shr_uid: str) -> Run[bool]:
@@ -122,7 +91,6 @@ def _rows_for_shr_entity(shr_uid: str, entity_uid: str):
             WITH base AS (
               SELECT
                 c.*,
-                m.victim_row_id,
                 CASE
                   WHEN h.step3_decision_label = 'humanizing' THEN 'humanizing'
                   WHEN h.step3_decision_label IN ('not humanizing', 'not_humanizing')
@@ -130,11 +98,6 @@ def _rows_for_shr_entity(shr_uid: str, entity_uid: str):
                   ELSE 'not tested'
                 END AS row_determination
               FROM humanization_candidates_current c
-              LEFT JOIN victim_entity_members m
-                ON CAST(m.victim_entity_id AS VARCHAR) = c.entity_uid
-               AND m.article_id = c.article_id
-               AND m.incident_idx = c.incident_idx
-               AND m.victim_idx = c.victim_idx
               LEFT JOIN humanization_stage_cache h
                 ON h.incident_cache_key = c.incident_cache_key
                AND h.step1_status = 'success'
@@ -442,7 +405,7 @@ def _select_shr() -> Run[NextStep]:
 def _run_review() -> Run[NextStep]:
     return (
         ensure_humanization_tables()
-        ^ _validate_prerequisites()
+        ^ validate_humanization_prerequisites("[R]")
         >> (
             lambda ok: _select_shr()
             if ok

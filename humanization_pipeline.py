@@ -2,6 +2,9 @@
 SHR-level humanization pipeline using 3-step GPT processing with
 incident-attribute cache keys and idempotent reruns.
 """
+
+# pylint: disable=too-many-lines
+
 from __future__ import annotations
 
 import json
@@ -47,6 +50,7 @@ from pymonad import (
     pure,
     put_line,
     resolve_prompt_template,
+    run_except,
     rethrow,
     response_with_gpt_prompt,
     set_,
@@ -110,11 +114,13 @@ MODELS = {
 }
 
 
+# pylint: disable=too-many-instance-attributes
 @dataclass(frozen=True)
 class CandidateDecision:
     """
     Per-candidate article decision payload returned by cache lookup or GPT steps.
     """
+
     article_id: int
     decision_binary: int
     decision_label: str
@@ -126,11 +132,13 @@ class CandidateDecision:
     est_cost: float
 
 
+# pylint: disable=too-many-instance-attributes
 @dataclass(frozen=True)
 class ShrProcessResult:
     """
     Aggregated processing outcome and usage metrics for one SHR row.
     """
+
     shr_uid: str
     run_status: str
     humanizing_binary: int | None
@@ -176,10 +184,11 @@ def _display_article_for_analysis(article_id: int) -> Run[Unit]:
     """
     Display the candidate article in the same style used by GPT extraction flow.
     """
-    return _with_sqlite(
-        sql_query(
-            SQL(
-                """
+    return (
+        _with_sqlite(
+            sql_query(
+                SQL(
+                    """
                 SELECT
                   RecordId,
                   Title,
@@ -194,20 +203,26 @@ def _display_article_for_analysis(article_id: int) -> Run[Unit]:
                 WHERE RecordId = ?
                 LIMIT 1;
                 """
-            ),
-            SQLParams((article_id,)),
+                ),
+                SQLParams((article_id,)),
+            )
         )
-    ) >> (
-        lambda rows: put_line(f"Article {article_id} not found in articles.\n")
-        if len(rows) == 0
-        else put_line(f"Analyzing article:\n{from_rows(rows)[0]}")
-    ) ^ pure(unit)
+        >> (
+            lambda rows: (
+                put_line(f"Article {article_id} not found in articles.\n")
+                if len(rows) == 0
+                else put_line(f"Analyzing article:\n{from_rows(rows)[0]}")
+            )
+        )
+        ^ pure(unit)
+    )
 
 
 def _display_latest_gpt_for_article(article_id: int) -> Run[Unit]:
     """
     Display latest gptResults usage/reasoning summary for the article if present.
     """
+
     def _after_query(maybe_usage: Maybe[Tuple[GPTUsage, GPTReasoning]]) -> Run[Unit]:
         match maybe_usage:
             case Just(tup):
@@ -217,25 +232,30 @@ def _display_latest_gpt_for_article(article_id: int) -> Run[Unit]:
                     ^ pure(unit)
                 )
             case _:
-                return put_line("No GPT responses captured for this article.\n") ^ pure(unit)
+                return put_line("No GPT responses captured for this article.\n") ^ pure(
+                    unit
+                )
 
     return (
-        gpt_usage_reasoning_from_rows
-        & _with_sqlite(
-            sql_query(
-                SQL(
-                    """
+        (
+            gpt_usage_reasoning_from_rows
+            & _with_sqlite(
+                sql_query(
+                    SQL(
+                        """
                     SELECT *
                     FROM gptResults
                     WHERE RecordId = ?
                     ORDER BY TimeStamp DESC, ResultId DESC
                     LIMIT 1;
                     """
-                ),
-                SQLParams((article_id,)),
+                    ),
+                    SQLParams((article_id,)),
+                )
             )
         )
-    ) >> _after_query
+        >> _after_query
+    )
 
 
 def _print_step_result(step_name: str, resp_t: GPTResponseTuple) -> Run[Unit]:
@@ -269,10 +289,12 @@ def save_humanization_step_gpt_result(
     output_json = String(resp_t.parsed.output.model_dump_json(indent=2))
     usage = resp_t.parsed.usage
 
-    return view(user_name) >> (lambda user:
-        ask() >> (lambda env:
-            resolve_prompt_template(env, PromptKey(step_prompt_key)) >> (lambda prompt_template:
-                _with_sqlite(
+    return view(user_name) >> (
+        lambda user: ask()
+        >> (
+            lambda env: resolve_prompt_template(env, PromptKey(step_prompt_key))
+            >> (
+                lambda prompt_template: _with_sqlite(
                     sql_exec(
                         SQL(insert_gptresults_sql()),
                         SQLParams(
@@ -282,7 +304,11 @@ def save_humanization_step_gpt_result(
                                 timestamp,
                                 String(step_prompt_key),
                                 String(prompt_template.id),
-                                String(prompt_template.version) if prompt_template.version is not None else None,
+                                (
+                                    String(prompt_template.version)
+                                    if prompt_template.version is not None
+                                    else None
+                                ),
                                 variables_json,
                                 model,
                                 String(format_type),
@@ -308,8 +334,12 @@ def _step1_variables(candidate_row) -> dict[str, str | None]:
         "incident_year": _prompt_token(_row_value(candidate_row, "year", None)),
         "incident_month": _prompt_token(_row_value(candidate_row, "month", None)),
         "incident_day": _prompt_token(_row_value(candidate_row, "day", None)),
-        "incident_summary": _prompt_token(_row_value(candidate_row, "incident_summary_norm", None)),
-        "victim_name": _prompt_token(_row_value(candidate_row, "victim_name_norm2", None)),
+        "incident_summary": _prompt_token(
+            _row_value(candidate_row, "incident_summary_norm", None)
+        ),
+        "victim_name": _prompt_token(
+            _row_value(candidate_row, "victim_name_norm2", None)
+        ),
         "victim_age": _prompt_token(_row_value(candidate_row, "victim_age", None)),
     }
 
@@ -339,6 +369,7 @@ def read_elapsed_display(expected_run_name: String) -> Run[Maybe[String]]:
     """
     Read formatted elapsed time for the expected active timer, if available.
     """
+
     def _just_elapsed(now: float, start: float) -> Run[Maybe[String]]:
         return pure(Just(String(elapsed_line(now - start))))
 
@@ -485,83 +516,294 @@ def _ensure_tables() -> Run[Unit]:
     )
 
 
-def _build_current_candidates() -> Run[Unit]:
+def _table_ready(table_name: str) -> Run[bool]:
+    return run_except(sql_query(SQL(f"SELECT 1 FROM {table_name} LIMIT 1;"))) >> (
+        lambda result: pure(not isinstance(result, Left))
+    )
+
+
+def _validate_humanization_prerequisites(controller_label: str) -> Run[bool]:
+    required = (
+        "shr_cached",
+        "shr_max_weight_matches",
+        "incidents_cached",
+        "victims_cached_enh",
+        "victim_entity_members",
+        "final_orphan_matches_postadj",
+        "postadj_orphan_cluster_members",
+        "postadj_orphan_cluster_sizes",
+        "victim_entity_reps_postadj_orphancluster",
+        "victim_entity_reps_postadj_orphancluster_origin",
+    )
+
+    def _loop(idx: int) -> Run[bool]:
+        if idx >= len(required):
+            return pure(True)
+        table = required[idx]
+        return _table_ready(table) >> (
+            lambda ok: (
+                _loop(idx + 1)
+                if ok
+                else put_line(
+                    f"{controller_label} Required post-linkage table "
+                    f"is missing or unavailable: {table}. "
+                    "Run [I], [D], [U], [J], [O], and [L] first."
+                )
+                ^ pure(False)
+            )
+        )
+
+    return _loop(0)
+
+
+def _build_current_entity_members() -> Run[Unit]:
     return sql_exec(
         SQL(
             """--sql
-            CREATE OR REPLACE TABLE humanization_candidates_current AS
-            WITH incident_counts AS (
-              SELECT article_id, COUNT(DISTINCT incident_idx) AS incident_count
-              FROM incidents_cached
-              GROUP BY article_id
+            CREATE OR REPLACE TABLE humanization_entity_members_current AS
+            WITH final_entities AS (
+              SELECT DISTINCT CAST(victim_entity_id AS VARCHAR) AS victim_entity_id
+              FROM victim_entity_reps_postadj_orphancluster
             ),
-            base AS (
+            named_members AS (
               SELECT
-                CAST(sm.unique_id_r AS VARCHAR) AS shr_uid,
-                CAST(sm.unique_id_l AS VARCHAR) AS entity_uid,
-                CAST(sc.year AS INTEGER) AS shr_year,
-                vm.article_id,
-                vm.incident_idx,
-                vm.victim_idx,
-                vm.victim_age,
-                vm.victim_name_raw,
-                vm.victim_name_norm,
-                vm.date_precision,
-                vm.year,
-                vm.month,
-                vm.day,
-                vm.publish_date,
-                ic.article_title AS article_title,
-                ic.article_text AS article_text,
-                ic.publish_date AS article_date,
-                COALESCE(ic.summary_norm, '') AS incident_summary_raw,
-                COALESCE(cnt.incident_count, 0) AS incident_count
-              FROM shr_max_weight_matches sm
-              JOIN victim_entity_members vm
-                ON CAST(vm.victim_entity_id AS VARCHAR) = CAST(sm.unique_id_l AS VARCHAR)
-              LEFT JOIN incidents_cached ic
-                ON vm.article_id = ic.article_id
-               AND vm.incident_idx = ic.incident_idx
-              LEFT JOIN incident_counts cnt
-                ON vm.article_id = cnt.article_id
-              LEFT JOIN shr_cached sc
-                ON CAST(sc.unique_id AS VARCHAR) = CAST(sm.unique_id_r AS VARCHAR)
+                CAST(m.victim_entity_id AS VARCHAR) AS victim_entity_id,
+                CAST(m.victim_row_id AS VARCHAR) AS victim_row_id,
+                m.article_id,
+                m.incident_idx,
+                m.victim_idx,
+                m.victim_age,
+                m.victim_name_raw,
+                m.victim_name_norm,
+                m.date_precision,
+                m.year,
+                m.month,
+                m.day,
+                m.publish_date
+              FROM victim_entity_members m
+              JOIN final_entities fe
+                ON fe.victim_entity_id = CAST(m.victim_entity_id AS VARCHAR)
             ),
-            norm AS (
+            matched_orphan_members AS (
               SELECT
-                *,
-                CASE
-                  WHEN date_precision = 'day' AND year IS NOT NULL AND month IS NOT NULL AND day IS NOT NULL
-                    THEN 'day:' || printf('%04d-%02d-%02d', year, month, day)
-                  WHEN date_precision = 'month' AND year IS NOT NULL AND month IS NOT NULL
-                    THEN 'month:' || printf('%04d-%02d', year, month)
-                  WHEN year IS NOT NULL
-                    THEN 'year:' || printf('%04d', year)
-                  ELSE 'unknown'
-                END AS incident_date_norm,
-                trim(regexp_replace(lower(regexp_replace(COALESCE(incident_summary_raw, ''), '[[:punct:]]+', ' ', 'g')), '[[:space:]]+', ' ', 'g')) AS incident_summary_norm,
-                trim(regexp_replace(lower(COALESCE(NULLIF(victim_name_norm, ''), COALESCE(victim_name_raw, ''))), '[[:space:]]+', ' ', 'g')) AS victim_name_norm2,
-                COALESCE(CAST(victim_age AS VARCHAR), 'NULL') AS victim_age_norm,
-                (
-                  CASE WHEN incident_count = 1 THEN 40 ELSE 0 END
-                  + CASE WHEN COALESCE(NULLIF(victim_name_norm, ''), NULLIF(victim_name_raw, '')) IS NOT NULL THEN 20 ELSE 0 END
-                  + CASE WHEN victim_age IS NOT NULL THEN 10 ELSE 0 END
-                  + CASE WHEN length(COALESCE(incident_summary_raw, '')) >= 120 THEN 20 ELSE 0 END
-                  - (CASE WHEN incident_count > 1 THEN (incident_count - 1) * 5 ELSE 0 END)
-                )::DOUBLE AS specificity_score
-              FROM base
+                CAST(fm.entity_uid AS VARCHAR) AS victim_entity_id,
+                CAST(v.victim_row_id AS VARCHAR) AS victim_row_id,
+                v.article_id,
+                v.incident_idx,
+                v.victim_idx,
+                v.victim_age,
+                v.victim_name_raw,
+                v.victim_name_norm,
+                v.date_precision,
+                v.year,
+                v.month,
+                v.day,
+                v.publish_date
+              FROM final_orphan_matches_postadj fm
+              JOIN victims_cached_enh v
+                ON CAST(v.victim_row_id AS VARCHAR) = CAST(fm.orphan_uid AS VARCHAR)
+            ),
+            clustered_singleton_members AS (
+              SELECT
+                MIN(CAST(m.unique_id AS VARCHAR)) OVER (
+                  PARTITION BY m.cluster_id
+                ) AS victim_entity_id,
+                CAST(v.victim_row_id AS VARCHAR) AS victim_row_id,
+                v.article_id,
+                v.incident_idx,
+                v.victim_idx,
+                v.victim_age,
+                v.victim_name_raw,
+                v.victim_name_norm,
+                v.date_precision,
+                v.year,
+                v.month,
+                v.day,
+                v.publish_date
+              FROM postadj_orphan_cluster_members m
+              JOIN postadj_orphan_cluster_sizes s
+                ON s.cluster_id = m.cluster_id
+               AND s.member_count >= 2
+              JOIN victims_cached_enh v
+                ON CAST(v.victim_row_id AS VARCHAR) = CAST(m.unique_id AS VARCHAR)
+            ),
+            unresolved_singleton_members AS (
+              SELECT
+                CAST(o.victim_entity_id AS VARCHAR) AS victim_entity_id,
+                CAST(v.victim_row_id AS VARCHAR) AS victim_row_id,
+                v.article_id,
+                v.incident_idx,
+                v.victim_idx,
+                v.victim_age,
+                v.victim_name_raw,
+                v.victim_name_norm,
+                v.date_precision,
+                v.year,
+                v.month,
+                v.day,
+                v.publish_date
+              FROM victim_entity_reps_postadj_orphancluster_origin o
+              JOIN victims_cached_enh v
+                ON CAST(v.victim_row_id AS VARCHAR)
+                 = CAST(o.victim_entity_id AS VARCHAR)
+              WHERE o.entity_origin_type = 'singleton_orphan_unresolved'
             )
-            SELECT
-              *,
-              md5(
-                coalesce(CAST(article_id AS VARCHAR), '') || '|'
-                || coalesce(incident_date_norm, '') || '|'
-                || coalesce(incident_summary_norm, '') || '|'
-                || coalesce(victim_name_norm2, '') || '|'
-                || coalesce(victim_age_norm, 'NULL')
-              ) AS incident_cache_key
-            FROM norm;
+            SELECT DISTINCT
+              victim_entity_id,
+              victim_row_id,
+              article_id,
+              incident_idx,
+              victim_idx,
+              victim_age,
+              victim_name_raw,
+              victim_name_norm,
+              date_precision,
+              year,
+              month,
+              day,
+              publish_date
+            FROM (
+              SELECT * FROM named_members
+              UNION ALL
+              SELECT * FROM matched_orphan_members
+              UNION ALL
+              SELECT * FROM clustered_singleton_members
+              UNION ALL
+              SELECT * FROM unresolved_singleton_members
+            ) AS all_members;
             """
+        )
+    )
+
+
+def _build_current_candidates() -> Run[Unit]:
+    return _build_current_entity_members() >> (
+        lambda _ignored: sql_exec(
+            SQL(
+                """--sql
+                CREATE OR REPLACE TABLE humanization_candidates_current AS
+                WITH incident_counts AS (
+                  SELECT article_id, COUNT(DISTINCT incident_idx) AS incident_count
+                  FROM incidents_cached
+                  GROUP BY article_id
+                ),
+                base AS (
+                  SELECT
+                    CAST(sm.unique_id_r AS VARCHAR) AS shr_uid,
+                    CAST(sm.unique_id_l AS VARCHAR) AS entity_uid,
+                    CAST(sc.year AS INTEGER) AS shr_year,
+                    vm.victim_row_id,
+                    vm.article_id,
+                    vm.incident_idx,
+                    vm.victim_idx,
+                    vm.victim_age,
+                    vm.victim_name_raw,
+                    vm.victim_name_norm,
+                    vm.date_precision,
+                    vm.year,
+                    vm.month,
+                    vm.day,
+                    vm.publish_date,
+                    ic.article_title AS article_title,
+                    ic.article_text AS article_text,
+                    ic.publish_date AS article_date,
+                    COALESCE(ic.summary_norm, '') AS incident_summary_raw,
+                    COALESCE(cnt.incident_count, 0) AS incident_count
+                  FROM shr_max_weight_matches sm
+                  JOIN humanization_entity_members_current vm
+                    ON CAST(vm.victim_entity_id AS VARCHAR)
+                     = CAST(sm.unique_id_l AS VARCHAR)
+                  LEFT JOIN incidents_cached ic
+                    ON vm.article_id = ic.article_id
+                   AND vm.incident_idx = ic.incident_idx
+                  LEFT JOIN incident_counts cnt
+                    ON vm.article_id = cnt.article_id
+                  LEFT JOIN shr_cached sc
+                    ON CAST(sc.unique_id AS VARCHAR) = CAST(sm.unique_id_r AS VARCHAR)
+                ),
+                norm AS (
+                  SELECT
+                    *,
+                    CASE
+                      WHEN date_precision = 'day'
+                       AND year IS NOT NULL
+                       AND month IS NOT NULL
+                       AND day IS NOT NULL
+                        THEN 'day:' || printf('%04d-%02d-%02d', year, month, day)
+                      WHEN date_precision = 'month'
+                       AND year IS NOT NULL
+                       AND month IS NOT NULL
+                        THEN 'month:' || printf('%04d-%02d', year, month)
+                      WHEN year IS NOT NULL
+                        THEN 'year:' || printf('%04d', year)
+                      ELSE 'unknown'
+                    END AS incident_date_norm,
+                    trim(
+                      regexp_replace(
+                        lower(
+                          regexp_replace(
+                            COALESCE(incident_summary_raw, ''),
+                            '[[:punct:]]+',
+                            ' ',
+                            'g'
+                          )
+                        ),
+                        '[[:space:]]+',
+                        ' ',
+                        'g'
+                      )
+                    ) AS incident_summary_norm,
+                    trim(
+                      regexp_replace(
+                        lower(
+                          COALESCE(
+                            NULLIF(victim_name_norm, ''),
+                            COALESCE(victim_name_raw, '')
+                          )
+                        ),
+                        '[[:space:]]+',
+                        ' ',
+                        'g'
+                      )
+                    ) AS victim_name_norm2,
+                    COALESCE(CAST(victim_age AS VARCHAR), 'NULL') AS victim_age_norm,
+                    (
+                      CASE WHEN incident_count = 1 THEN 40 ELSE 0 END
+                      + CASE
+                          WHEN COALESCE(
+                            NULLIF(victim_name_norm, ''),
+                            NULLIF(victim_name_raw, '')
+                          ) IS NOT NULL
+                          THEN 20
+                          ELSE 0
+                        END
+                      + CASE WHEN victim_age IS NOT NULL THEN 10 ELSE 0 END
+                      + CASE
+                          WHEN length(COALESCE(incident_summary_raw, '')) >= 120
+                          THEN 20
+                          ELSE 0
+                        END
+                      - (
+                          CASE
+                            WHEN incident_count > 1 THEN (incident_count - 1) * 5
+                            ELSE 0
+                          END
+                        )
+                    )::DOUBLE AS specificity_score
+                  FROM base
+                )
+                SELECT
+                  *,
+                  md5(
+                    coalesce(CAST(article_id AS VARCHAR), '') || '|'
+                    || coalesce(incident_date_norm, '') || '|'
+                    || coalesce(incident_summary_norm, '') || '|'
+                    || coalesce(victim_name_norm2, '') || '|'
+                    || coalesce(victim_age_norm, 'NULL')
+                  ) AS incident_cache_key
+                FROM norm;
+                """
+            )
         )
     )
 
@@ -576,7 +818,16 @@ def _build_reprocess_queue() -> Run[Unit]:
                   shr_uid,
                   MAX(shr_year) AS shr_year,
                   MAX(entity_uid) AS entity_uid,
-                  md5(COALESCE(string_agg(DISTINCT incident_cache_key, '|' ORDER BY incident_cache_key), '')) AS candidate_set_hash,
+                  md5(
+                    COALESCE(
+                      string_agg(
+                        DISTINCT incident_cache_key,
+                        '|'
+                        ORDER BY incident_cache_key
+                      ),
+                      ''
+                    )
+                  ) AS candidate_set_hash,
                   COUNT(*) AS candidate_count
                 FROM humanization_candidates_current
                 GROUP BY shr_uid;
@@ -597,7 +848,10 @@ def _build_reprocess_queue() -> Run[Unit]:
                        AND h.step1_status = 'success'
                        AND h.step2_status = 'success'
                        AND h.step3_status = 'success'
-                       AND h.step3_decision_label IN ('{HumanizationClass.HUMANIZING.value}', '{HumanizationClass.NOT_HUMANIZING.value}')
+                       AND h.step3_decision_label IN (
+                         '{HumanizationClass.HUMANIZING.value}',
+                         '{HumanizationClass.NOT_HUMANIZING.value}'
+                       )
                        AND h.step1_model = '{STEP1_MODEL.value}'
                        AND h.step2_model = '{STEP2_MODEL.value}'
                        AND h.step3_model = '{STEP3_MODEL.value}'
@@ -617,7 +871,8 @@ def _build_reprocess_queue() -> Run[Unit]:
                   ) AS ready_humanizing_count,
                   COUNT(*) FILTER (
                     WHERE is_ready = 1
-                      AND step3_decision_label = '{HumanizationClass.NOT_HUMANIZING.value}'
+                      AND step3_decision_label
+                        = '{HumanizationClass.NOT_HUMANIZING.value}'
                   ) AS ready_not_humanizing_count,
                   COUNT(*) FILTER (WHERE is_ready = 0) AS missing_cache_count
                 FROM candidate_ready
@@ -637,10 +892,18 @@ def _build_reprocess_queue() -> Run[Unit]:
                     s.candidate_set_hash,
                     s.candidate_count,
                     COALESCE(cs.ready_count, 0) AS ready_count,
-                    COALESCE(cs.ready_humanizing_count, 0) AS ready_humanizing_count,
-                    COALESCE(cs.ready_not_humanizing_count, 0) AS ready_not_humanizing_count,
+                    COALESCE(
+                      cs.ready_humanizing_count,
+                      0
+                    ) AS ready_humanizing_count,
+                    COALESCE(
+                      cs.ready_not_humanizing_count,
+                      0
+                    ) AS ready_not_humanizing_count,
                     COALESCE(cs.missing_cache_count, 0) AS missing_cache_count,
+                    r.shr_uid AS prev_result_shr_uid,
                     r.run_status AS prev_run_status,
+                    r.humanizing_binary AS prev_humanizing_binary,
                     r.candidate_set_hash AS prev_candidate_set_hash,
                     CASE
                       WHEN COALESCE(cs.ready_humanizing_count, 0) > 0 THEN 1
@@ -648,7 +911,8 @@ def _build_reprocess_queue() -> Run[Unit]:
                     END AS has_humanizing_cache_hit,
                     CASE
                       WHEN s.candidate_count > 0
-                       AND COALESCE(cs.ready_not_humanizing_count, 0) = s.candidate_count
+                       AND COALESCE(cs.ready_not_humanizing_count, 0)
+                         = s.candidate_count
                       THEN 1 ELSE 0
                     END AS all_candidates_cached_not_humanizing
                   FROM humanization_shr_signatures_current s
@@ -667,32 +931,75 @@ def _build_reprocess_queue() -> Run[Unit]:
                   ready_humanizing_count,
                   ready_not_humanizing_count,
                   missing_cache_count,
+                  prev_result_shr_uid,
                   prev_run_status,
+                  prev_humanizing_binary,
                   prev_candidate_set_hash,
                   has_humanizing_cache_hit,
                   all_candidates_cached_not_humanizing,
                   CASE
-                    WHEN has_humanizing_cache_hit = 1 THEN 'cache_short_circuit_humanizing'
-                    WHEN all_candidates_cached_not_humanizing = 1 THEN 'cache_complete_not_humanizing'
                     WHEN prev_run_status = 'pending_retry' THEN 'pending_retry'
-                    WHEN COALESCE(prev_candidate_set_hash, '') <> COALESCE(candidate_set_hash, '') THEN 'candidate_set_changed'
-                    WHEN missing_cache_count > 0 THEN 'cache_incomplete'
-                    ELSE 'needs_analysis'
+                    WHEN prev_result_shr_uid IS NULL
+                     AND has_humanizing_cache_hit = 1
+                    THEN 'cache_short_circuit_humanizing'
+                    WHEN prev_result_shr_uid IS NULL
+                     AND all_candidates_cached_not_humanizing = 1
+                    THEN 'cache_complete_not_humanizing'
+                    WHEN prev_result_shr_uid IS NULL
+                     AND missing_cache_count > 0
+                    THEN 'cache_incomplete'
+                    WHEN prev_result_shr_uid IS NULL THEN 'needs_analysis'
+                    WHEN COALESCE(prev_candidate_set_hash, '')
+                      <> COALESCE(candidate_set_hash, '')
+                     AND has_humanizing_cache_hit = 1
+                    THEN 'cache_short_circuit_humanizing'
+                    WHEN COALESCE(prev_candidate_set_hash, '')
+                      <> COALESCE(candidate_set_hash, '')
+                     AND all_candidates_cached_not_humanizing = 1
+                    THEN 'cache_complete_not_humanizing'
+                    WHEN COALESCE(prev_candidate_set_hash, '')
+                      <> COALESCE(candidate_set_hash, '')
+                    THEN 'candidate_set_changed'
+                    WHEN missing_cache_count > 0
+                      AND NOT (
+                        prev_result_shr_uid IS NOT NULL
+                        AND prev_run_status = 'complete'
+                        AND COALESCE(prev_humanizing_binary, 0) = 1
+                        AND COALESCE(prev_candidate_set_hash, '')
+                          = COALESCE(candidate_set_hash, '')
+                      )
+                    THEN 'cache_incomplete'
+                    ELSE 'up_to_date'
                   END AS reason_code,
                   ROW_NUMBER() OVER (
                     ORDER BY
                       CASE
                         WHEN prev_run_status = 'pending_retry' THEN 0
-                        WHEN COALESCE(prev_candidate_set_hash, '') <> COALESCE(candidate_set_hash, '') THEN 1
-                        WHEN missing_cache_count > 0 THEN 1
+                        WHEN prev_result_shr_uid IS NULL THEN 1
+                        WHEN COALESCE(prev_candidate_set_hash, '')
+                          <> COALESCE(candidate_set_hash, '')
+                        THEN 2
+                        WHEN missing_cache_count > 0 THEN 3
                         ELSE 9
                       END,
                       shr_year,
                       shr_uid
                   ) AS priority_rank
                 FROM status
-                WHERE has_humanizing_cache_hit = 0
-                  AND all_candidates_cached_not_humanizing = 0;
+                WHERE prev_run_status = 'pending_retry'
+                  OR prev_result_shr_uid IS NULL
+                  OR COALESCE(prev_candidate_set_hash, '')
+                     <> COALESCE(candidate_set_hash, '')
+                  OR (
+                    missing_cache_count > 0
+                    AND NOT (
+                      prev_result_shr_uid IS NOT NULL
+                      AND prev_run_status = 'complete'
+                      AND COALESCE(prev_humanizing_binary, 0) = 1
+                      AND COALESCE(prev_candidate_set_hash, '')
+                        = COALESCE(candidate_set_hash, '')
+                    )
+                  );
                 """
             )
         )
@@ -700,26 +1007,30 @@ def _build_reprocess_queue() -> Run[Unit]:
 
 
 def _display_queue_counts() -> Run[Unit]:
-    return sql_query(
-        SQL(
-            """
+    return (
+        sql_query(
+            SQL(
+                """
             SELECT CAST(shr_year AS VARCHAR) AS ShrYear, COUNT(*) AS ReadyCount
             FROM humanization_shr_reprocess_queue
             GROUP BY ShrYear
             ORDER BY ShrYear;
             """
-        )
-    ) >> (
-        lambda rows: (
-            put_line("No SHR rows currently require (re)processing.\n")
-            if len(rows) == 0
-            else put_line(
-                "SHR rows requiring (re)processing by year:\n"
-                + "\n".join(f"{r['ShrYear']}: {r['ReadyCount']}" for r in rows)
-                + "\n"
             )
         )
-        ^ pure(unit)
+        >> (
+            lambda rows: (
+                put_line("No SHR rows currently require (re)processing.\n")
+                if len(rows) == 0
+                else put_line(
+                    "SHR rows requiring (re)processing by year:\n"
+                    + "\n".join(f"{r['ShrYear']}: {r['ReadyCount']}" for r in rows)
+                    + f"\nTotal: {sum(int(r['ReadyCount']) for r in rows)}"
+                    + "\n"
+                )
+            )
+            ^ pure(unit)
+        )
     )
 
 
@@ -756,7 +1067,11 @@ def _lookup_cache(incident_cache_key: str) -> Run[Array]:
               AND step1_status = 'success'
               AND step2_status = 'success'
               AND step3_status = 'success'
-              AND step3_decision_label IN ('humanizing', 'not humanizing', 'not_humanizing')
+              AND step3_decision_label IN (
+                'humanizing',
+                'not humanizing',
+                'not_humanizing'
+              )
               AND step1_model = ?
               AND step2_model = ?
               AND step3_model = ?
@@ -776,47 +1091,64 @@ def _lookup_cache(incident_cache_key: str) -> Run[Array]:
 
 def _run_step1(variables: dict[str, str | None]) -> Run[GPTResponseTuple]:
     return (
-        to_gpt_tuple
-        & response_with_gpt_prompt(
-            PromptKey(STEP1_PROMPT_KEY),
-            variables,
-            HumanizationExtractResponse,
-            STEP1_MODEL_KEY,
-            effort="low",
-            stream=False,
+        (
+            to_gpt_tuple
+            & response_with_gpt_prompt(
+                PromptKey(STEP1_PROMPT_KEY),
+                variables,
+                HumanizationExtractResponse,
+                STEP1_MODEL_KEY,
+                effort="low",
+                stream=False,
+            )
         )
-    ) >> rethrow >> (lambda resp: pure(cast(GPTResponseTuple, resp)))
+        >> rethrow
+        >> (lambda resp: pure(cast(GPTResponseTuple, resp)))
+    )
 
 
 def _run_step2(variables: dict[str, str | None]) -> Run[GPTResponseTuple]:
     return (
-        to_gpt_tuple
-        & response_with_gpt_prompt(
-            PromptKey(STEP2_PROMPT_KEY),
-            variables,
-            HumanizationDeidentifyResponse,
-            STEP2_MODEL_KEY,
-            effort="low",
-            stream=False,
+        (
+            to_gpt_tuple
+            & response_with_gpt_prompt(
+                PromptKey(STEP2_PROMPT_KEY),
+                variables,
+                HumanizationDeidentifyResponse,
+                STEP2_MODEL_KEY,
+                effort="low",
+                stream=False,
+            )
         )
-    ) >> rethrow >> (lambda resp: pure(cast(GPTResponseTuple, resp)))
+        >> rethrow
+        >> (lambda resp: pure(cast(GPTResponseTuple, resp)))
+    )
 
 
 def _run_step3(variables: dict[str, str | None]) -> Run[GPTResponseTuple]:
     return (
-        to_gpt_tuple
-        & response_with_gpt_prompt(
-            PromptKey(STEP3_PROMPT_KEY),
-            variables,
-            HumanizationDecisionResponse,
-            STEP3_MODEL_KEY,
-            effort="medium",
-            stream=False,
+        (
+            to_gpt_tuple
+            & response_with_gpt_prompt(
+                PromptKey(STEP3_PROMPT_KEY),
+                variables,
+                HumanizationDecisionResponse,
+                STEP3_MODEL_KEY,
+                effort="medium",
+                stream=False,
+            )
         )
-    ) >> rethrow >> (lambda resp: pure(cast(GPTResponseTuple, resp)))
+        >> rethrow
+        >> (lambda resp: pure(cast(GPTResponseTuple, resp)))
+    )
 
 
-def _upsert_stage_cache(candidate_row, step1: GPTResponseTuple, step2: GPTResponseTuple, step3: GPTResponseTuple) -> Run[Unit]:
+def _upsert_stage_cache(
+    candidate_row,
+    step1: GPTResponseTuple,
+    step2: GPTResponseTuple,
+    step3: GPTResponseTuple,
+) -> Run[Unit]:
     out1 = cast(HumanizationExtractResponse, step1.parsed.output)
     out2 = cast(HumanizationDeidentifyResponse, step2.parsed.output)
     out3 = cast(HumanizationDecisionResponse, step3.parsed.output)
@@ -835,15 +1167,18 @@ def _upsert_stage_cache(candidate_row, step1: GPTResponseTuple, step2: GPTRespon
 
               step1_prompt_id, step1_prompt_version, step1_model, step1_status,
               step1_output_text, step1_output_json, step1_reasoning,
-              step1_input_tokens, step1_cached_tokens, step1_output_tokens, step1_reasoning_tokens, step1_cost,
+              step1_input_tokens, step1_cached_tokens, step1_output_tokens,
+              step1_reasoning_tokens, step1_cost,
 
               step2_prompt_id, step2_prompt_version, step2_model, step2_status,
               step2_output_text, step2_output_json, step2_reasoning,
-              step2_input_tokens, step2_cached_tokens, step2_output_tokens, step2_reasoning_tokens, step2_cost,
+              step2_input_tokens, step2_cached_tokens, step2_output_tokens,
+              step2_reasoning_tokens, step2_cost,
 
               step3_prompt_id, step3_prompt_version, step3_model, step3_status,
               step3_decision_label, step3_output_json, step3_reasoning,
-              step3_input_tokens, step3_cached_tokens, step3_output_tokens, step3_reasoning_tokens, step3_cost,
+              step3_input_tokens, step3_cached_tokens, step3_output_tokens,
+              step3_reasoning_tokens, step3_cost,
 
               updated_at
             ) VALUES (
@@ -907,9 +1242,12 @@ def _upsert_stage_cache(candidate_row, step1: GPTResponseTuple, step2: GPTRespon
                 String(str(_row_value(candidate_row, "incident_summary_norm", ""))),
                 String(str(_row_value(candidate_row, "victim_name_norm2", ""))),
                 String(str(_row_value(candidate_row, "victim_age_norm", "NULL"))),
-
                 String(STEP1_PROMPT_ID),
-                String(STEP1_PROMPT_VERSION) if STEP1_PROMPT_VERSION is not None else None,
+                (
+                    String(STEP1_PROMPT_VERSION)
+                    if STEP1_PROMPT_VERSION is not None
+                    else None
+                ),
                 String(STEP1_MODEL.value),
                 String("success"),
                 String(out1.incident_excerpt),
@@ -920,9 +1258,12 @@ def _upsert_stage_cache(candidate_row, step1: GPTResponseTuple, step2: GPTRespon
                 u1.output_tokens,
                 u1.reasoning_tokens,
                 u1.cost(),
-
                 String(STEP2_PROMPT_ID),
-                String(STEP2_PROMPT_VERSION) if STEP2_PROMPT_VERSION is not None else None,
+                (
+                    String(STEP2_PROMPT_VERSION)
+                    if STEP2_PROMPT_VERSION is not None
+                    else None
+                ),
                 String(STEP2_MODEL.value),
                 String("success"),
                 String(out2.deidentified_excerpt),
@@ -933,9 +1274,12 @@ def _upsert_stage_cache(candidate_row, step1: GPTResponseTuple, step2: GPTRespon
                 u2.output_tokens,
                 u2.reasoning_tokens,
                 u2.cost(),
-
                 String(STEP3_PROMPT_ID),
-                String(STEP3_PROMPT_VERSION) if STEP3_PROMPT_VERSION is not None else None,
+                (
+                    String(STEP3_PROMPT_VERSION)
+                    if STEP3_PROMPT_VERSION is not None
+                    else None
+                ),
                 String(STEP3_MODEL.value),
                 String("success"),
                 String(out3.humanization_classification.value),
@@ -951,6 +1295,7 @@ def _upsert_stage_cache(candidate_row, step1: GPTResponseTuple, step2: GPTRespon
     )
 
 
+# pylint: disable=too-many-arguments,too-many-positional-arguments
 def _write_article_result(
     run_id: str,
     shr_uid: str,
@@ -1005,13 +1350,22 @@ def _write_article_result(
     )
 
 
-def resolve_candidate(candidate_row, force_refresh: bool = False) -> Run[CandidateDecision]:
+def resolve_candidate(
+    candidate_row, force_refresh: bool = False
+) -> Run[CandidateDecision]:
+    """
+    Resolve one candidate from cache when possible, otherwise run the GPT steps.
+    """
     cache_key = str(_row_value(candidate_row, "incident_cache_key", ""))
 
     def _from_cache(rows: Array) -> Run[CandidateDecision]:
         if len(rows) > 0:
             row = rows[0]
-            label = str(_row_value(row, "step3_decision_label", HumanizationClass.NOT_HUMANIZING.value))
+            label = str(
+                _row_value(
+                    row, "step3_decision_label", HumanizationClass.NOT_HUMANIZING.value
+                )
+            )
             binary = 1 if label == HumanizationClass.HUMANIZING.value else 0
             return pure(
                 CandidateDecision(
@@ -1052,16 +1406,27 @@ def resolve_candidate(candidate_row, force_refresh: bool = False) -> Run[Candida
                         article_id=article_id,
                         decision_binary=(
                             1
-                            if step3_output.humanization_classification == HumanizationClass.HUMANIZING
+                            if step3_output.humanization_classification
+                            == HumanizationClass.HUMANIZING
                             else 0
                         ),
                         decision_label=step3_output.humanization_classification.value,
                         used_cache=False,
-                        input_tokens=s1.parsed.usage.input_tokens + s2.parsed.usage.input_tokens + s3.parsed.usage.input_tokens,
-                        cached_tokens=s1.parsed.usage.cached_tokens + s2.parsed.usage.cached_tokens + s3.parsed.usage.cached_tokens,
-                        output_tokens=s1.parsed.usage.output_tokens + s2.parsed.usage.output_tokens + s3.parsed.usage.output_tokens,
-                        reasoning_tokens=s1.parsed.usage.reasoning_tokens + s2.parsed.usage.reasoning_tokens + s3.parsed.usage.reasoning_tokens,
-                        est_cost=s1.parsed.usage.cost() + s2.parsed.usage.cost() + s3.parsed.usage.cost(),
+                        input_tokens=s1.parsed.usage.input_tokens
+                        + s2.parsed.usage.input_tokens
+                        + s3.parsed.usage.input_tokens,
+                        cached_tokens=s1.parsed.usage.cached_tokens
+                        + s2.parsed.usage.cached_tokens
+                        + s3.parsed.usage.cached_tokens,
+                        output_tokens=s1.parsed.usage.output_tokens
+                        + s2.parsed.usage.output_tokens
+                        + s3.parsed.usage.output_tokens,
+                        reasoning_tokens=s1.parsed.usage.reasoning_tokens
+                        + s2.parsed.usage.reasoning_tokens
+                        + s3.parsed.usage.reasoning_tokens,
+                        est_cost=s1.parsed.usage.cost()
+                        + s2.parsed.usage.cost()
+                        + s3.parsed.usage.cost(),
                     )
                 )
             )
@@ -1105,8 +1470,7 @@ def resolve_candidate(candidate_row, force_refresh: bool = False) -> Run[Candida
         return (
             _display_article_for_analysis(article_id)
             ^ _display_latest_gpt_for_article(article_id)
-            ^ _run_step1(step1_variables)
-            >> _after_step1
+            ^ _run_step1(step1_variables) >> _after_step1
         )
 
     if force_refresh:
@@ -1125,6 +1489,13 @@ def ensure_humanization_tables() -> Run[Unit]:
     return _ensure_tables()
 
 
+def validate_humanization_prerequisites(controller_label: str) -> Run[bool]:
+    """
+    Public helper to validate the post-linkage tables used by humanization.
+    """
+    return _validate_humanization_prerequisites(controller_label)
+
+
 def build_humanization_candidates_current() -> Run[Unit]:
     """
     Public helper to build canonical SHR-member humanization candidates.
@@ -1139,17 +1510,26 @@ def _retrieve_candidates_for_shr(shr_uid: str) -> Run[Array]:
             SELECT
               c.*,
               ROW_NUMBER() OVER (
-                ORDER BY c.specificity_score DESC, c.article_id ASC, c.incident_idx ASC, c.victim_idx ASC
+                ORDER BY
+                  c.specificity_score DESC,
+                  c.article_id ASC,
+                  c.incident_idx ASC,
+                  c.victim_idx ASC
               ) AS priority_rank
             FROM humanization_candidates_current c
             WHERE c.shr_uid = ?
-            ORDER BY c.specificity_score DESC, c.article_id ASC, c.incident_idx ASC, c.victim_idx ASC;
+            ORDER BY
+              c.specificity_score DESC,
+              c.article_id ASC,
+              c.incident_idx ASC,
+              c.victim_idx ASC;
             """
         ),
         SQLParams((String(shr_uid),)),
     )
 
 
+# pylint: disable=too-many-arguments,too-many-positional-arguments
 def _persist_shr_result(
     run_id: str,
     shr_row,
@@ -1191,7 +1571,11 @@ def _persist_shr_result(
             (
                 String(str(_row_value(shr_row, "shr_uid", ""))),
                 String(run_id),
-                int(_row_value(shr_row, "shr_year", 0)) if _row_value(shr_row, "shr_year", None) is not None else None,
+                (
+                    int(_row_value(shr_row, "shr_year", 0))
+                    if _row_value(shr_row, "shr_year", None) is not None
+                    else None
+                ),
                 String(str(_row_value(shr_row, "entity_uid", ""))),
                 String(candidate_set_hash),
                 humanizing_binary,
@@ -1211,6 +1595,7 @@ def _process_single_shr(run_id: str, shr_row) -> Run[ShrProcessResult]:
     entity_uid = str(_row_value(shr_row, "entity_uid", ""))
     candidate_set_hash = str(_row_value(shr_row, "candidate_set_hash", ""))
 
+    # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
     def _loop(
         idx: int,
         candidates: list,
@@ -1240,74 +1625,72 @@ def _process_single_shr(run_id: str, shr_row) -> Run[ShrProcessResult]:
                 humanizing_binary = 0
                 run_status = "complete"
 
-            return (
-                _persist_shr_result(
-                    run_id,
-                    shr_row,
-                    candidate_set_hash,
-                    humanizing_binary,
-                    run_status,
-                    trigger_article_id,
-                    len(candidates),
-                    attempted,
-                    successful,
-                    failed,
-                )
-                ^ pure(
-                    ShrProcessResult(
-                        shr_uid=shr_uid,
-                        run_status=run_status,
-                        humanizing_binary=humanizing_binary,
-                        cache_hits=cache_hits,
-                        cache_misses=cache_misses,
-                        input_tokens=in_tokens,
-                        cached_tokens=c_tokens,
-                        output_tokens=out_tokens,
-                        reasoning_tokens=r_tokens,
-                        est_cost=est_cost,
-                    )
+            return _persist_shr_result(
+                run_id,
+                shr_row,
+                candidate_set_hash,
+                humanizing_binary,
+                run_status,
+                trigger_article_id,
+                len(candidates),
+                attempted,
+                successful,
+                failed,
+            ) ^ pure(
+                ShrProcessResult(
+                    shr_uid=shr_uid,
+                    run_status=run_status,
+                    humanizing_binary=humanizing_binary,
+                    cache_hits=cache_hits,
+                    cache_misses=cache_misses,
+                    input_tokens=in_tokens,
+                    cached_tokens=c_tokens,
+                    output_tokens=out_tokens,
+                    reasoning_tokens=r_tokens,
+                    est_cost=est_cost,
                 )
             )
 
         candidate = candidates[idx]
-        return (
-            sql_query(SQL("SELECT 1;"))
-            >> (
-                lambda _noop: (
-                    resolve_candidate(candidate)
-                    >> (
-                        lambda dec: _write_article_result(
-                            run_id,
-                            shr_uid,
-                            entity_uid,
-                            candidate,
-                            dec.used_cache,
-                            dec.decision_label,
-                            dec.decision_binary,
-                            "success",
-                            None,
-                            dec.input_tokens,
-                            dec.cached_tokens,
-                            dec.output_tokens,
-                            dec.reasoning_tokens,
-                            dec.est_cost,
-                        )
-                        ^ _loop(
-                            idx + 1,
-                            candidates,
-                            attempted + 1,
-                            successful + 1,
-                            failed,
-                            cache_hits + (1 if dec.used_cache else 0),
-                            cache_misses + (0 if dec.used_cache else 1),
-                            in_tokens + dec.input_tokens,
-                            c_tokens + dec.cached_tokens,
-                            out_tokens + dec.output_tokens,
-                            r_tokens + dec.reasoning_tokens,
-                            est_cost + dec.est_cost,
-                            dec.decision_binary == 1,
-                            dec.article_id if dec.decision_binary == 1 else trigger_article_id,
-                        )
+        return sql_query(SQL("SELECT 1;")) >> (
+            lambda _noop: (
+                resolve_candidate(candidate)
+                >> (
+                    lambda dec: _write_article_result(
+                        run_id,
+                        shr_uid,
+                        entity_uid,
+                        candidate,
+                        dec.used_cache,
+                        dec.decision_label,
+                        dec.decision_binary,
+                        "success",
+                        None,
+                        dec.input_tokens,
+                        dec.cached_tokens,
+                        dec.output_tokens,
+                        dec.reasoning_tokens,
+                        dec.est_cost,
+                    )
+                    ^ _loop(
+                        idx + 1,
+                        candidates,
+                        attempted + 1,
+                        successful + 1,
+                        failed,
+                        cache_hits + (1 if dec.used_cache else 0),
+                        cache_misses + (0 if dec.used_cache else 1),
+                        in_tokens + dec.input_tokens,
+                        c_tokens + dec.cached_tokens,
+                        out_tokens + dec.output_tokens,
+                        r_tokens + dec.reasoning_tokens,
+                        est_cost + dec.est_cost,
+                        dec.decision_binary == 1,
+                        (
+                            dec.article_id
+                            if dec.decision_binary == 1
+                            else trigger_article_id
+                        ),
                     )
                 )
             )
@@ -1343,15 +1726,12 @@ def _process_single_shr_safe(run_id: str, shr_row) -> Run[ShrProcessResult]:
     shr_uid = str(_row_value(shr_row, "shr_uid", ""))
     entity_uid = str(_row_value(shr_row, "entity_uid", ""))
 
-    return (
-        _retrieve_candidates_for_shr(shr_uid)
-        >> (
-            lambda rows: _process_candidates_with_error_capture(
-                run_id,
-                shr_row,
-                entity_uid,
-                list(rows),
-            )
+    return _retrieve_candidates_for_shr(shr_uid) >> (
+        lambda rows: _process_candidates_with_error_capture(
+            run_id,
+            shr_row,
+            entity_uid,
+            list(rows),
         )
     )
 
@@ -1365,6 +1745,7 @@ def _process_candidates_with_error_capture(
     shr_uid = str(_row_value(shr_row, "shr_uid", ""))
     candidate_set_hash = str(_row_value(shr_row, "candidate_set_hash", ""))
 
+    # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
     def _loop(
         idx: int,
         attempted: int,
@@ -1392,112 +1773,124 @@ def _process_candidates_with_error_capture(
             else:
                 humanizing_binary = 0
                 run_status = "complete"
-            return (
-                _persist_shr_result(
-                    run_id,
-                    shr_row,
-                    candidate_set_hash,
-                    humanizing_binary,
-                    run_status,
-                    trigger_article_id,
-                    len(candidates),
-                    attempted,
-                    successful,
-                    failed,
-                )
-                ^ pure(
-                    ShrProcessResult(
-                        shr_uid=shr_uid,
-                        run_status=run_status,
-                        humanizing_binary=humanizing_binary,
-                        cache_hits=cache_hits,
-                        cache_misses=cache_misses,
-                        input_tokens=in_tokens,
-                        cached_tokens=c_tokens,
-                        output_tokens=out_tokens,
-                        reasoning_tokens=r_tokens,
-                        est_cost=est_cost,
-                    )
+            return _persist_shr_result(
+                run_id,
+                shr_row,
+                candidate_set_hash,
+                humanizing_binary,
+                run_status,
+                trigger_article_id,
+                len(candidates),
+                attempted,
+                successful,
+                failed,
+            ) ^ pure(
+                ShrProcessResult(
+                    shr_uid=shr_uid,
+                    run_status=run_status,
+                    humanizing_binary=humanizing_binary,
+                    cache_hits=cache_hits,
+                    cache_misses=cache_misses,
+                    input_tokens=in_tokens,
+                    cached_tokens=c_tokens,
+                    output_tokens=out_tokens,
+                    reasoning_tokens=r_tokens,
+                    est_cost=est_cost,
                 )
             )
 
         cand = candidates[idx]
-        return (
-            resolve_candidate(cand)
-            >> (
-                lambda dec: _write_article_result(
-                    run_id,
-                    shr_uid,
-                    entity_uid,
-                    cand,
-                    dec.used_cache,
-                    dec.decision_label,
-                    dec.decision_binary,
-                    "success",
-                    None,
-                    dec.input_tokens,
-                    dec.cached_tokens,
-                    dec.output_tokens,
-                    dec.reasoning_tokens,
-                    dec.est_cost,
-                )
-                ^ _loop(
-                    idx + 1,
-                    attempted + 1,
-                    successful + 1,
-                    failed,
-                    cache_hits + (1 if dec.used_cache else 0),
-                    cache_misses + (0 if dec.used_cache else 1),
-                    in_tokens + dec.input_tokens,
-                    c_tokens + dec.cached_tokens,
-                    out_tokens + dec.output_tokens,
-                    r_tokens + dec.reasoning_tokens,
-                    est_cost + dec.est_cost,
-                    dec.decision_binary == 1,
-                    dec.article_id if dec.decision_binary == 1 else trigger_article_id,
-                )
-            )
-        )
-
-    def _handle_error(idx: int, err: ErrorPayload, state_vals: tuple[int, int, int, int, int, int, int, int, int, float, bool, int | None]) -> Run[ShrProcessResult]:
-        attempted, successful, failed, cache_hits, cache_misses, in_tokens, c_tokens, out_tokens, r_tokens, est_cost, found_positive, trigger_article_id = state_vals
-        if isinstance(err.app, UserAbort):
-            return throw(err)
-        cand = candidates[idx]
-        return (
-            _write_article_result(
+        return resolve_candidate(cand) >> (
+            lambda dec: _write_article_result(
                 run_id,
                 shr_uid,
                 entity_uid,
                 cand,
-                False,
+                dec.used_cache,
+                dec.decision_label,
+                dec.decision_binary,
+                "success",
                 None,
-                None,
-                "error",
-                str(err),
-                0,
-                0,
-                0,
-                0,
-                0.0,
+                dec.input_tokens,
+                dec.cached_tokens,
+                dec.output_tokens,
+                dec.reasoning_tokens,
+                dec.est_cost,
             )
             ^ _loop(
                 idx + 1,
                 attempted + 1,
-                successful,
-                failed + 1,
-                cache_hits,
-                cache_misses + 1,
-                in_tokens,
-                c_tokens,
-                out_tokens,
-                r_tokens,
-                est_cost,
-                found_positive,
-                trigger_article_id,
+                successful + 1,
+                failed,
+                cache_hits + (1 if dec.used_cache else 0),
+                cache_misses + (0 if dec.used_cache else 1),
+                in_tokens + dec.input_tokens,
+                c_tokens + dec.cached_tokens,
+                out_tokens + dec.output_tokens,
+                r_tokens + dec.reasoning_tokens,
+                est_cost + dec.est_cost,
+                dec.decision_binary == 1,
+                dec.article_id if dec.decision_binary == 1 else trigger_article_id,
             )
         )
 
+    # pylint: disable=too-many-locals
+    def _handle_error(
+        idx: int,
+        err: ErrorPayload,
+        state_vals: tuple[
+            int, int, int, int, int, int, int, int, int, float, bool, int | None
+        ],
+    ) -> Run[ShrProcessResult]:
+        (
+            attempted,
+            successful,
+            failed,
+            cache_hits,
+            cache_misses,
+            in_tokens,
+            c_tokens,
+            out_tokens,
+            r_tokens,
+            est_cost,
+            found_positive,
+            trigger_article_id,
+        ) = state_vals
+        if isinstance(err.app, UserAbort):
+            return throw(err)
+        cand = candidates[idx]
+        return _write_article_result(
+            run_id,
+            shr_uid,
+            entity_uid,
+            cand,
+            False,
+            None,
+            None,
+            "error",
+            str(err),
+            0,
+            0,
+            0,
+            0,
+            0.0,
+        ) ^ _loop(
+            idx + 1,
+            attempted + 1,
+            successful,
+            failed + 1,
+            cache_hits,
+            cache_misses + 1,
+            in_tokens,
+            c_tokens,
+            out_tokens,
+            r_tokens,
+            est_cost,
+            found_positive,
+            trigger_article_id,
+        )
+
+    # pylint: disable=too-many-arguments,too-many-positional-arguments
     def _step(
         idx: int,
         attempted: int,
@@ -1529,47 +1922,45 @@ def _process_candidates_with_error_capture(
                 found_positive,
                 trigger_article_id,
             )
-        return (
-            ask()
+        return ask() >> (
+            lambda _env: resolve_candidate(candidates[idx])
             >> (
-                lambda _env: resolve_candidate(candidates[idx])
-                >> (
-                    lambda dec: _write_article_result(
-                        run_id,
-                        shr_uid,
-                        entity_uid,
-                        candidates[idx],
-                        dec.used_cache,
-                        dec.decision_label,
-                        dec.decision_binary,
-                        "success",
-                        None,
-                        dec.input_tokens,
-                        dec.cached_tokens,
-                        dec.output_tokens,
-                        dec.reasoning_tokens,
-                        dec.est_cost,
-                    )
-                    ^ _step(
-                        idx + 1,
-                        attempted + 1,
-                        successful + 1,
-                        failed,
-                        cache_hits + (1 if dec.used_cache else 0),
-                        cache_misses + (0 if dec.used_cache else 1),
-                        in_tokens + dec.input_tokens,
-                        c_tokens + dec.cached_tokens,
-                        out_tokens + dec.output_tokens,
-                        r_tokens + dec.reasoning_tokens,
-                        est_cost + dec.est_cost,
-                        dec.decision_binary == 1,
-                        dec.article_id if dec.decision_binary == 1 else trigger_article_id,
-                    )
+                lambda dec: _write_article_result(
+                    run_id,
+                    shr_uid,
+                    entity_uid,
+                    candidates[idx],
+                    dec.used_cache,
+                    dec.decision_label,
+                    dec.decision_binary,
+                    "success",
+                    None,
+                    dec.input_tokens,
+                    dec.cached_tokens,
+                    dec.output_tokens,
+                    dec.reasoning_tokens,
+                    dec.est_cost,
+                )
+                ^ _step(
+                    idx + 1,
+                    attempted + 1,
+                    successful + 1,
+                    failed,
+                    cache_hits + (1 if dec.used_cache else 0),
+                    cache_misses + (0 if dec.used_cache else 1),
+                    in_tokens + dec.input_tokens,
+                    c_tokens + dec.cached_tokens,
+                    out_tokens + dec.output_tokens,
+                    r_tokens + dec.reasoning_tokens,
+                    est_cost + dec.est_cost,
+                    dec.decision_binary == 1,
+                    dec.article_id if dec.decision_binary == 1 else trigger_article_id,
                 )
             )
         )
 
     # Lightweight explicit error capture around each candidate run.
+    # pylint: disable=too-many-arguments,too-many-positional-arguments
     def _go(
         idx: int,
         attempted: int,
@@ -1602,14 +1993,25 @@ def _process_candidates_with_error_capture(
                 trigger_article_id,
             )
 
-        from pymonad import run_except
-
         return run_except(resolve_candidate(candidates[idx])) >> (
             lambda ei: (
                 _handle_error(
                     idx,
                     ei.l,
-                    (attempted, successful, failed, cache_hits, cache_misses, in_tokens, c_tokens, out_tokens, r_tokens, est_cost, found_positive, trigger_article_id),
+                    (
+                        attempted,
+                        successful,
+                        failed,
+                        cache_hits,
+                        cache_misses,
+                        in_tokens,
+                        c_tokens,
+                        out_tokens,
+                        r_tokens,
+                        est_cost,
+                        found_positive,
+                        trigger_article_id,
+                    ),
                 )
                 if isinstance(ei, Left)
                 else _write_article_result(
@@ -1641,7 +2043,11 @@ def _process_candidates_with_error_capture(
                     r_tokens + ei.r.reasoning_tokens,
                     est_cost + ei.r.est_cost,
                     ei.r.decision_binary == 1,
-                    ei.r.article_id if ei.r.decision_binary == 1 else trigger_article_id,
+                    (
+                        ei.r.article_id
+                        if ei.r.decision_binary == 1
+                        else trigger_article_id
+                    ),
                 )
             )
         )
@@ -1659,15 +2065,13 @@ def _process_shr_row(run_id: str, row) -> Run[ShrProcessResult]:
             return "not humanizing"
         return "pending_retry"
 
-    return (
-        put_line(f"Starting SHR index analysis: {shr_uid}")
-        ^ _process_single_shr_safe(run_id, row)
-        >> (
-            lambda res: put_line(
-                f"Completed SHR index analysis: {shr_uid} -> {_result_label(res)}"
-            )
-            ^ pure(res)
+    return put_line(
+        f"Starting SHR index analysis: {shr_uid}"
+    ) ^ _process_single_shr_safe(run_id, row) >> (
+        lambda res: put_line(
+            f"Completed SHR index analysis: {shr_uid} -> {_result_label(res)}"
         )
+        ^ pure(res)
     )
 
 
@@ -1679,6 +2083,7 @@ def _sum_result_float(results: list[ShrProcessResult], attr: str) -> float:
     return sum(float(getattr(r, attr)) for r in results)
 
 
+# pylint: disable=too-many-arguments,too-many-positional-arguments
 def _write_run_history(
     run_id: str,
     requested_count: int,
@@ -1918,10 +2323,50 @@ def _export_analyze_compatible_csv() -> Run[str]:
     )
 
 
+def _count_unresolved_non_pending_rows() -> Run[int]:
+    return (
+        sql_query(
+            SQL(
+                """
+            SELECT COUNT(*) AS n
+            FROM humanization_shr_reprocess_queue
+            WHERE reason_code <> 'pending_retry';
+            """
+            )
+        )
+        >> (lambda rows: pure(int(_row_value(rows[0], "n", 0)) if len(rows) > 0 else 0))
+    )
+
+
+def _maybe_export_analyze_compatible_csv() -> Run[str]:
+    return _build_reprocess_queue() >> (
+        lambda _ignored: _count_unresolved_non_pending_rows()
+        >> (
+            lambda remaining: (
+                (
+                    put_line(
+                        "Analyze export withheld: "
+                        f"{remaining} non-pending SHR rows remain "
+                        "unresolved in the [Z] queue."
+                    )
+                    ^ pure(
+                        f"withheld ({remaining} non-pending unresolved SHR rows remain)"
+                    )
+                )
+                if remaining > 0
+                else _export_analyze_compatible_csv()
+            )
+        )
+    )
+
+
+# pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
 def _render_summary(
     run_id: str,
     requested_count: int,
-    process_result: Either[StopRun[Any, ShrProcessResult], ProcessAcc[Any, ShrProcessResult]],
+    process_result: Either[
+        StopRun[Any, ShrProcessResult], ProcessAcc[Any, ShrProcessResult]
+    ],
     elapsed_display: str,
     run_export_path: str,
     analyze_export_path: str,
@@ -1933,7 +2378,9 @@ def _render_summary(
             processed = stop.acc.processed
             humanizing_count = sum(1 for r in results if r.humanizing_binary == 1)
             not_humanizing_count = sum(1 for r in results if r.humanizing_binary == 0)
-            pending_retry_count = sum(1 for r in results if r.run_status == "pending_retry")
+            pending_retry_count = sum(
+                1 for r in results if r.run_status == "pending_retry"
+            )
             cache_hits = _sum_result_int(results, "cache_hits")
             cache_misses = _sum_result_int(results, "cache_misses")
             input_tokens = _sum_result_int(results, "input_tokens")
@@ -1985,7 +2432,9 @@ def _render_summary(
             processed = acc.processed
             humanizing_count = sum(1 for r in results if r.humanizing_binary == 1)
             not_humanizing_count = sum(1 for r in results if r.humanizing_binary == 0)
-            pending_retry_count = sum(1 for r in results if r.run_status == "pending_retry")
+            pending_retry_count = sum(
+                1 for r in results if r.run_status == "pending_retry"
+            )
             cache_hits = _sum_result_int(results, "cache_hits")
             cache_misses = _sum_result_int(results, "cache_misses")
             input_tokens = _sum_result_int(results, "input_tokens")
@@ -2035,7 +2484,9 @@ def _render_summary(
     raise RuntimeError("Unreachable Either branch")
 
 
-def _process_queue_rows(run_id: str, rows: Array, requested_count: int) -> Run[NextStep]:
+def _process_queue_rows(
+    run_id: str, rows: Array, requested_count: int
+) -> Run[NextStep]:
     return process_items(
         render=render_as_failure,
         happy=lambda row: _process_shr_row(run_id, row),
@@ -2045,19 +2496,28 @@ def _process_queue_rows(run_id: str, rows: Array, requested_count: int) -> Run[N
         >> (
             lambda elapsed_maybe: _export_results(run_id)
             >> (
-                lambda run_export_path: _export_analyze_compatible_csv()
+                lambda run_export_path: _maybe_export_analyze_compatible_csv()
                 >> (
                     lambda analyze_export_path: sql_query(
                         SQL("SELECT COUNT(*) AS n FROM humanization_shr_result;")
-                    ) >> (
+                    )
+                    >> (
                         lambda count_rows: _render_summary(
                             run_id,
                             requested_count,
                             process_result,
-                            str(elapsed_maybe.a) if isinstance(elapsed_maybe, Just) else "Elapsed: n/a",
+                            (
+                                str(elapsed_maybe.a)
+                                if isinstance(elapsed_maybe, Just)
+                                else "Elapsed: n/a"
+                            ),
                             run_export_path,
                             analyze_export_path,
-                            int(_row_value(count_rows[0], "n", 0)) if len(count_rows) > 0 else 0,
+                            (
+                                int(_row_value(count_rows[0], "n", 0))
+                                if len(count_rows) > 0
+                                else 0
+                            ),
                         )
                     )
                 )
@@ -2068,26 +2528,38 @@ def _process_queue_rows(run_id: str, rows: Array, requested_count: int) -> Run[N
 
 def _run_pipeline() -> Run[NextStep]:
     run_id = datetime.now(timezone.utc).strftime("humanize_%Y%m%dT%H%M%SZ")
-    return (
-        start_run_timer(RUN_TIMER_NAME)
-        ^ put_line(f"Step 1 JSON schema:\n{to_json(HumanizationExtractResponse)}")
-        ^ put_line(f"Step 2 JSON schema:\n{to_json(HumanizationDeidentifyResponse)}")
-        ^ put_line(f"Step 3 JSON schema:\n{to_json(HumanizationDecisionResponse)}")
-        ^ ensure_humanization_tables()
-        ^ build_humanization_candidates_current()
-        ^ _build_reprocess_queue()
-        ^ _display_queue_counts()
-        ^ _input_number_to_process()
-        >> (
-            lambda requested: (
-                _retrieve_shr_queue(requested)
+    return _validate_humanization_prerequisites("[Z]") >> (
+        lambda ok: (
+            (
+                start_run_timer(RUN_TIMER_NAME)
+                ^ put_line(
+                    f"Step 1 JSON schema:\n{to_json(HumanizationExtractResponse)}"
+                )
+                ^ put_line(
+                    f"Step 2 JSON schema:\n{to_json(HumanizationDeidentifyResponse)}"
+                )
+                ^ put_line(
+                    f"Step 3 JSON schema:\n{to_json(HumanizationDecisionResponse)}"
+                )
+                ^ ensure_humanization_tables()
+                ^ build_humanization_candidates_current()
+                ^ _build_reprocess_queue()
+                ^ _display_queue_counts()
+                ^ _input_number_to_process()
                 >> (
-                    lambda rows: put_line(
-                        f"Selected {len(rows)} SHR rows for processing.\n"
+                    lambda requested: (
+                        _retrieve_shr_queue(requested)
+                        >> (
+                            lambda rows: put_line(
+                                f"Selected {len(rows)} SHR rows for processing.\n"
+                            )
+                            ^ _process_queue_rows(run_id, rows, requested)
+                        )
                     )
-                    ^ _process_queue_rows(run_id, rows, requested)
                 )
             )
+            if ok
+            else pure(NextStep.CONTINUE)
         )
     )
 

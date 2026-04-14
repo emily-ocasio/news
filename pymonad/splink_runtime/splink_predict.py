@@ -32,6 +32,7 @@ from .splink_context import (
     tables_get_optional,
     tables_get_required,
     with_splink_context,
+    with_splink_context_linker,
 )
 from .splink_tables import input_table_value
 from .splink_training import (
@@ -314,10 +315,57 @@ def _prepare_exclusion_list(_: SplinkContext) -> Run[Unit]:
     )
 
 
+def _snapshot_linker_settings(linker: Linker) -> dict[str, Any]:
+    settings = linker.misc.save_model_to_json(out_path=None)
+    if not isinstance(settings, dict):
+        raise TypeError("Trained Splink settings snapshot must be a dict.")
+    return dict(settings)
+
+
+def _prediction_settings_from_ctx(ctx: SplinkContext) -> dict[str, Any]:
+    if not ctx.reuse_trained_settings:
+        return ctx.settings
+    match ctx.trained_settings_snapshot:
+        case Just(settings):
+            return settings
+        case _:
+            raise ValueError(
+                "Pass-1 trained settings snapshot is not initialized."
+            )
+
+
+def _capture_trained_settings_from_linker(
+    _: SplinkContext,
+    linker: Linker,
+) -> Run[Unit]:
+    try:
+        settings = _snapshot_linker_settings(linker)
+    except TypeError as exc:
+        return throw(ErrorPayload(str(exc)))
+    return context_replace(trained_settings_snapshot=Just(settings))
+
+
+def _prepare_second_pass_reuse(ctx: SplinkContext) -> Run[Unit]:
+    return maybe_get_required(
+        ctx.trained_settings_snapshot,
+        label="Pass-1 trained settings snapshot",
+    ) >> (
+        lambda _: context_replace(
+            reuse_trained_settings=True,
+            skip_lambda_estimation=True,
+            skip_u_estimation=True,
+        )
+    )
+
+
 def _build_linker_from_ctx(ctx: SplinkContext, db_api: DuckDBAPI, plan: PredictPlan) -> Run[Unit]:
+    try:
+        settings = _prediction_settings_from_ctx(ctx)
+    except ValueError as exc:
+        return throw(ErrorPayload(str(exc)))
     return context_replace(
         linker=Just(_build_linker_for_prediction(
-            settings=ctx.settings,
+            settings=settings,
             db_api=db_api,
             prediction_rules=plan.prediction_rules,
             input_table=input_table_value(plan.input_table_for_prediction),
@@ -451,10 +499,12 @@ def splink_predict_pairs_from_ctx(_: SplinkContext):
                 ^ _with_splink_context_api_plan(_build_linker_from_ctx)
                 ^ with_splink_context(print_prediction_counts)
                 ^ train_linker_for_prediction()
+                ^ with_splink_context_linker(_capture_trained_settings_from_linker)
                 ^ with_splink_context(_capture_blocked_edges)
                 ^ with_splink_context(_diagnostic_cluster_blocked_edges)
                 ^ with_splink_context(_prepare_exclusion_list)
                 ^ with_splink_context(_set_final_plan)
+                ^ with_splink_context(_prepare_second_pass_reuse)
                 ^ _with_splink_context_api_plan(_build_linker_from_ctx)
                 ^ with_splink_context(print_prediction_counts)
                 ^ train_linker_for_prediction()

@@ -483,6 +483,8 @@ class SplinkContext:
     db_api: Maybe[DuckDBAPI] = field(default_factory=nothing)
     predict_plan: Maybe[PredictPlan] = field(default_factory=nothing)
     settings: dict[str, Any] = field(default_factory=dict)
+    trained_settings_snapshot: Maybe[dict[str, Any]] = field(default_factory=nothing)
+    reuse_trained_settings: bool = False
     predict_threshold: float = 0.05
     cluster_threshold: float = 0.0
     cluster_pairs_table: ClusterPairsTableName = field(default_factory=ClusterPairsTableName)
@@ -494,6 +496,7 @@ class SplinkContext:
     deterministic_recall: float = 0.5
     train_first: bool = False
     skip_u_estimation: bool = False
+    skip_lambda_estimation: bool = False
     u_estimation_max_pairs: int = 100_000_000
     visualize: bool = False
     unique_matching: bool = False
