@@ -36,3 +36,4 @@ splink_models/
 .dmypy.*
 pyrightconfig.*
 out/*
+docs/publication_generalization_refactoring_plan.md
