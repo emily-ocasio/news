@@ -2,14 +2,15 @@
 Main entry point for the application
 Monadic version
 """
-from typing import cast
-import sqlite3
-import duckdb
 import os
+import sqlite3
 import tempfile
+from typing import cast
+
+import duckdb
 from openai import OpenAI
 from pymonad import Run, run_reader, run_state, run_base_effect, run_except, \
-    run_sql, run_openai, run_splink, Environment, Namespace, EnvKey, ErrorPayload, \
+    run_sql, run_openai, run_splink, Environment, Namespace, ErrorPayload, \
     REAL_DISPATCH, Left, Right, Either, Tuple, put_line, pure, GPTModel, DbBackend, \
     StateRegistry
 from article import ArticleAppError
@@ -20,6 +21,7 @@ from menuprompts import NextStep
 from st_initialize import SentenceTransformerModel
 from secr_apis.gpt3_key import GPT_API_KEY
 from secr_apis.mar_key import MAR_API_KEY
+from publication_startup import select_publication_profile
 
 def _configure_duckdb_pragmas(duck_con: duckdb.DuckDBPyConnection) -> None:
     """
@@ -51,8 +53,9 @@ def main() -> None:
     """
     Main program that binds the intents and runs the Run monads.
     """
-    db_path = "newarticles.db"
-    duckdb_path = "news.duckdb"
+    publication_profile = select_publication_profile()
+    db_path = publication_profile.resources.raw_article_database
+    duckdb_path = publication_profile.resources.active_derived_database
     sqlite_con = sqlite3.connect(db_path)
     sqlite_con.row_factory = sqlite3.Row
     duck_con = duckdb.connect(duckdb_path)
@@ -74,6 +77,7 @@ def main() -> None:
         raise
 
     env: Environment = {
+        "publication_profile": publication_profile,
         "prompt_ns": Namespace(""),
         "prompts_by_ns": {},
         "connections": {
@@ -167,7 +171,7 @@ def exit_program(connections) -> None:
     for con in connections.values():
         try:
             con.close()
-        except Exception:
+        except (duckdb.Error, sqlite3.Error):
             pass
 
 if __name__ == "__main__":

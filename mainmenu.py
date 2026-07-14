@@ -3,7 +3,7 @@ Main menu constructor
 """
 
 from enum import Enum
-from pymonad import Run, Tuple, pure, put_line
+from pymonad import ErrorPayload, Run, Tuple, ask, pure, put_line, throw
 from pymonad.run import StateRegistry
 from appstate import AppState
 from choose import initial_prompts as mainmenu_prompts
@@ -27,6 +27,11 @@ from orphan_adjudication_controller import adjudicate_orphans_controller
 from orphan_postadj_cluster import cluster_postadj_orphans
 from humanization_pipeline import humanization_shr
 from review_humanization_determinations import review_humanization_determinations
+from publication_profiles import (
+    Availability,
+    PublicationCapabilities,
+    PublicationProfile,
+)
 
 MAIN_MENU_PROMPTS = mainmenu_prompts + (
     "Apply orphan adjudication [J]",
@@ -87,63 +92,123 @@ class AfterTick(Tuple[StateRegistry[AppState], NextStep]):
         return self.snd
 
 
-def dispatch_from_main_menu(choice: MainChoice) -> Run[NextStep]:
+def _dispatch_available(choice: MainChoice) -> Run[NextStep]:
     """
     Dispatch the 'tock' action based on the main result.
     """
     match choice:
         case MainChoice.AUTO:
-            return first_filter()
+            action = first_filter()
         case MainChoice.GPT:
-            return second_filter()
+            action = second_filter()
         case MainChoice.FIX:
-            return fix_article()
+            action = fix_article()
         case MainChoice.EXTRACTION:
-            return gpt_incidents()
+            action = gpt_incidents()
         case MainChoice.INCIDENTS:
-            return build_incident_views()
+            action = build_incident_views()
         case MainChoice.VECTOR_SIM:
-            return vector_similarity()
+            action = vector_similarity()
         case MainChoice.GEOCODE:  # <-- add
-            return geocode_incidents()
+            action = geocode_incidents()
         case MainChoice.DEDUP:
-            return dedupe_incidents()
+            action = dedupe_incidents()
         case MainChoice.CHARTS:
-            return splink_charts()
+            action = splink_charts()
         case MainChoice.UNNAMED:
-            return match_unnamed_victims()
+            action = match_unnamed_victims()
         case MainChoice.POSTADJ_ORPHAN_CLUSTER:
-            return cluster_postadj_orphans()
+            action = cluster_postadj_orphans()
         case MainChoice.ADJUDICATION_APPLY:
-            return apply_orphan_adjudications()
+            action = apply_orphan_adjudications()
         case MainChoice.ADJUDICATION_CONTROLLER:
-            return adjudicate_orphans_controller()
+            action = adjudicate_orphans_controller()
         case MainChoice.LINK:
-            return match_article_to_shr_victims()
+            action = match_article_to_shr_victims()
         case MainChoice.SPECIAL:
-            return review_special_cases()
+            action = review_special_cases()
         case MainChoice.SPECIAL_ADD:
-            return add_special_articles()
+            action = add_special_articles()
         case MainChoice.HUMANIZE:
-            return humanization_shr()
+            action = humanization_shr()
         case (
             MainChoice.NEW
             | MainChoice.ASSIGN
             | MainChoice.VICTIM
         ):
-            return put_line(f"Dispatching to {choice.name}...") ^ pure(
+            action = put_line(f"Dispatching to {choice.name}...") ^ pure(
                 NextStep.CONTINUE
             )
         case MainChoice.REVIEW:
-            return review_humanization_determinations()
+            action = review_humanization_determinations()
         case MainChoice.QUIT:
-            return pure(NextStep.QUIT)
+            action = pure(NextStep.QUIT)
+    return action
+
+
+def _availability_for_choice(
+    capabilities: PublicationCapabilities, choice: MainChoice
+) -> Availability:
+    """Read the capability availability required by a menu operation."""
+    match choice:
+        case MainChoice.AUTO:
+            availability = capabilities.first_filter
+        case MainChoice.GPT:
+            availability = capabilities.gpt_classification
+        case MainChoice.EXTRACTION:
+            availability = capabilities.incident_extraction
+        case MainChoice.INCIDENTS | MainChoice.VECTOR_SIM:
+            availability = capabilities.incident_staging
+        case MainChoice.GEOCODE:
+            availability = capabilities.geocoding
+        case MainChoice.DEDUP | MainChoice.CHARTS:
+            availability = capabilities.named_victim_deduplication
+        case MainChoice.UNNAMED:
+            availability = capabilities.orphan_linkage
+        case (
+            MainChoice.POSTADJ_ORPHAN_CLUSTER
+            | MainChoice.ADJUDICATION_APPLY
+            | MainChoice.ADJUDICATION_CONTROLLER
+        ):
+            availability = capabilities.orphan_adjudication
+        case MainChoice.LINK | MainChoice.HUMANIZE:
+            availability = capabilities.shr_linkage
+        case _:
+            availability = capabilities.article_selection
+    return availability
+
+
+def _dispatch_for_profile(
+    profile: PublicationProfile, choice: MainChoice
+) -> Run[NextStep]:
+    """Block unavailable publication operations before controller dispatch."""
+    if choice is MainChoice.QUIT:
+        return _dispatch_available(choice)
+    availability = _availability_for_choice(profile.capabilities, choice)
+    if availability is Availability.UNAVAILABLE:
+        return throw(
+            ErrorPayload(
+                f"{profile.display_name}: selected operation is unavailable."
+            )
+        )
+    return _dispatch_available(choice)
+
+
+def dispatch_from_main_menu(choice: MainChoice) -> Run[NextStep]:
+    """Dispatch a menu choice within the active publication profile."""
+    return ask() >> (lambda env: _dispatch_for_profile(
+        env["publication_profile"], choice
+    ))
 
 
 def main_menu_tick() -> Run[NextStep]:
     """
     Display and select from main menu
     """
-    return put_line("Main Menu:") ^ input_from_menu(MenuPrompts(MAIN_MENU_PROMPTS)) >> (
-        lambda choice: dispatch_from_main_menu(MainChoice(choice))
+    return ask() >> (lambda env:
+        put_line(
+            f"Main Menu — {env['publication_profile'].session_label}:"
+        ) ^ input_from_menu(MenuPrompts(MAIN_MENU_PROMPTS)) >> (
+            lambda choice: dispatch_from_main_menu(MainChoice(choice))
+        )
     )

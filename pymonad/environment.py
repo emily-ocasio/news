@@ -1,14 +1,19 @@
 """
 Dataclasses and related functions for the Reader environment.
 """
+from __future__ import annotations
+
 from collections.abc import Callable, Mapping
 from enum import Enum
-from typing import Any, TypedDict, ReadOnly
+from typing import Any, ReadOnly, TYPE_CHECKING, TypedDict
 
 from st_initialize import SentenceTransformerModel
 from .dispatch import InputPrompt
 from .openai import GPTPromptTemplate, GPTModel
 from .string import String
+
+if TYPE_CHECKING:
+    from publication_profiles import PublicationProfile
 
 class EnvKey(String):
     """
@@ -51,6 +56,7 @@ class Environment(TypedDict):
     """
     Represents the environment data provided by the reader
     """
+    publication_profile: ReadOnly[PublicationProfile]
     prompt_ns: ReadOnly[Namespace]
     prompts_by_ns: ReadOnly[NamedPrompts]
     connections: ReadOnly[Mapping["DbBackend", Any]]
