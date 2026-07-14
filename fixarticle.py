@@ -12,11 +12,13 @@ from calculations import (
 )
 from pymonad import (
     Run,
+    Environment,
     Namespace,
     with_namespace,
     to_prompts,
     put_line,
     pure,
+    ask,
     input_number,
     input_with_prompt,
     PromptKey,
@@ -52,6 +54,8 @@ from orphan_adjudication_controller import (
     force_article_adjudication_cache_refresh,
     force_article_adjudication_cache_refresh_strategy_x,
 )
+from publication_profiles import RecordIdBase
+from publication_profiles import Availability
 
 FIX_PROMPTS: dict[str, str | tuple[str,]] = {
     "record_id": "Please enter the record ID of the article you want to fix: ",
@@ -108,16 +112,24 @@ def input_record_id() -> Run[int]:
     """
     Prompt the user to input a record ID.
     """
-    def normalize_record_id(record_id: int) -> Run[int]:
-        if 0 < record_id < 100000000:
-            return pure(record_id + 100000000)
+    def normalize_record_id(record_id: int, base: RecordIdBase) -> Run[int]:
+        if 0 < record_id < base.value:
+            return pure(record_id + base.value)
         return pure(record_id)
     def check_if_zero(record_id: int) -> Run[int]:
         if record_id <= 0:
             return throw(ErrorPayload("", ArticleAppError.USER_ABORT))
         return pure(record_id)
-    return \
-        input_number(PromptKey('record_id')) >> normalize_record_id >> check_if_zero
+    def from_environment(env: Environment) -> Run[int]:
+        base = env["publication_profile"].policies.record_id_base
+
+        def normalize_entered_id(record_id: int) -> Run[int]:
+            return normalize_record_id(record_id, base)
+
+        return input_number(PromptKey("record_id")) >> normalize_entered_id \
+            >> check_if_zero
+
+    return ask() >> from_environment
 
 def retrieve_single_article() -> Run[Article]:
     """
@@ -417,14 +429,22 @@ def _select_apply_action(
             )
         )
 
-    return _cache_rows_for_article(article) >> (
-        lambda cache_rows: _adjudication_rows_for_article(article)
-        >> (
-            lambda adjudication_rows: _with_article_adjudication_rows(
-                cache_rows, adjudication_rows
+    def from_environment(env: Environment) -> Run[NextStep]:
+        if (
+            env["publication_profile"].capabilities.orphan_adjudication
+            is not Availability.AVAILABLE
+        ):
+            return _with_article_adjudication_rows(tuple(), tuple())
+        return _cache_rows_for_article(article) >> (
+            lambda cache_rows: _adjudication_rows_for_article(article)
+            >> (
+                lambda adjudication_rows: _with_article_adjudication_rows(
+                    cache_rows, adjudication_rows
+                )
             )
         )
-    )
+
+    return ask() >> from_environment
 
 def input_desired_action(
     include_delete_cache: bool = False,

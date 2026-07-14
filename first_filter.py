@@ -5,13 +5,16 @@ from appstate import run_timer_name, run_timer_start_perf
 from pymonad import Run, with_namespace, to_prompts, Namespace, PromptKey, \
     pure, put_line, sql_query, SQL, SQLParams, sql_exec, input_number, throw, ask, \
     ErrorPayload, process_items, ProcessAcc, Array, \
-    String, FailureDetail, Left, Right, Either, StopRun, Tuple, \
+    String, FailureDetail, Left, Right, Either, StopRun, Tuple, Environment, \
     HashMap, Unit, unit, set_, view, monotonic_now, Maybe, Just, Nothing
 from menuprompts import NextStep
 from article import Article, Articles, ArticleAppError, from_rows
 from calculations import articles_to_classify_sql, classify_sql, cleanup_sql, \
     dates_ready_for_autoclassify_counts_sql
-from calculations.calc_core import classify, elapsed_line
+from calculations.calc_core import elapsed_line
+from first_filter_policies import classify_with_policy
+from first_filter_policies import FirstFilterPolicy
+from publication_profiles import ClassifiedDataset
 from validate import ArticleFailureType
 
 FIRST_FILTER_PROMPTS: dict[str, str | tuple[str,]] = {
@@ -71,21 +74,25 @@ def display_autoclassify_date_counts(rows: Array) -> Run[Unit]:
     Display grouped date counts before asking how many days to process.
     """
     if len(rows) == 0:
-        return put_line(
+        return ask() >> (lambda env: put_line(
             "No dates ready for auto-classification "
-            "(Dataset = NOCLASS_WP, Complete = 0).\n"
-        ) ^ pure(unit)
+            "(Dataset = "
+            f"{env['publication_profile'].policies.workflow_datasets.unclassified}, "
+            "Complete = 0).\n"
+        ) ^ pure(unit))
     lines = "\n".join(
         f"{row['PubYear']}: {row['ReadyCount']} distinct date(s)"
         for row in rows
     )
     total_days = sum(int(row["ReadyCount"]) for row in rows)
-    return put_line(
+    return ask() >> (lambda env: put_line(
         "Auto-classify date availability by year "
-        "(Dataset = NOCLASS_WP, Complete = 0):\n"
+        "(Dataset = "
+        f"{env['publication_profile'].policies.workflow_datasets.unclassified}, "
+        "Complete = 0):\n"
         f"{lines}\n"
         f"Total days: {total_days}\n"
-    ) ^ pure(unit)
+    ) ^ pure(unit))
 
 def increment_count(counts: HashMap[String, int], code: String) -> HashMap[String, int]:
     """
@@ -184,28 +191,47 @@ def retrieve_articles(num_days: int) -> Run[Articles]:
         )
     )
 
-def classify_single_article(article: Article) -> Run[AutoClassResult]:
-    """
-    Classify a single article using regex and return a class DTO on success.
-    """
-    # Classify using the pure function from calc_core
-    auto_class = String(classify(article.row))
-    record_id = article.record_id or 0
-    return ask() >> (lambda env:
-        put_line(f"\n{article}\n" if auto_class == String("M") else "") ^
-        put_line(f"Classifying article {record_id} as {auto_class}...") ^
+def _classify_and_save(
+    article: Article,
+    record_id: int,
+    policy: FirstFilterPolicy,
+    classified_dataset: ClassifiedDataset,
+    publication_id: int,
+) -> Run[AutoClassResult]:
+    """Classify and save one article using explicit session configuration."""
+    result = classify_with_policy(article.row, policy)
+    return (
+        put_line(f"\n{article}\n" if result.code == "M" else "") ^
+        put_line(f"Classifying article {record_id} as {result.code}...") ^
         sql_exec(
             SQL(classify_sql()),
             SQLParams((
-                auto_class,
-                env["publication_profile"].policies.workflow_datasets.classified,
+                String(result.code),
+                classified_dataset,
                 record_id,
-                env["publication_profile"].identity.database_id.value,
+                publication_id,
             )),
         ) ^
-        put_line(f"Saved auto-classification: {auto_class}\n") ^
-        pure(Tuple(record_id, auto_class))
+        put_line(f"Saved auto-classification: {result.code}\n") ^
+        pure(Tuple(record_id, String(result.code)))
     )
+
+
+def classify_single_article(article: Article) -> Run[AutoClassResult]:
+    """Classify a single article using the active publication policy."""
+    record_id = article.record_id or 0
+
+    def from_environment(env: Environment) -> Run[AutoClassResult]:
+        profile = env["publication_profile"]
+        return _classify_and_save(
+            article,
+            record_id,
+            profile.policies.first_filter_policy,
+            profile.policies.workflow_datasets.classified,
+            profile.identity.database_id.value,
+        )
+
+    return ask() >> from_environment
 
 def render_as_failure(err: ErrorPayload) -> Array[FailureDetail]:
     """

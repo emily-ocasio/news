@@ -183,6 +183,7 @@ This workflow ensures data integrity through monadic composition, with all opera
 - Follow the monadic functional programming style consistently across the codebase.
 - Use the Run monad for all side-effect management, including database operations, API calls, and IO.
 - All new and modified code in controllers should be purely functional, with side effects handled through Run effects, and sequencing managed through monadic chaining.
+- Prefer named, typed helper functions for nontrivial monadic callbacks. When an `ask()` callback needs multiple statements or effects, have it receive `Environment` (or a narrow typed configuration) and delegate to an internal helper, for example `ask() >> from_environment`. Keep inline lambdas short and avoid long multi-line lambda expressions inside Run chains.
 - Use strong typing and type annotations - data passed between monadic contexts should be well-typed using basic types in the pymonad/ folder or custom types with semantic specificity. Preference for frozen dataclasses for product types and either Enums or Unions (using |) for sum types.
 - Do not use None or Optional - use explicit sum types and Maybe to explicitly handle cases where a value may be absent.
 - All side effects (database, API calls, IO) must be performed through the appropriate Run eliminators and declared in the controllers using smart constructors as appropriate.

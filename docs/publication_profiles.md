@@ -39,10 +39,11 @@ not fill unresolved fields with silent defaults.
 | Publication database ID | `2` | `3` |
 | Target-location key | `washington_dc` | `new_york_city` |
 | Stored `city_id` | `2` | `3` |
-| Article-date scope | 1977-01-01 through 2000-12-31 | 1980-01-01 through 2000-12-31 |
-| Incident-date scope | 1977-01-01 through 2000-12-31 | 1980-01-01 through 2000-12-31 |
+| Article-date scope | 1977-01-01 through 2000-12-31 | 1981-01-01 through 2000-12-31 |
+| Incident-date scope | 1977-01-01 through 2000-12-31 | 1981-01-01 through 2000-12-31 |
 | Unclassified workflow dataset | `NOCLASS_WP` | `NOCLASS_NYT` |
 | Classified workflow dataset | `CLASS_WP` | `CLASS_NYT` |
+| Simplified record-ID input base | `100000000` | `200000000` |
 | First-filter policy | Preserve existing WP behavior | Use the same policy with NYC-specific location evidence |
 | Target geography | District of Columbia municipal boundary | New York City's five boroughs |
 | Classification GPT capability | Existing WP configuration | Unavailable pending Step 8 |

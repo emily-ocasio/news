@@ -5,6 +5,11 @@ from datetime import date
 from enum import Enum
 
 from pymonad import HashMap, Just, Maybe, Nothing, String
+from first_filter_policies import (
+    FirstFilterPolicy,
+    NYT_FIRST_FILTER_POLICY,
+    WP_FIRST_FILTER_POLICY,
+)
 
 
 class PublicationKey(String):
@@ -39,12 +44,19 @@ class UnclassifiedDataset(String):
     """Workflow dataset for articles awaiting classification."""
 
 
+@dataclass(frozen=True)
+class RecordIdBase:
+    """Publication-specific base used to simplify article ID entry."""
+
+    value: int
+
+    def __post_init__(self) -> None:
+        if self.value <= 0:
+            raise ValueError("Record ID base must be positive")
+
+
 class ClassifiedDataset(String):
     """Workflow dataset for classified articles."""
-
-
-class FirstFilterPolicyKey(String):
-    """Registered first-filter policy implementation key."""
 
 
 class RawArticleDatabasePath(String):
@@ -213,7 +225,8 @@ class PublicationPolicies:
     """Registered behavioral policies selected by a publication profile."""
 
     workflow_datasets: WorkflowDatasets
-    first_filter_policy: FirstFilterPolicyKey
+    record_id_base: RecordIdBase
+    first_filter_policy: FirstFilterPolicy
     gpt: PublicationGPTConfigurations
     geocoder: Maybe[GeocoderProviderKey]
     external_homicide_scope: ExternalHomicideScope
@@ -288,6 +301,23 @@ def _capabilities(availability: Availability) -> PublicationCapabilities:
     )
 
 
+def _nyt_capabilities() -> PublicationCapabilities:
+    """NYT capabilities available through the first-filter stage."""
+    return PublicationCapabilities(
+        article_selection=Availability.AVAILABLE,
+        first_filter=Availability.AVAILABLE,
+        gpt_classification=Availability.UNAVAILABLE,
+        incident_extraction=Availability.UNAVAILABLE,
+        incident_staging=Availability.UNAVAILABLE,
+        geocoding=Availability.UNAVAILABLE,
+        named_victim_deduplication=Availability.UNAVAILABLE,
+        orphan_linkage=Availability.UNAVAILABLE,
+        orphan_adjudication=Availability.UNAVAILABLE,
+        shr_linkage=Availability.UNAVAILABLE,
+        finalized_export=Availability.UNAVAILABLE,
+    )
+
+
 WP_PROFILE = PublicationProfile(
     identity=PublicationIdentity(
         key=PublicationKey("wp"),
@@ -314,7 +344,8 @@ WP_PROFILE = PublicationProfile(
         workflow_datasets=WorkflowDatasets(
             UnclassifiedDataset("NOCLASS_WP"), ClassifiedDataset("CLASS_WP")
         ),
-        first_filter_policy=FirstFilterPolicyKey("washington_post_dc"),
+        record_id_base=RecordIdBase(100_000_000),
+        first_filter_policy=WP_FIRST_FILTER_POLICY,
         gpt=PublicationGPTConfigurations(
             classification=Just(
                 GPTConfiguration(
@@ -378,17 +409,18 @@ NYT_PROFILE = PublicationProfile(
             ),
         ),
         article_date_scope=ArticleDateScope(
-            ProfileDate("1980-01-01"), ProfileDate("2000-12-31")
+            ProfileDate("1981-01-01"), ProfileDate("2000-12-31")
         ),
         incident_date_scope=IncidentDateScope(
-            ProfileDate("1980-01-01"), ProfileDate("2000-12-31")
+            ProfileDate("1981-01-01"), ProfileDate("2000-12-31")
         ),
     ),
     policies=PublicationPolicies(
         workflow_datasets=WorkflowDatasets(
             UnclassifiedDataset("NOCLASS_NYT"), ClassifiedDataset("CLASS_NYT")
         ),
-        first_filter_policy=FirstFilterPolicyKey("new_york_times_nyc"),
+        record_id_base=RecordIdBase(200_000_000),
+        first_filter_policy=NYT_FIRST_FILTER_POLICY,
         gpt=PublicationGPTConfigurations(
             classification=Nothing,
             extraction=Nothing,
@@ -410,8 +442,8 @@ NYT_PROFILE = PublicationProfile(
         ),
         output_namespace=OutputNamespacePath("out/nyt"),
     ),
-    session_availability=Availability.UNAVAILABLE,
-    capabilities=_capabilities(Availability.UNAVAILABLE),
+    session_availability=Availability.AVAILABLE,
+    capabilities=_nyt_capabilities(),
 )
 
 

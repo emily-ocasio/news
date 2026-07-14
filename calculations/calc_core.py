@@ -20,6 +20,7 @@ from rich.text import Text
 from rich.table import Table
 
 from mass_towns import townlist
+from nyc_keywords import NYC_REGEX
 from state import Rows, HomicideClass, LocationClassDC, LocationClass,\
     ArticleGenericVictimItem, GenericArticleAnalysisResponse
 
@@ -422,6 +423,8 @@ def rich_text(document: Optional[str], publication_code: int) -> str:
     text.highlight_regex(conditional_death_regex, 'red bold')  # type: ignore
     if location_code(publication_code) == 'DC':
         text.highlight_regex(dc_regex, 'blue bold')  # type: ignore
+    elif location_code(publication_code) == 'NYC':
+        text.highlight_regex(NYC_REGEX, 'blue bold')  # type: ignore
     else:
         text.highlight_regex(town_regex, 'blue bold')  # type: ignore
     return rich_to_str(text)
@@ -712,6 +715,8 @@ def location_code(publication_code: int) -> str:
             return 'M'
         case 2:
             return 'DC'
+        case 3:
+            return 'NYC'
         case invalid:
             raise LocationException(f"Invalid publication code: {invalid}")
 
