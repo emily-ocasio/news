@@ -21,6 +21,7 @@ from comparison import ORPHAN_COMPARISONS
 from menuprompts import NextStep, MenuPrompts, MenuChoice, input_from_menu
 from splink_types import SplinkType
 from cluster_compare import ClusterCompareRequest, compare_cluster_tables
+from publication_outputs import publication_sql_export
 from pymonad import (
     Environment,
     Run,
@@ -31,7 +32,6 @@ from pymonad import (
     with_duckdb,
     splink_dedupe_job,
     sql_exec,
-    sql_export,
     sql_import,
     SQL,
     sql_query,
@@ -1297,7 +1297,7 @@ def _export_orphan_matches_debug_excel() -> Run[Unit]:
                     SQL("SELECT COUNT(*) AS n FROM orphan_matches_final_diffs")
                 )
                 >> (
-                    lambda rows: sql_export(
+                    lambda rows: publication_sql_export(
                         SQL(
                             """--sql
                     SELECT
@@ -1352,7 +1352,7 @@ def _export_orphan_matches_debug_excel() -> Run[Unit]:
                 ^ _maybe_export_orphan_matches_diffs(has_prev)
             )
         )
-        ^ sql_export(
+        ^ publication_sql_export(
             orphan_matches_final_select,
             "orphan_matches_final.xlsx",
             "Matches",
@@ -1430,7 +1430,7 @@ def export_final_victim_entities_excel() -> Run[Unit]:
     )
 
     return (
-        sql_export(
+        publication_sql_export(
             final_victim_entities_select,
             "final_victim_entities.xlsx",
             "Entities",

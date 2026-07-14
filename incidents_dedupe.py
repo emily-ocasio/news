@@ -16,6 +16,7 @@ from comparison import (
 from menuprompts import NextStep
 from splink_types import SplinkType
 from cluster_compare import ClusterCompareRequest, compare_cluster_tables
+from publication_outputs import publication_sql_export
 from pymonad import (
     Run,
     SQL,
@@ -29,7 +30,6 @@ from pymonad import (
     DoNotLinkTableName,
     splink_dedupe_job,
     sql_exec,
-    sql_export,
     sql_query,
     sql_import,
     unit,
@@ -801,7 +801,7 @@ def _export_final_clusters_excel() -> Run[Unit]:
             >> (
                 lambda _: sql_query(SQL("SELECT COUNT(*) AS n FROM cluster_diffs"))
                 >> (
-                    lambda rows: sql_export(
+                    lambda rows: publication_sql_export(
                         SQL(
                             """--sql
                     SELECT
@@ -883,7 +883,7 @@ def _export_final_clusters_excel() -> Run[Unit]:
                 ^ _maybe_export_diffs(has_prev)
             )
         )
-        ^ sql_export(
+        ^ publication_sql_export(
             final_clusters_select,
             "final_clusters.xlsx",
             "FinalClusters",

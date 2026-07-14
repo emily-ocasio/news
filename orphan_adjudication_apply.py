@@ -7,6 +7,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from menuprompts import NextStep
+from publication_outputs import publication_sql_export
 from pymonad import (
     Run,
     SQL,
@@ -14,7 +15,6 @@ from pymonad import (
     pure,
     put_line,
     sql_exec,
-    sql_export,
     sql_query,
     unit,
     with_duckdb,
@@ -930,7 +930,7 @@ def _build_orphan_matches_postadj_current() -> Run[Unit]:
                 """
             )
         )
-        ^ sql_export(
+        ^ publication_sql_export(
             orphan_matches_postadj_select,
             "orphan_matches_postadj.xlsx",
             "Matches",
@@ -1033,7 +1033,7 @@ def _export_final_victim_entities_postadj() -> Run[Unit]:
     )
 
     return (
-        sql_export(
+        publication_sql_export(
             final_victim_entities_postadj_select,
             "final_victim_entities_postadj.xlsx",
             "Entities",

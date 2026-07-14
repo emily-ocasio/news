@@ -2,6 +2,7 @@
 Match article victim entities to SHR victims using Splink linkage.
 """
 from splink_types import SplinkType
+from publication_outputs import publication_sql_export
 from pymonad import (
     ErrorPayload,
     Run,
@@ -13,7 +14,6 @@ from pymonad import (
     UniquePairsTableName,
     splink_dedupe_job,
     sql_exec,
-    sql_export,
     sql_import,
     sql_query,
     throw,
@@ -500,7 +500,7 @@ def _export_shr_final_matches_excel() -> Run[Unit]:
             >> (
                 lambda _: sql_query(SQL("SELECT COUNT(*) AS n FROM shr_matches_diffs"))
                 >> (
-                    lambda rows: sql_export(
+                    lambda rows: publication_sql_export(
                         SQL(
                             """--sql
                     SELECT
@@ -545,7 +545,7 @@ def _export_shr_final_matches_excel() -> Run[Unit]:
                 ^ _maybe_export_shr_match_diffs(has_prev)
             )
         )
-        ^ sql_export(
+        ^ publication_sql_export(
             shr_matches_final_select,
             "shr_matches.xlsx",
             "Matches",
@@ -579,7 +579,7 @@ def _export_shr_debug_matches_excel() -> Run[Unit]:
         own midpoint.
     """
     return (
-        sql_export(
+        publication_sql_export(
             SQL(
                 """--sql
             -- Extract pairs directly (assuming l=entity, r=SHR)

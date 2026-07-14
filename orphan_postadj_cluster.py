@@ -11,6 +11,7 @@ from pathlib import Path
 from blocking import ORPHAN_DETERMINISTIC_BLOCKS, ORPHAN_VICTIM_BLOCKS
 from menuprompts import NextStep
 from splink_types import SplinkType
+from publication_outputs import publication_sql_export
 from pymonad import (
     BlockedPairsTableName,
     ClustersTableName,
@@ -25,7 +26,6 @@ from pymonad import (
     put_line,
     splink_dedupe_job,
     sql_exec,
-    sql_export,
     sql_query,
     throw,
     unit,
@@ -941,7 +941,7 @@ def _export_postadj_orphan_clusters_excel() -> Run[Unit]:
         """
     )
     return (
-        sql_export(
+        publication_sql_export(
             review_select,
             "postadj_orphan_clusters.xlsx",
             "PostAdjOrphanClusters",

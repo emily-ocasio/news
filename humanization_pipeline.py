@@ -17,6 +17,7 @@ from appstate import run_timer_name, run_timer_start_perf, user_name
 from calculations import insert_gptresults_sql
 from calculations.calc_core import elapsed_line
 from gpt_filtering import render_as_failure
+from publication_outputs import publication_sql_export
 from menuprompts import NextStep
 from pymonad import (
     Array,
@@ -55,7 +56,6 @@ from pymonad import (
     response_with_gpt_prompt,
     set_,
     sql_exec,
-    sql_export,
     sql_query,
     to_gpt_tuple,
     to_json,
@@ -2154,7 +2154,7 @@ def _write_run_history(
 def _export_results(run_id: str) -> Run[str]:
     filename = f"humanization_shr_export_{run_id}.csv"
     return (
-        sql_export(
+        publication_sql_export(
             SQL(
                 """
                 SELECT
@@ -2190,7 +2190,7 @@ def _export_results(run_id: str) -> Run[str]:
 def _export_analyze_compatible_csv() -> Run[str]:
     filename = "homicide_data2_monadic.csv"
     return (
-        sql_export(
+        publication_sql_export(
             SQL(
                 """
                 WITH shr_scope AS (
