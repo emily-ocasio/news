@@ -3,7 +3,7 @@ First filtering of articles using automatic regex classification
 """
 from appstate import run_timer_name, run_timer_start_perf
 from pymonad import Run, with_namespace, to_prompts, Namespace, PromptKey, \
-    pure, put_line, sql_query, SQL, SQLParams, sql_exec, input_number, throw, \
+    pure, put_line, sql_query, SQL, SQLParams, sql_exec, input_number, throw, ask, \
     ErrorPayload, process_items, ProcessAcc, Array, \
     String, FailureDetail, Left, Right, Either, StopRun, Tuple, \
     HashMap, Unit, unit, set_, view, monotonic_now, Maybe, Just, Nothing
@@ -56,7 +56,14 @@ def retrieve_autoclassify_date_counts() -> Run[Array]:
     """
     Retrieve counts of distinct dates ready for auto-classification by year.
     """
-    return sql_query(SQL(dates_ready_for_autoclassify_counts_sql()))
+    return ask() >> (lambda env: sql_query(
+        SQL(dates_ready_for_autoclassify_counts_sql()),
+        SQLParams((
+            env["publication_profile"].identity.database_id.value,
+            env["publication_profile"].identity.database_id.value,
+            env["publication_profile"].policies.workflow_datasets.unclassified,
+        )),
+    ))
 
 
 def display_autoclassify_date_counts(rows: Array) -> Run[Unit]:
@@ -106,7 +113,9 @@ def count_auto_classes(results: Array[AutoClassResult]) -> HashMap[String, int]:
     """
     Count class codes from processed class DTO results.
     """
-    def step(counts: HashMap[String, int], result: AutoClassResult) -> HashMap[String, int]:
+    def step(
+        counts: HashMap[String, int], result: AutoClassResult
+    ) -> HashMap[String, int]:
         code = normalize_class_code(str(result.snd))
         return increment_count(counts, code)
     empty_counts: HashMap[String, int] = HashMap.empty()
@@ -163,10 +172,17 @@ def retrieve_articles(num_days: int) -> Run[Articles]:
     """
     Retrieve the articles to be classified from the specified number of days.
     """
-    return \
-        from_rows & \
-            sql_query(SQL(articles_to_classify_sql()),
-                      SQLParams((num_days,)))
+    return ask() >> (lambda env:
+        from_rows & sql_query(
+            SQL(articles_to_classify_sql()),
+            SQLParams((
+                env["publication_profile"].identity.database_id.value,
+                env["publication_profile"].policies.workflow_datasets.unclassified,
+                env["publication_profile"].identity.database_id.value,
+                num_days,
+            )),
+        )
+    )
 
 def classify_single_article(article: Article) -> Run[AutoClassResult]:
     """
@@ -175,13 +191,21 @@ def classify_single_article(article: Article) -> Run[AutoClassResult]:
     # Classify using the pure function from calc_core
     auto_class = String(classify(article.row))
     record_id = article.record_id or 0
-    return \
-        put_line(f"\n{article}\n" if auto_class == String("M") else "") ^ \
-        put_line(f"Classifying article {record_id} as {auto_class}...") ^ \
-        sql_exec(SQL(classify_sql()),
-            SQLParams((auto_class, record_id))) ^ \
-        put_line(f"Saved auto-classification: {auto_class}\n") ^ \
+    return ask() >> (lambda env:
+        put_line(f"\n{article}\n" if auto_class == String("M") else "") ^
+        put_line(f"Classifying article {record_id} as {auto_class}...") ^
+        sql_exec(
+            SQL(classify_sql()),
+            SQLParams((
+                auto_class,
+                env["publication_profile"].policies.workflow_datasets.classified,
+                record_id,
+                env["publication_profile"].identity.database_id.value,
+            )),
+        ) ^
+        put_line(f"Saved auto-classification: {auto_class}\n") ^
         pure(Tuple(record_id, auto_class))
+    )
 
 def render_as_failure(err: ErrorPayload) -> Array[FailureDetail]:
     """
@@ -192,66 +216,73 @@ def render_as_failure(err: ErrorPayload) -> Array[FailureDetail]:
         s=String(f"Exception: {err}")
     ),))
 
-def after_processing(process_acc: ProcessAcc[Article, AutoClassResult]) -> Run[NextStep]:
+def after_processing(
+    process_acc: ProcessAcc[Article, AutoClassResult]
+) -> Run[NextStep]:
     """
     Handle the result after processing all articles.
     """
     failures = process_acc.failures.length
-    return read_elapsed_display(RUN_TIMER_NAME) >> (lambda elapsed_display:
-        (lambda summary:
-            put_line("Processing completed with "
-                     f"{failures} articles "
-                     "failing validation.\n") ^
-            put_line(summary) ^
-            pure(NextStep.CONTINUE)
-            if failures > 0 else
-            put_line("All articles processed:\n") ^
-            sql_exec(SQL(cleanup_sql())) ^
-            put_line("[A] Dates cleanup applied.\n") ^
-            put_line(summary) ^
-            pure(NextStep.CONTINUE)
-        )(
-            render_summary(
-                count_auto_classes(process_acc.results),
-                process_acc.processed,
-                failures,
-                stopped=False,
-                elapsed_display=elapsed_display
-            )
+    def finish(elapsed_display: Maybe[String]) -> Run[NextStep]:
+        summary = render_summary(
+            count_auto_classes(process_acc.results),
+            process_acc.processed,
+            failures,
+            stopped=False,
+            elapsed_display=elapsed_display,
         )
-    )
+        if failures > 0:
+            return put_line(
+                "Processing completed with "
+                f"{failures} articles failing validation.\n"
+            ) ^ put_line(summary) ^ pure(NextStep.CONTINUE)
+        return put_line("All articles processed:\n") ^ ask() >> (
+            lambda env: sql_exec(
+                SQL(cleanup_sql()),
+                SQLParams((
+                    env["publication_profile"].identity.database_id.value,
+                    env["publication_profile"].policies.workflow_datasets.classified,
+                    env["publication_profile"].identity.database_id.value,
+                    env["publication_profile"].policies.workflow_datasets.unclassified,
+                    env["publication_profile"].identity.database_id.value,
+                )),
+            )
+        ) ^ put_line("[A] Dates cleanup applied.\n") ^ put_line(summary) ^ pure(
+            NextStep.CONTINUE
+        )
+    return read_elapsed_display(RUN_TIMER_NAME) >> finish
 
-def after_processing_either(articles: Articles,
-                            result: Either[
-                                StopRun[Article, AutoClassResult],
-                                ProcessAcc[Article, AutoClassResult]
-                            ]) -> Run[NextStep]:
+
+def after_processing_either(
+    articles: Articles,
+    result: Either[
+        StopRun[Article, AutoClassResult],
+        ProcessAcc[Article, AutoClassResult],
+    ],
+) -> Run[NextStep]:
+    """Handle either a stopped or completed article-processing run."""
     match result:
         case Left(stop):
             processed = stop.acc.processed
             total = len(articles)
             failures = stop.acc.failures.length
-            return read_elapsed_display(RUN_TIMER_NAME) >> (lambda elapsed_display:
-                (lambda summary:
+            def finish(elapsed_display: Maybe[String]) -> Run[NextStep]:
+                summary = render_summary(
+                    count_auto_classes(stop.acc.results),
+                    processed,
+                    failures,
+                    stopped=True,
+                    elapsed_display=elapsed_display,
+                )
+                return (
                     put_line(
                         "Processing stopped by user after "
                         f"{processed} of {total} articles.\n"
-                    ) ^
-                    put_line(
+                    ) ^ put_line(
                         f"{failures} article(s) recorded failures before stop.\n"
-                    ) ^
-                    put_line(summary) ^
-                    pure(NextStep.CONTINUE)
-                )(
-                    render_summary(
-                        count_auto_classes(stop.acc.results),
-                        processed,
-                        failures,
-                        stopped=True,
-                        elapsed_display=elapsed_display
-                    )
+                    ) ^ put_line(summary) ^ pure(NextStep.CONTINUE)
                 )
-            )
+            return read_elapsed_display(RUN_TIMER_NAME) >> finish
         case Right(v_process):
             return after_processing(v_process)
     raise RuntimeError("Unreachable Either branch")

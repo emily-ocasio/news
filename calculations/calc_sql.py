@@ -133,30 +133,26 @@ def passed_articles_sql() -> str:
     """
 
 
-def articles_to_classify_sql():
+def articles_to_classify_sql() -> str:
     """
     SQL statement to return articles to auto-classify based on date priority
     Date priority is a random ordering so we can use to select random subsets
     for testing and validation.
-    At this point we are only considering articles in NOCLASS_WP dataset
-    which means they are from Washington Post and not yet classified
-    After classification they will be moved to CLASS_WP dataset
+    The active publication, workflow datasets, and date-progress namespace are
+    supplied as query parameters.
     """
     return article_type_join_sql() + """--sql
-        WHERE PubDate IN (
-            SELECT PubDate p2
-            FROM dates
-            WHERE Complete = 0
-            AND p2 IN (
-                SELECT DISTINCT PubDate p3
-                FROM articles
-                WHERE Dataset = 'NOCLASS_WP'
-                )
+        WHERE a.Publication = ?
+        AND a.Dataset = ?
+        AND a.AutoClass IS NULL
+        AND a.PubDate IN (
+            SELECT PubDate
+            FROM publication_date_progress
+            WHERE Publication = ?
+            AND Complete = 0
             ORDER BY Priority
             LIMIT ?
         )
-        AND a.Dataset = 'NOCLASS_WP'
-        AND a.AutoClass IS NULL
         GROUP BY a.RecordId
     """
 
@@ -271,15 +267,16 @@ def articles_to_reclassify_by_year_sql() -> str:
     """
 
 
-def classify_sql():
+def classify_sql() -> str:
     """
     SQL statement to update auto-classification of a single article
     """
     return """
         UPDATE articles
         SET AutoClass = ?,
-        Dataset = "CLASS_WP"
+        Dataset = ?
         WHERE RecordId = ?
+        AND Publication = ?
     """
 
 
@@ -332,8 +329,8 @@ def update_note_sql() -> str:
 def cleanup_sql() -> str:
     """
     SQL Statement to update dates that have been completely autoclassified
-    It checks which dates have all their articles classified (in CLASS_WP)
-    and no articles remaining in NOCLASS_WP
+    It checks which dates have all their active-publication articles classified
+    and no articles remaining in the active unclassified workflow dataset.
     and marks those dates as Complete = 1
 
     The purpose is to avoid re-selecting those dates
@@ -344,18 +341,20 @@ def cleanup_sql() -> str:
             SELECT DISTINCT PubDate
             FROM articles
             INDEXED BY Dataset
-            WHERE Dataset = "CLASS_WP"
-            AND Pubdate NOT IN 
-            (
-                SELECT DISTINCT PubDate
-                FROM articles
-                INDEXED BY Dataset
-                WHERE Dataset == "NOCLASS_WP"
+            WHERE Publication = ?
+            AND Dataset = ?
+            AND NOT EXISTS (
+                SELECT 1
+                FROM articles unclassified
+                WHERE unclassified.Publication = ?
+                AND unclassified.Dataset = ?
+                AND unclassified.PubDate = articles.PubDate
             )
         )
-        UPDATE dates
+        UPDATE publication_date_progress
         SET Complete = 1
-        WHERE PubDate IN (SELECT PubDate FROM datelist)
+        WHERE Publication = ?
+        AND PubDate IN (SELECT PubDate FROM datelist)
     """
 
 
@@ -605,6 +604,7 @@ def gpt_homicide_class_sql() -> str:
         UPDATE articles
         SET gptClass = ?
         WHERE RecordId = ?
+        AND Publication = ?
     """
 
 def gpt_victims_sql() -> str:
@@ -615,6 +615,7 @@ def gpt_victims_sql() -> str:
         UPDATE articles
         SET gptVictimJson = ?
         WHERE RecordId = ?
+        AND Publication = ?
     """
 
 
@@ -674,7 +675,8 @@ def articles_to_filter_sql() -> str:
     """
     return """
         SELECT * FROM articles
-        WHERE Dataset = 'CLASS_WP'
+        WHERE Publication = ?
+        AND Dataset = ?
         AND AutoClass = 'M'
         AND (gptClass IS NULL OR gptClass = 'ERR_M_NONE')
         ORDER BY PubDate
@@ -689,7 +691,8 @@ def articles_ready_for_filter_counts_sql() -> str:
     return """
         SELECT SUBSTR(PubDate, 1, 4) AS PubYear, COUNT(*) AS ReadyCount
         FROM articles
-        WHERE Dataset = 'CLASS_WP'
+        WHERE Publication = ?
+        AND Dataset = ?
         AND AutoClass = 'M'
         AND (gptClass IS NULL OR gptClass = 'ERR_M_NONE')
         GROUP BY PubYear
@@ -705,12 +708,14 @@ def dates_ready_for_autoclassify_counts_sql() -> str:
         SELECT
             SUBSTR(CAST(d.PubDate AS TEXT), 1, 4) AS PubYear,
             COUNT(DISTINCT d.PubDate) AS ReadyCount
-        FROM dates d
-        WHERE d.Complete = 0
+        FROM publication_date_progress d
+        WHERE d.Publication = ?
+        AND d.Complete = 0
         AND EXISTS (
             SELECT 1
             FROM articles a
-            WHERE a.Dataset = 'NOCLASS_WP'
+            WHERE a.Publication = ?
+            AND a.Dataset = ?
             AND a.PubDate = d.PubDate
         )
         GROUP BY PubYear
@@ -726,7 +731,8 @@ def articles_to_extract_sql() -> str:
     """
     return """
         SELECT * FROM articles
-        WHERE Dataset = 'CLASS_WP'
+        WHERE Publication = ?
+        AND Dataset = ?
         AND AutoClass = 'M'
         AND gptClass IS 'M_PRELIM'
         ORDER BY PubDate
@@ -741,7 +747,8 @@ def articles_ready_for_extract_counts_sql() -> str:
     return """
         SELECT SUBSTR(PubDate, 1, 4) AS PubYear, COUNT(*) AS ReadyCount
         FROM articles
-        WHERE Dataset = 'CLASS_WP'
+        WHERE Publication = ?
+        AND Dataset = ?
         AND AutoClass = 'M'
         AND gptClass IS 'M_PRELIM'
         GROUP BY PubYear

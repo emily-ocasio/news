@@ -2152,7 +2152,7 @@ def _write_run_history(
 
 
 def _export_results(run_id: str) -> Run[str]:
-    filename = f"out/humanization_shr_export_{run_id}.csv"
+    filename = f"humanization_shr_export_{run_id}.csv"
     return (
         sql_export(
             SQL(

@@ -105,7 +105,13 @@ def retrieve_filter_counts() -> Run[Array]:
     """
     Retrieve counts of articles ready for filtering grouped by year.
     """
-    return sql_query(SQL(articles_ready_for_filter_counts_sql()))
+    return ask() >> (lambda env: sql_query(
+        SQL(articles_ready_for_filter_counts_sql()),
+        SQLParams((
+            env["publication_profile"].identity.database_id.value,
+            env["publication_profile"].policies.workflow_datasets.classified,
+        )),
+    ))
 
 def display_filter_counts(rows: Array) -> Run[Unit]:
     """
@@ -130,10 +136,16 @@ def retrieve_articles(num: int) -> Run[Articles]:
     """
     Retrieve the articles to be filtered.
     """
-    return \
-        from_rows & \
-            sql_query(SQL(articles_to_filter_sql()),
-                      SQLParams((num,)))
+    return ask() >> (lambda env:
+        from_rows & sql_query(
+            SQL(articles_to_filter_sql()),
+            SQLParams((
+                env["publication_profile"].identity.database_id.value,
+                env["publication_profile"].policies.workflow_datasets.classified,
+                num,
+            )),
+        )
+    )
 
 def variables_dict(article: Article) -> dict[str, str | None]:
     """
@@ -188,11 +200,18 @@ def save_article_class(article_class_t: ArticleClassTuple) \
     """
     record_id = article_class_t.fst.record_id
     gpt_class = article_class_t.snd
-    return \
-        sql_exec(SQL(gpt_homicide_class_sql()),
-            SQLParams((gpt_class, record_id))) ^ \
-        put_line(f"New GPT class saved: {gpt_class}\n") ^ \
+    return ask() >> (lambda env:
+        sql_exec(
+            SQL(gpt_homicide_class_sql()),
+            SQLParams((
+                gpt_class,
+                record_id,
+                env["publication_profile"].identity.database_id.value,
+            )),
+        ) ^
+        put_line(f"New GPT class saved: {gpt_class}\n") ^
         pure(unit)
+    )
 
 def save_filtered_article(article: Article, resp_t: GPTResponseTuple) \
     -> Run[GPTFullResponse]:
@@ -222,7 +241,7 @@ def save_gpt_fn(article: Article, prompt_key: PromptKey) -> GPTFullKreisli:
     Adapter to plug save_gpt_result into the monadic chain via from_either
     """
     def save_gpt_result(resp_t: GPTResponseTuple) \
-        -> Run[GPTFullResponse]:
+        -> Run[GPTFullResponse]:  # pylint: disable=too-many-locals
         """
         Insert a row into gptResults for this article/filter run.
         """
@@ -339,10 +358,13 @@ def render_class_counts(counts: HashMap[String, int]) -> String:
     """
     if len(counts) == 0:
         return String("  (none)")
-    lines = tuple(f"  {k}: {v}" for k, v in sorted(counts.items(), key=lambda kv: str(kv[0])))
+    lines = tuple(
+        f"  {k}: {v}"
+        for k, v in sorted(counts.items(), key=lambda kv: str(kv[0]))
+    )
     return String("\n".join(lines))
 
-def render_filter_summary(
+def render_filter_summary(  # pylint: disable=too-many-arguments
     *,
     stopped: bool,
     special_counts: HashMap[String, int],
@@ -351,7 +373,7 @@ def render_filter_summary(
     gpt_processed_total: int,
     uncaught_failures_total: int,
     not_processed_due_to_stop: int,
-    elapsed_display: Maybe[String] = Nothing,
+    elapsed_display: Maybe[String] = Nothing,  # pylint: disable=too-many-arguments
 ) -> String:
     """
     Render final summary for GPT filtering run.
@@ -482,7 +504,9 @@ def after_processing(validation_acc: ValidationAcc[Article],
                     elapsed_display=elapsed_display
                 )) ^ \
                 pure(NextStep.CONTINUE)
-        special_run_failures = special_result.r.failures.filter(is_special_run_error).length
+        special_run_failures = special_result.r.failures.filter(
+            is_special_run_error
+        ).length
         total_uncaught = run_failures.length + special_run_failures
         summary2 = render_filter_summary(
             stopped=False,
@@ -538,38 +562,35 @@ def after_processing_either(
             special_case_failures = validation_acc.failures.filter(
                 lambda af: af.details.filter(is_special_case_detail).length > 0
             )
-            return read_elapsed_display(RUN_TIMER_NAME) >> (lambda elapsed_display:
-                (lambda summary:
+            def finish(elapsed_display: Maybe[String]) -> Run[NextStep]:
+                summary = render_filter_summary(
+                    stopped=True,
+                    special_counts=count_classes(
+                        special_case_failures.map(
+                            lambda af: Tuple(
+                                af.item.record_id or 0,
+                                special_case_class_code(af),
+                            )
+                        )
+                    ),
+                    special_total=special_case_failures.length,
+                    gpt_counts=count_classes(stop.acc.results),
+                    gpt_processed_total=stop.acc.results.length,
+                    uncaught_failures_total=failures,
+                    not_processed_due_to_stop=max(
+                        0, validation_acc.valid_items.length - processed
+                    ),
+                    elapsed_display=elapsed_display,
+                )
+                return (
                     put_line(
                         "Processing stopped by user after "
                         f"{processed} of {total} articles.\n"
-                    ) ^ \
-                    put_line(
+                    ) ^ put_line(
                         f"{failures} article(s) recorded failures before stop.\n"
-                    ) ^ \
-                    put_line(summary) ^ \
-                    pure(NextStep.CONTINUE)
-                )(
-                    render_filter_summary(
-                        stopped=True,
-                        special_counts=count_classes(
-                            special_case_failures.map(
-                                lambda af: Tuple(af.item.record_id or 0,
-                                                 special_case_class_code(af))
-                            )
-                        ),
-                        special_total=special_case_failures.length,
-                        gpt_counts=count_classes(stop.acc.results),
-                        gpt_processed_total=stop.acc.results.length,
-                        uncaught_failures_total=failures,
-                        not_processed_due_to_stop=max(
-                            0,
-                            validation_acc.valid_items.length - processed
-                        ),
-                        elapsed_display=elapsed_display
-                    )
+                    ) ^ put_line(summary) ^ pure(NextStep.CONTINUE)
                 )
-            )
+            return read_elapsed_display(RUN_TIMER_NAME) >> finish
         case Right(process_acc):
             return after_processing(validation_acc, process_acc)
     raise RuntimeError("Unreachable Either branch")

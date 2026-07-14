@@ -249,6 +249,13 @@ def _sql_export(df: pd.DataFrame, filename, sheet, band_by_group_col, band_wrap)
         df.to_csv(fallback, index=False)
 
 
+def _publication_output_filename(env: Environment, filename: str) -> str:
+    """Place every relative export inside the active publication namespace."""
+    return (
+        f"{env['publication_profile'].resources.output_namespace}/{filename}"
+    )
+
+
 def _sql_import(filename: str, sheet: str | None) -> pd.DataFrame:
     if filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
         if sheet is None:
@@ -573,7 +580,12 @@ def run_sql(prog: Run[A]) -> Run[A]:
                             df = con.execute(str(sql)).df()
                     except Exception as ex:
                         raise SQLExecutionError(str(sql), None, ex) from ex
-                    _sql_export(df, filename, sheet, band_by_group_col, band_wrap)
+                    scoped_filename = _publication_output_filename(
+                        ask()._step(current), filename
+                    )
+                    _sql_export(
+                        df, scoped_filename, sheet, band_by_group_col, band_wrap
+                    )
                     return None
                 case SqlImport(filename, table_name, sheet):
                     backend, con = _get_backend_and_conn_run()._step(current)

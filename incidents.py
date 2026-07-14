@@ -11,7 +11,7 @@ from pymonad import Run, with_namespace, to_prompts, Namespace, EnvKey, \
     GPTResponseTuple, GPTFullResponse, String, input_number, throw, \
     ErrorPayload, Tuple, array_sequence, Unit, unit, \
     bind_first, process_items, ProcessAcc, Array, \
-    Left, Right, Either, StopRun, set_, view, monotonic_now, Maybe, Just, Nothing
+    Left, Right, Either, StopRun, ask, set_, view, monotonic_now, Maybe, Just, Nothing
 from pymonad.hashmap import HashMap
 from menuprompts import NextStep
 from article import Article, Articles, ArticleAppError, from_rows
@@ -87,7 +87,13 @@ def retrieve_extract_counts() -> Run[Array]:
     """
     Retrieve counts of articles ready for extraction grouped by year.
     """
-    return sql_query(SQL(articles_ready_for_extract_counts_sql()))
+    return ask() >> (lambda env: sql_query(
+        SQL(articles_ready_for_extract_counts_sql()),
+        SQLParams((
+            env["publication_profile"].identity.database_id.value,
+            env["publication_profile"].policies.workflow_datasets.classified,
+        )),
+    ))
 
 def display_extract_counts(rows: Array) -> Run[Unit]:
     """
@@ -112,10 +118,16 @@ def retrieve_articles(num: int) -> Run[Articles]:
     """
     Retrieve the articles to be filtered.
     """
-    return \
-        from_rows & \
-            sql_query(SQL(articles_to_extract_sql()),
-                      SQLParams((num,)))
+    return ask() >> (lambda env:
+        from_rows & sql_query(
+            SQL(articles_to_extract_sql()),
+            SQLParams((
+                env["publication_profile"].identity.database_id.value,
+                env["publication_profile"].policies.workflow_datasets.classified,
+                num,
+            )),
+        )
+    )
 
 def variables_dict(article: Article) -> dict[str, str | None]:
     """
@@ -154,14 +166,18 @@ def save_json(article_class_t: ArticleClassTuple,
     gpt_class = article_class_t.snd
     if gpt_class != 'M':
         return pure(resp_t)
-    return \
-        sql_exec(SQL(gpt_victims_sql()),
+    return ask() >> (lambda env:
+        sql_exec(
+            SQL(gpt_victims_sql()),
             SQLParams((
                 String(cast(FormatType, resp_t.parsed.output).incidents_json),
-                record_id
-            ))) ^ \
-        put_line("Saved new GPT Incident JSON.\n") ^ \
+                record_id,
+                env["publication_profile"].identity.database_id.value,
+            )),
+        ) ^
+        put_line("Saved new GPT Incident JSON.\n") ^
         pure(resp_t)
+    )
 
 def save_extracted_article(article: Article, resp_t: GPTResponseTuple) \
     -> Run[GPTFullResponse]:
@@ -237,14 +253,14 @@ def render_class_counts(counts: HashMap[String, int]) -> String:
     )
     return String("\n".join(lines))
 
-def render_extract_summary(
+def render_extract_summary(  # pylint: disable=too-many-arguments
     *,
     stopped: bool,
     gpt_counts: HashMap[String, int],
     gpt_processed_total: int,
     uncaught_failures_total: int,
     not_processed_due_to_stop: int,
-    elapsed_display: Maybe[String] = Nothing,
+    elapsed_display: Maybe[String] = Nothing,  # pylint: disable=too-many-arguments
 ) -> String:
     """
     Render final summary for extraction run.
@@ -290,37 +306,37 @@ def after_processing(process_acc: ProcessAcc[Article, ExtractClassResult]) \
             article_failures.details[0].type \
                 == ArticleFailureType.UNCAUGHT_EXCEPTION
     run_failures = process_acc.failures.filter(is_run_error)
-    return read_elapsed_display(RUN_TIMER_NAME) >> (lambda elapsed_display:
-        (lambda summary:
-            put_line("Processing completed with "
-            f"{process_acc.failures.length} articles "
-            "failing validation.\n") ^
-            put_line(f"{run_failures.length} articles "
-            "failed due to uncaught exceptions.\n") ^
-            display_uncaught_exceptions(run_failures) ^
-            put_line(summary) ^
-            pure(NextStep.CONTINUE)
-            if run_failures.length > 0 else
-            put_line("All articles processed:\n") ^
-            put_line(summary) ^
-            pure(NextStep.CONTINUE)
-        )(
-            render_extract_summary(
-                stopped=False,
-                gpt_counts=count_classes(process_acc.results),
-                gpt_processed_total=process_acc.results.length,
-                uncaught_failures_total=run_failures.length,
-                not_processed_due_to_stop=0,
-                elapsed_display=elapsed_display
-            )
+    def finish(elapsed_display: Maybe[String]) -> Run[NextStep]:
+        summary = render_extract_summary(
+            stopped=False,
+            gpt_counts=count_classes(process_acc.results),
+            gpt_processed_total=process_acc.results.length,
+            uncaught_failures_total=run_failures.length,
+            not_processed_due_to_stop=0,
+            elapsed_display=elapsed_display,
         )
-    )
+        if run_failures.length > 0:
+            return put_line(
+                "Processing completed with "
+                f"{process_acc.failures.length} articles failing validation.\n"
+            ) ^ put_line(
+                f"{run_failures.length} articles failed due to uncaught exceptions.\n"
+            ) ^ display_uncaught_exceptions(run_failures) ^ put_line(summary) ^ pure(
+                NextStep.CONTINUE
+            )
+        return put_line("All articles processed:\n") ^ put_line(summary) ^ pure(
+            NextStep.CONTINUE
+        )
+    return read_elapsed_display(RUN_TIMER_NAME) >> finish
 
-def after_processing_either(articles: Articles,
-                            result: Either[
-                                StopRun[Article, ExtractClassResult],
-                                ProcessAcc[Article, ExtractClassResult]
-                            ]) -> Run[NextStep]:
+def after_processing_either(
+    articles: Articles,
+    result: Either[
+        StopRun[Article, ExtractClassResult],
+        ProcessAcc[Article, ExtractClassResult],
+    ],
+) -> Run[NextStep]:
+    """Handle either a stopped or completed extraction run."""
     match result:
         case Left(stop):
             processed = stop.acc.processed
@@ -330,28 +346,24 @@ def after_processing_either(articles: Articles,
                     article_failures.details[0].type \
                         == ArticleFailureType.UNCAUGHT_EXCEPTION
             failures = stop.acc.failures.filter(is_run_error).length
-            return read_elapsed_display(RUN_TIMER_NAME) >> (lambda elapsed_display:
-                (lambda summary:
+            def finish(elapsed_display: Maybe[String]) -> Run[NextStep]:
+                summary = render_extract_summary(
+                    stopped=True,
+                    gpt_counts=count_classes(stop.acc.results),
+                    gpt_processed_total=stop.acc.results.length,
+                    uncaught_failures_total=failures,
+                    not_processed_due_to_stop=max(0, len(articles) - processed),
+                    elapsed_display=elapsed_display,
+                )
+                return (
                     put_line(
                         "Extraction stopped by user after "
                         f"{processed} of {total} articles.\n"
-                    ) ^ \
-                    put_line(
+                    ) ^ put_line(
                         f"{failures} article(s) recorded failures before stop.\n"
-                    ) ^ \
-                    put_line(summary) ^ \
-                    pure(NextStep.CONTINUE)
-                )(
-                    render_extract_summary(
-                        stopped=True,
-                        gpt_counts=count_classes(stop.acc.results),
-                        gpt_processed_total=stop.acc.results.length,
-                        uncaught_failures_total=failures,
-                        not_processed_due_to_stop=max(0, len(articles) - processed),
-                        elapsed_display=elapsed_display
-                    )
+                    ) ^ put_line(summary) ^ pure(NextStep.CONTINUE)
                 )
-            )
+            return read_elapsed_display(RUN_TIMER_NAME) >> finish
         case Right(v_process):
             return after_processing(v_process)
     raise RuntimeError("Unreachable Either branch")

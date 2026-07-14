@@ -349,7 +349,9 @@ WP_PROFILE = PublicationProfile(
     ),
     resources=PublicationResources(
         raw_article_database=RawArticleDatabasePath("newarticles.db"),
-        active_derived_database=ActiveDerivedDatabasePath("news.duckdb"),
+        active_derived_database=ActiveDerivedDatabasePath(
+            "derived/wp/news.duckdb"
+        ),
         canonical_derived_database=CanonicalDerivedDatabasePath(
             "derived/wp/news.duckdb"
         ),

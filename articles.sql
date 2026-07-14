@@ -31,6 +31,15 @@ CREATE TABLE dates (
     Complete INTEGER NOT NULL DEFAULT 0
 );
 CREATE UNIQUE INDEX uq_dates_pubdate ON dates(PubDate);
+CREATE TABLE publication_date_progress (
+    Publication INTEGER NOT NULL,
+    PubDate TEXT NOT NULL,
+    Priority INTEGER NOT NULL DEFAULT 0,
+    Complete INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (Publication, PubDate)
+);
+CREATE INDEX publication_date_progress_ready
+    ON publication_date_progress (Publication, Complete, Priority, PubDate);
 CREATE INDEX PubDate ON articles(PubDate);
 CREATE INDEX ArticleType on articletypes(RecordId);
 CREATE INDEX Status ON articles(Status);
