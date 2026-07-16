@@ -2,10 +2,12 @@
 Secondary filtering of articles using GPT
 """
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import cast
 from datetime import datetime
 import json
 import re
+from pydantic import BaseModel
 
 from appstate import user_name, run_timer_name, run_timer_start_perf
 from pymonad import Run, with_namespace, to_prompts, Namespace, EnvKey, \
@@ -24,7 +26,9 @@ from calculations import articles_to_filter_sql, \
     articles_ready_for_filter_counts_sql, gpt_homicide_class_sql, \
     insert_gptresults_sql
 from calculations.calc_core import elapsed_line
-from state import WashingtonPostArticleHomicideClassification
+from state import WashingtonPostArticleHomicideClassification, \
+    NewYorkTimesArticleHomicideClassification, GPTClassificationResult
+from publication_profiles import PublicationProfile
 from validate import ArticleValidator, ArticleFailureDetail, \
     ArticleFailureType, SpecialCaseTerm, ArticleErrInfo, ArticleFailures
 
@@ -51,6 +55,47 @@ SPECIAL_CASE_TERMS = ('Hanafi','Urgo')
 CLASS_CODE_UNKNOWN = String("UNKNOWN")
 CLASS_CODE_NULL = String("NULL")
 RUN_TIMER_NAME = String("second_filter")
+
+
+@dataclass(frozen=True)
+class ClassificationRuntimeConfiguration:
+    """Resolved GPT classification configuration for one session."""
+
+    prompt_key: PromptKey
+    prompt_id: String
+    model: GPTModel
+    response_schema: String
+    response_model: type[BaseModel]
+    classification_result: Callable[[BaseModel], GPTClassificationResult]
+
+
+def classification_runtime_configuration(
+    profile: PublicationProfile,
+) -> ClassificationRuntimeConfiguration:
+    """Resolve the active profile's classification configuration."""
+    match profile.policies.gpt.classification:
+        case Just(config):
+            configured_model = GPTModel.from_string(str(config.model))
+            if configured_model is None:
+                raise ValueError(
+                    f"Unsupported GPT classification model: {config.model}"
+                )
+            return ClassificationRuntimeConfiguration(
+                prompt_key=PromptKey(config.prompt_key),
+                prompt_id=String(config.hosted_prompt_id),
+                model=configured_model,
+                response_schema=String(config.response_schema),
+                response_model=(_response_model_for_schema(
+                    str(config.response_schema)
+                )),
+                classification_result=(_classification_result_for_schema(
+                    str(config.response_schema)
+                )),
+            )
+        case _:
+            raise ValueError(
+                f"GPT classification is not configured for {profile.display_name}"
+            )
 
 print_gpt_response = bind_first(response_message, \
         lambda parsed_output: cast(FormatType, parsed_output).result_str)
@@ -81,11 +126,44 @@ def read_elapsed_display(expected_run_name: String) -> Run[Maybe[String]]:
         )
     )
 
+
+def _response_model_for_schema(schema: str) -> type[BaseModel]:
+    """Resolve a registered response schema name."""
+    models = {
+        "WashingtonPostArticleHomicideClassification":
+            WashingtonPostArticleHomicideClassification,
+        "NewYorkTimesArticleHomicideClassification":
+            NewYorkTimesArticleHomicideClassification,
+    }
+    try:
+        return cast(type[BaseModel], models[schema])
+    except KeyError as exc:
+        raise ValueError(f"Unsupported GPT classification schema: {schema}") \
+            from exc
+
+
+def _classification_result_for_schema(
+    schema: str,
+) -> Callable[[BaseModel], GPTClassificationResult]:
+    """Resolve the adapter for a registered response schema name."""
+    adapters: dict[str, Callable[[BaseModel], GPTClassificationResult]] = {
+        "WashingtonPostArticleHomicideClassification":
+            Article.wp_classification_result,
+        "NewYorkTimesArticleHomicideClassification":
+            Article.nyt_classification_result,
+    }
+    try:
+        return adapters[schema]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported GPT classification schema: {schema}") \
+            from exc
 def _to_full(resp_t: GPTResponseTuple) -> Run[GPTFullResponse]:
     out: GPTFullResponse = Right(resp_t)
     return pure(out)
 
-def input_number_to_filter() -> Run[int]:
+def input_number_to_filter(
+    config: ClassificationRuntimeConfiguration,
+) -> Run[int]:
     """
     Prompt the user to input the number of articles to filter.
     """
@@ -96,7 +174,7 @@ def input_number_to_filter() -> Run[int]:
     def after_input(num: int) -> Run[int]:
         return \
             put_line(f"Filtering {num} articles...\n") ^ \
-            put_line(f"JSON schema: \n{to_json(FormatType)}") ^ \
+            put_line(f"JSON schema: \n{to_json(config.response_model)}") ^ \
             pure(num)
     return \
         input_number(PromptKey("filternumber")) >> check_if_zero >> after_input
@@ -175,7 +253,9 @@ def special_case_validators() -> Array[ArticleValidator]:
         return validator
     return validator_from_term & terms
 
-def filter_article(article: Article) -> Run[GPTFullResponse]:
+def filter_article(
+    article: Article, config: ClassificationRuntimeConfiguration
+) -> Run[GPTFullResponse]:
     """
     Filter a single article using GPT
     """
@@ -183,9 +263,9 @@ def filter_article(article: Article) -> Run[GPTFullResponse]:
     return (
         #view(prompt_key) >> (lambda pk: \
         to_gpt_tuple & response_with_gpt_prompt(
-            PromptKey(PROMPT_KEY_STR),
+            config.prompt_key,
             variables,
-            FormatType,
+            config.response_model,
             EnvKey(MODEL_KEY_STR)
         )
     )
@@ -213,12 +293,17 @@ def save_article_class(article_class_t: ArticleClassTuple) \
         pure(unit)
     )
 
-def save_filtered_article(article: Article, resp_t: GPTResponseTuple) \
+def save_filtered_article(
+    article: Article,
+    resp_t: GPTResponseTuple,
+    config: ClassificationRuntimeConfiguration,
+) \
     -> Run[GPTFullResponse]:
     """
     Save and refresh the article information.
     """
-    gpt_class = Article.new_gpt_class(resp_t.parsed.output)
+    classification = config.classification_result(resp_t.parsed.output)
+    gpt_class = Article.new_gpt_class(classification)
     #save_new_json = bind_first(save_json, Tuple(article, gpt_class))
     return \
         save_article_class(Tuple(article, gpt_class)) ^ \
@@ -227,16 +312,21 @@ def save_filtered_article(article: Article, resp_t: GPTResponseTuple) \
 
 type GPTFullKreisli = Callable[[GPTFullResponse], Run[GPTFullResponse]]
 
-def save_article_fn(article: Article) -> GPTFullKreisli:
+def save_article_fn(
+    article: Article, config: ClassificationRuntimeConfiguration
+) -> GPTFullKreisli:
     """
     Return a monadic function that saves the filtered article.
     """
     # bind_filtered is typed as (GPTResponseTuple) -> Run[GPTFullResponse]
-    bind_filtered = bind_first(save_filtered_article, article)
+    def bind_filtered(resp_t: GPTResponseTuple) -> Run[GPTFullResponse]:
+        return save_filtered_article(article, resp_t, config)
     # from_either lifts it to (GPTFullResponse) -> Run[GPTFullResponse]
     return bind_first(from_either, bind_filtered)
 
-def save_gpt_fn(article: Article, prompt_key: PromptKey) -> GPTFullKreisli:
+def save_gpt_fn(
+    article: Article, prompt_key: PromptKey, response_schema: String
+) -> GPTFullKreisli:
     """
     Adapter to plug save_gpt_result into the monadic chain via from_either
     """
@@ -249,7 +339,7 @@ def save_gpt_fn(article: Article, prompt_key: PromptKey) -> GPTFullKreisli:
         record_id = article.record_id or 0
         model = String(resp_t.parsed.usage.model_used.value \
             if resp_t.parsed.usage.model_used else '')
-        format_type_name = String(str(FormatType))
+        format_type_name = response_schema
         variables = variables_dict(article)
         variables_json = String(json.dumps(variables, default=str, indent=2))
         parsed = resp_t.parsed.output
@@ -294,18 +384,25 @@ def save_gpt_fn(article: Article, prompt_key: PromptKey) -> GPTFullKreisli:
 
     return bind_first(from_either, save_gpt_result)
 
-def filter_single_article(article: Article) -> Run[ClassResult]:
+def filter_single_article(
+    article: Article, config: ClassificationRuntimeConfiguration
+) -> Run[ClassResult]:
     """
     Filter a single article and return (record_id, gptClass) on success.
     """
-    save_gpt = save_gpt_fn(article, PromptKey(PROMPT_KEY_STR))
+    save_gpt = save_gpt_fn(
+        article, config.prompt_key, config.response_schema
+    )
     record_id = article.record_id or 0
     def _on_response(gpt_full: GPTFullResponse) -> Run[ClassResult]:
         match gpt_full:
             case Left():
                 return rethrow(gpt_full)
             case Right(resp_t):
-                gpt_class = Article.new_gpt_class(resp_t.parsed.output)
+                classification = config.classification_result(
+                    resp_t.parsed.output
+                )
+                gpt_class = Article.new_gpt_class(classification)
                 class_code = CLASS_CODE_NULL if gpt_class is None else gpt_class
                 return \
                     save_article_class(Tuple(article, gpt_class)) ^ \
@@ -313,7 +410,7 @@ def filter_single_article(article: Article) -> Run[ClassResult]:
                     pure(Tuple(record_id, class_code))
     return \
         put_line(f"Processing article {article}...\n") ^ \
-        filter_article(article) >> \
+        filter_article(article, config) >> \
         print_gpt_response >> \
         _on_response
 
@@ -595,7 +692,9 @@ def after_processing_either(
             return after_processing(validation_acc, process_acc)
     raise RuntimeError("Unreachable Either branch")
 
-def process_all_articles(articles: Articles) -> Run[NextStep]:
+def process_all_articles(
+    articles: Articles, config: ClassificationRuntimeConfiguration
+) -> Run[NextStep]:
     """
     Process all articles to be filtered using pure validation
     followed by monadic processing.
@@ -606,7 +705,7 @@ def process_all_articles(articles: Articles) -> Run[NextStep]:
     )
     return process_items(
         render=render_as_failure,
-        happy=filter_single_article,
+        happy=lambda article: filter_single_article(article, config),
         items=validation_acc.valid_items
     ) >> (lambda result: after_processing_either(
         articles,
@@ -619,23 +718,28 @@ def second_filter() -> Run[NextStep]:
     Use GPT to further filter articles that are homicide related
     and in correct location
     """
-    def _second_filter() -> Run[NextStep]:
+    def _second_filter(config: ClassificationRuntimeConfiguration) -> Run[NextStep]:
         return (
             (start_run_timer(RUN_TIMER_NAME)
             ^ retrieve_filter_counts())
             >> display_filter_counts
-            ^ input_number_to_filter()
+            ^ input_number_to_filter(config)
             >> retrieve_articles
-            >> process_all_articles
+            >> (lambda articles: process_all_articles(articles, config))
         )
 
-    return (
-        with_models(
-            GPT_MODELS,
+    def configure(profile: PublicationProfile) -> Run[NextStep]:
+        config = classification_runtime_configuration(profile)
+        prompts = GPT_PROMPTS | {
+            str(config.prompt_key): (str(config.prompt_id),)
+        }
+        return with_models(
+            {EnvKey(MODEL_KEY_STR): config.model},
             with_namespace(
                 Namespace("gpt"),
-                to_prompts(GPT_PROMPTS),
-                _second_filter()
+                to_prompts(prompts),
+                _second_filter(config)
             )
         )
-    )
+
+    return ask() >> (lambda env: configure(env["publication_profile"]))

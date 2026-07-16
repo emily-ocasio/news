@@ -4,6 +4,7 @@ Type Definitions, including:
     and for type hinting Action, Reaction, RxResp
 """
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import NamedTuple, Optional, Any, List
 from enum import Enum
 import json
@@ -44,6 +45,27 @@ class Homicide_Classification(str, Enum): # pylint:disable=invalid-name
     FICTIONAL_HOMICIDE = "fictional homicide"
     MILITARY_KILLINGS = "military killings"
     OTHER_ACTUAL_HOMICIDE = "other actual homicide"
+
+
+class ClassificationOutcome(str, Enum):
+    """Publication-neutral outcome of GPT article classification."""
+
+    NO_HOMICIDE_IN_ARTICLE = "no homicides in article"
+    HOMICIDE_BEFORE_TIME_SCOPE = "homicides before the desired timeframe"
+    HOMICIDES_OUTSIDE_TARGET_LOCATION = (
+        "homicides outside target location"
+    )
+    HOMICIDE_IN_TARGET_LOCATION_IN_TIME_SCOPE = (
+        "in-scope homicide"
+    )
+
+
+@dataclass(frozen=True)
+class GPTClassificationResult:
+    """Semantic classification independent of publication wording."""
+
+    outcome: ClassificationOutcome
+    homicide_classification: Homicide_Classification | None = None
 
 class LocationClass(Enum):
     """
@@ -315,6 +337,23 @@ class WashingtonPostArticleHomicideClassification(BaseModel):
         """
         Return a string summary of the classification results.
         """
+        art = self.article_classification.value
+        hom = self.homicide_classification.value \
+            if self.homicide_classification else 'None'
+        return f"GPT article classification: {art}\n" + \
+            f"GPT homicide classification: {hom}\n" + \
+            self.model_dump_json(indent=2)
+
+
+class NewYorkTimesArticleHomicideClassification(BaseModel):
+    """Response model for New York Times article classification."""
+    model_config = ConfigDict(extra="forbid")
+    article_classification: ClassificationOutcome
+    homicide_classification: Homicide_Classification | None
+
+    @property
+    def result_str(self) -> str:
+        """Return a human-readable summary of the classification."""
         art = self.article_classification.value
         hom = self.homicide_classification.value \
             if self.homicide_classification else 'None'

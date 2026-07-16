@@ -306,7 +306,7 @@ def _nyt_capabilities() -> PublicationCapabilities:
     return PublicationCapabilities(
         article_selection=Availability.AVAILABLE,
         first_filter=Availability.AVAILABLE,
-        gpt_classification=Availability.UNAVAILABLE,
+        gpt_classification=Availability.AVAILABLE,
         incident_extraction=Availability.UNAVAILABLE,
         incident_staging=Availability.UNAVAILABLE,
         geocoding=Availability.UNAVAILABLE,
@@ -422,7 +422,18 @@ NYT_PROFILE = PublicationProfile(
         record_id_base=RecordIdBase(200_000_000),
         first_filter_policy=NYT_FIRST_FILTER_POLICY,
         gpt=PublicationGPTConfigurations(
-            classification=Nothing,
+            classification=Just(
+                GPTConfiguration(
+                    GPTPromptKey("classify_only_filter_nyc"),
+                    HostedPromptId(
+                        "pmpt_6a56d62d04a88195bc447d3cefc767a40c49debff14a6943"
+                    ),
+                    GPTModelName("gpt-5-nano"),
+                    ResponseSchemaName(
+                        "NewYorkTimesArticleHomicideClassification"
+                    ),
+                )
+            ),
             extraction=Nothing,
         ),
         geocoder=Nothing,

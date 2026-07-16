@@ -14,7 +14,9 @@ from calculations import display_article, camel_to_snake
 from pymonad import Array, String
 from state import WashingtonPostArticleHomicideClassification, \
     Article_Classification, \
-    Homicide_Classification, WashingtonPostArticleIncidentExtraction
+    Homicide_Classification, WashingtonPostArticleIncidentExtraction, \
+    ClassificationOutcome, GPTClassificationResult, \
+    NewYorkTimesArticleHomicideClassification
 
 class ArticleAppError(str, Enum):
     """
@@ -64,42 +66,118 @@ class Article:
         return "Unknown"
 
     @classmethod
-    def new_gpt_class(cls, homicide_class: BaseModel) \
+    def wp_classification_result(cls, homicide_class: BaseModel) \
+        -> GPTClassificationResult:  # pylint: disable=too-many-return-statements
+        """Map the unchanged WP response model to neutral domain semantics."""
+        response = cast(WashingtonPostArticleHomicideClassification, homicide_class)
+        match response.article_classification, response.homicide_classification:
+            case (Article_Classification.NO_HOMICIDE_IN_ARTICLE, _):
+                return GPTClassificationResult(
+                    ClassificationOutcome.NO_HOMICIDE_IN_ARTICLE
+                )
+            case (Article_Classification.HOMICIDE_BEFORE_1977, _):
+                return GPTClassificationResult(
+                    ClassificationOutcome.HOMICIDE_BEFORE_TIME_SCOPE
+                )
+            case (Article_Classification.HOMICIDES_OUTSIDE_WASHINGTON_DC, _):
+                return GPTClassificationResult(
+                    ClassificationOutcome.HOMICIDES_OUTSIDE_TARGET_LOCATION
+                )
+            case (
+                Article_Classification.HOMICIDE_IN_WASHINGTON_DC_SINCE_1977,
+                Homicide_Classification.VEHICULAR_HOMICIDE,
+            ):
+                return GPTClassificationResult(
+                    ClassificationOutcome.HOMICIDE_IN_TARGET_LOCATION_IN_TIME_SCOPE,
+                    response.homicide_classification,
+                )
+            case (
+                Article_Classification.HOMICIDE_IN_WASHINGTON_DC_SINCE_1977,
+                Homicide_Classification.FICTIONAL_HOMICIDE,
+            ):
+                return GPTClassificationResult(
+                    ClassificationOutcome.HOMICIDE_IN_TARGET_LOCATION_IN_TIME_SCOPE,
+                    response.homicide_classification,
+                )
+            case (
+                Article_Classification.HOMICIDE_IN_WASHINGTON_DC_SINCE_1977,
+                Homicide_Classification.MILITARY_KILLINGS,
+            ):
+                return GPTClassificationResult(
+                    ClassificationOutcome.HOMICIDE_IN_TARGET_LOCATION_IN_TIME_SCOPE,
+                    response.homicide_classification,
+                )
+            case (
+                Article_Classification.HOMICIDE_IN_WASHINGTON_DC_SINCE_1977,
+                Homicide_Classification.OTHER_ACTUAL_HOMICIDE,
+            ):
+                return GPTClassificationResult(
+                    ClassificationOutcome.HOMICIDE_IN_TARGET_LOCATION_IN_TIME_SCOPE,
+                    response.homicide_classification,
+                )
+            case (
+                Article_Classification.HOMICIDE_IN_WASHINGTON_DC_SINCE_1977,
+                None,
+            ):
+                return GPTClassificationResult(
+                    ClassificationOutcome.HOMICIDE_IN_TARGET_LOCATION_IN_TIME_SCOPE
+                )
+            case _:
+                raise ValueError("Unrecognized WP article classification response")
+
+    @classmethod
+    def nyt_classification_result(cls, homicide_class: BaseModel) \
+        -> GPTClassificationResult:
+        """Map the NYT response model to neutral domain semantics."""
+        response = cast(NewYorkTimesArticleHomicideClassification, homicide_class)
+        return GPTClassificationResult(
+            response.article_classification,
+            response.homicide_classification,
+        )
+
+    @classmethod
+    def new_gpt_class(cls, classification: GPTClassificationResult) \
         -> String | None:
         """
         Updates the GPT classification for the article.
         """
-        gpt_class: str | None = None
-        _homicide_class = cast(WashingtonPostArticleHomicideClassification, \
-                               homicide_class)
-        match _homicide_class.article_classification, \
-            _homicide_class.homicide_classification:
-            case (None, None):
-                gpt_class = None
-            case (None, _):
-                gpt_class = "ERR_NONE"
-            case (Article_Classification.NO_HOMICIDE_IN_ARTICLE, _):
+        gpt_class: str
+        match (
+            classification.outcome,
+            classification.homicide_classification,
+        ):
+            case (ClassificationOutcome.NO_HOMICIDE_IN_ARTICLE, _):
                 gpt_class = "N_NOHOM"
-            case (Article_Classification.HOMICIDE_BEFORE_1977, _):
+            case (ClassificationOutcome.HOMICIDE_BEFORE_TIME_SCOPE, _):
                 gpt_class = "E"
-            case (Article_Classification.HOMICIDES_OUTSIDE_WASHINGTON_DC, _):
+            case (ClassificationOutcome.HOMICIDES_OUTSIDE_TARGET_LOCATION, _):
                 gpt_class = "O"
-            case (Article_Classification.HOMICIDE_IN_WASHINGTON_DC_SINCE_1977,
-                  None):
-                gpt_class = "ERR_M_NONE"
-            case (Article_Classification.HOMICIDE_IN_WASHINGTON_DC_SINCE_1977,
-                  Homicide_Classification.VEHICULAR_HOMICIDE):
+            case (
+                ClassificationOutcome.HOMICIDE_IN_TARGET_LOCATION_IN_TIME_SCOPE,
+                Homicide_Classification.VEHICULAR_HOMICIDE,
+            ):
                 gpt_class = "N_VEH"
-            case (Article_Classification.HOMICIDE_IN_WASHINGTON_DC_SINCE_1977,
-                  Homicide_Classification.FICTIONAL_HOMICIDE):
+            case (
+                ClassificationOutcome.HOMICIDE_IN_TARGET_LOCATION_IN_TIME_SCOPE,
+                Homicide_Classification.FICTIONAL_HOMICIDE,
+            ):
                 gpt_class = "N_FIC"
-            case (Article_Classification.HOMICIDE_IN_WASHINGTON_DC_SINCE_1977,
-                  Homicide_Classification.MILITARY_KILLINGS):
+            case (
+                ClassificationOutcome.HOMICIDE_IN_TARGET_LOCATION_IN_TIME_SCOPE,
+                Homicide_Classification.MILITARY_KILLINGS,
+            ):
                 gpt_class = "N_MIL"
-            case (Article_Classification.HOMICIDE_IN_WASHINGTON_DC_SINCE_1977,
-                  Homicide_Classification.OTHER_ACTUAL_HOMICIDE):
+            case (
+                ClassificationOutcome.HOMICIDE_IN_TARGET_LOCATION_IN_TIME_SCOPE,
+                None,
+            ):
+                gpt_class = "ERR_M_NONE"
+            case (
+                ClassificationOutcome.HOMICIDE_IN_TARGET_LOCATION_IN_TIME_SCOPE,
+                _,
+            ):
                 gpt_class = "M_PRELIM"
-            case _, _:
+            case _:
                 gpt_class = "ERR_OTHER"
         return None if not gpt_class else String(gpt_class)
 

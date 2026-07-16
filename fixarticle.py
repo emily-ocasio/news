@@ -30,6 +30,7 @@ from pymonad import (
     ErrorPayload,
     set_,
     with_models,
+    EnvKey,
     String,
     GPTUsage,
     GPTReasoning,
@@ -41,7 +42,7 @@ from pymonad.array import Array
 from appstate import prompt_key
 from article import Article, Articles, ArticleAppError
 from gpt_filtering import GPT_PROMPTS, GPT_MODELS, \
-    PROMPT_KEY_STR, process_all_articles
+    PROMPT_KEY_STR, process_all_articles, classification_runtime_configuration
 from menuprompts import NextStep, MenuPrompts, MenuChoice, input_from_menu
 from incidents import process_all_articles as extract_process_all_articles, \
     GPT_PROMPTS as INCIDENTS_GPT_PROMPTS, PROMPT_KEY_STR as INCIDENTS_PROMPT_KEY_STR, \
@@ -467,10 +468,12 @@ def second_filter(article: Article) -> Run[Article]:
     """
     Process second filter action for the article.
     """
-    return (
-        process_all_articles(Articles((article,)))
-        ^ pure(article)
-    )
+    return ask() >> (lambda env: (
+        process_all_articles(
+            Articles((article,)),
+            classification_runtime_configuration(env["publication_profile"]),
+        ) ^ pure(article)
+    ))
 
 
 def _apply_action(
@@ -593,13 +596,25 @@ def fix_article() -> Run[NextStep]:
     """
     Fix an article by its record ID.
     """
-    # Inject the specific GPT models and desired prompts into the namespace
-    #   of a local environment and then proceed
-    return with_models(
-        GPT_MODELS | INCIDENTS_GPT_MODELS,
-        with_namespace(
-            Namespace("fix"),
-            to_prompts(FIX_PROMPTS | GPT_PROMPTS | INCIDENTS_GPT_PROMPTS),
-            select_fix_article()
+    def configure(env: Environment) -> Run[NextStep]:
+        classification_config = classification_runtime_configuration(
+            env["publication_profile"]
         )
-    )
+        prompts = FIX_PROMPTS | GPT_PROMPTS | INCIDENTS_GPT_PROMPTS | {
+            str(classification_config.prompt_key): (
+                str(classification_config.prompt_id),
+            )
+        }
+        models = GPT_MODELS | INCIDENTS_GPT_MODELS | {
+            EnvKey("filter"): classification_config.model
+        }
+        return with_models(
+            models,
+            with_namespace(
+                Namespace("fix"),
+                to_prompts(prompts),
+                select_fix_article()
+            )
+        )
+
+    return ask() >> configure

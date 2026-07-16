@@ -206,7 +206,9 @@ def extract_single_article(article: Article) -> Run[ExtractClassResult]:
     Extract incident info from a single article,
     returning (record_id, gptClass) on success.
     """
-    save_gpt = save_gpt_fn(article, PromptKey(PROMPT_KEY_STR))
+    save_gpt = save_gpt_fn(
+        article, PromptKey(PROMPT_KEY_STR), String(str(FormatType))
+    )
     record_id = article.record_id or 0
     def _on_response(gpt_full: GPTFullResponse) -> Run[ExtractClassResult]:
         match gpt_full:

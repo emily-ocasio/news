@@ -176,13 +176,21 @@ residence does not substitute for the homicide location.
 These entries describe the existing WP configuration and must remain stable
 until a separately agreed change is made.
 
-### New York Times configuration status
+### New York Times classification
 
-The New York Times classification prompt, model, and response schema are
-deliberately unresolved until Step 8 of the refactoring plan. The extraction
-prompt, model, and response schema are deliberately unresolved until Step 10.
-The application must not reuse WP GPT configuration as an implicit NYT
-default.
+- Prompt key: `classify_only_filter_nyc`.
+- Hosted prompt ID:
+  `pmpt_6a56d62d04a88195bc447d3cefc767a40c49debff14a6943`.
+- Model: `gpt-5-nano`.
+- Response schema: `NewYorkTimesArticleHomicideClassification`.
+- The schema uses the publication-neutral `ClassificationOutcome` values and
+  the shared homicide classification values; database codes remain the
+  existing publication-neutral workflow codes.
+- Validation is performed manually by the project owner.
+
+The extraction prompt, model, and response schema remain deliberately
+unresolved until Step 10. The application must not reuse WP GPT configuration
+as an implicit NYT default.
 
 ## Geocoding
 
