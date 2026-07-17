@@ -383,6 +383,11 @@ class WashingtonPostArticleIncidentExtraction(BaseModel):
         """
         return self.incidents_json
 
+# The structured extraction payload has no WP-specific fields. Keep the
+# historical WP name for stored-result compatibility while exposing the
+# publication-neutral runtime name.
+ArticleIncidentExtraction = WashingtonPostArticleIncidentExtraction
+
 class VictimDC(VictimBase):
     """
     Model for Victim information in Washington, DC

@@ -14,7 +14,7 @@ from calculations import display_article, camel_to_snake
 from pymonad import Array, String
 from state import WashingtonPostArticleHomicideClassification, \
     Article_Classification, \
-    Homicide_Classification, WashingtonPostArticleIncidentExtraction, \
+    Homicide_Classification, ArticleIncidentExtraction, \
     ClassificationOutcome, GPTClassificationResult, \
     NewYorkTimesArticleHomicideClassification
 
@@ -28,7 +28,7 @@ class ArticleAppError(str, Enum):
 
 
 @dataclass(frozen=True)
-class Article:
+class Article:  # pylint: disable=too-many-instance-attributes
     """
     Represents a single newspaper article.
     """
@@ -182,27 +182,21 @@ class Article:
         return None if not gpt_class else String(gpt_class)
 
     @classmethod
-    def extracted_gpt_class(cls, extraction: BaseModel) \
+    def extracted_gpt_class(
+        cls, extraction: ArticleIncidentExtraction, incident_start_year: int
+    ) \
         -> String | None:
         """
-        Returns the extracted GPT classification for the article.
-        Extraction is only in-scope for incidents from 1977 onward.
+        Return the extracted GPT classification for the active date scope.
         """
-        gpt_class: str | None = None
-        _extraction = cast(WashingtonPostArticleIncidentExtraction, \
-                               extraction)
-        if len(_extraction.incidents) == 0:
-            gpt_class = "N_NOINC"
-            return String(gpt_class)
-
-        has_in_scope_incident = any(
-            incident.year >= 1977 for incident in _extraction.incidents
-        )
-        if has_in_scope_incident:
-            gpt_class = "M"
-        else:
-            gpt_class = "E"
-        return String(gpt_class)
+        if len(extraction.incidents) == 0:
+            return String("N_NOINC")
+        if any(
+            incident.year >= incident_start_year
+            for incident in extraction.incidents
+        ):
+            return String("M")
+        return String("E")
 
 def from_row(row: Mapping, current: int = 0, total: int = 0) -> Article:
     """

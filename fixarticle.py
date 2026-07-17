@@ -45,8 +45,7 @@ from gpt_filtering import GPT_PROMPTS, GPT_MODELS, \
     PROMPT_KEY_STR, process_all_articles, classification_runtime_configuration
 from menuprompts import NextStep, MenuPrompts, MenuChoice, input_from_menu
 from incidents import process_all_articles as extract_process_all_articles, \
-    GPT_PROMPTS as INCIDENTS_GPT_PROMPTS, PROMPT_KEY_STR as INCIDENTS_PROMPT_KEY_STR, \
-    GPT_MODELS as INCIDENTS_GPT_MODELS
+    GPT_PROMPTS as INCIDENTS_GPT_PROMPTS, extraction_runtime_configuration
 from single_article_refresh import refresh_single_article_after_extract
 from orphan_adjudication_controller import (
     E2E_CACHE_STAGE,
@@ -556,7 +555,6 @@ def _apply_action(
                 (lambda updated: _select_apply_action(updated, allow_cache_delete))
         case FixAction.EXTRACT_INCIDENTS:
             result = (
-                set_(prompt_key, String(INCIDENTS_PROMPT_KEY_STR)) ^
                 extract_process_all_articles(Articles((article,)))
                 ^ _post_extract_refresh()
                 ^ pure(article)
@@ -600,13 +598,20 @@ def fix_article() -> Run[NextStep]:
         classification_config = classification_runtime_configuration(
             env["publication_profile"]
         )
+        extraction_config = extraction_runtime_configuration(
+            env["publication_profile"]
+        )
         prompts = FIX_PROMPTS | GPT_PROMPTS | INCIDENTS_GPT_PROMPTS | {
             str(classification_config.prompt_key): (
                 str(classification_config.prompt_id),
-            )
+            ),
+            str(extraction_config.prompt_key): (
+                str(extraction_config.prompt_id),
+            ),
         }
-        models = GPT_MODELS | INCIDENTS_GPT_MODELS | {
-            EnvKey("filter"): classification_config.model
+        models = GPT_MODELS | {
+            EnvKey("filter"): classification_config.model,
+            EnvKey("extract"): extraction_config.model,
         }
         return with_models(
             models,

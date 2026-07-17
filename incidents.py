@@ -1,10 +1,13 @@
 """
 Controller for GPT extraction of incident details
 """
+from dataclasses import dataclass
 from typing import cast
 
+from pydantic import BaseModel
+
 from appstate import run_timer_name, run_timer_start_perf
-from pymonad import Run, with_namespace, to_prompts, Namespace, EnvKey, \
+from pymonad import Run, Environment, with_namespace, to_prompts, Namespace, EnvKey, \
     PromptKey, pure, put_line, sql_query, SQL, SQLParams, \
     GPTModel, with_models, response_with_gpt_prompt, to_json,\
     to_gpt_tuple, rethrow, from_either, sql_exec, \
@@ -21,25 +24,69 @@ from calculations.calc_core import elapsed_line
 from gpt_filtering import render_as_failure, save_gpt_fn, \
     save_article_class, ArticleClassTuple, _to_full, \
     print_gpt_response, GPTFullKreisli
-from state import WashingtonPostArticleIncidentExtraction
+from state import ArticleIncidentExtraction
+from publication_profiles import PublicationProfile
 from validate import ArticleFailureType, ArticleFailures
 
 GPT_PROMPTS: dict[str, str | tuple[str,]] = {
     "extractnumber": \
         "Enter number of articles to extract incident information via GPT: ",
-    "extract_incidents_dc": (
-        'pmpt_68c8d0edb59c8193920e0e6428d01e3a0902d4a752062094',)
 }
-GPT_MODELS = {
-    EnvKey("extract"): GPTModel.GPT_5_MINI
-}
-FormatType = WashingtonPostArticleIncidentExtraction
-PROMPT_KEY_STR = "extract_incidents_dc"
 MODEL_KEY_STR = "extract"
 CLASS_CODE_UNKNOWN = String("UNKNOWN")
 CLASS_CODE_NULL = String("NULL")
 RUN_TIMER_NAME = String("gpt_incidents")
 type ExtractClassResult = Tuple[int, String]
+
+
+@dataclass(frozen=True)
+class ExtractionRuntimeConfiguration:
+    """Resolved GPT extraction configuration for one session."""
+
+    prompt_key: PromptKey
+    prompt_id: String
+    model: GPTModel
+    response_schema: String
+    response_model: type[BaseModel]
+
+
+def _response_model_for_schema(schema: str) -> type[BaseModel]:
+    """Resolve a registered extraction response schema name."""
+    models = {
+        "WashingtonPostArticleIncidentExtraction":
+            ArticleIncidentExtraction,
+        "ArticleIncidentExtraction": ArticleIncidentExtraction,
+    }
+    try:
+        return cast(type[BaseModel], models[schema])
+    except KeyError as exc:
+        raise ValueError(f"Unsupported GPT extraction schema: {schema}") \
+            from exc
+
+def extraction_runtime_configuration(
+    profile: PublicationProfile,
+) -> ExtractionRuntimeConfiguration:
+    """Resolve the active profile's incident-extraction configuration."""
+    match profile.policies.gpt.extraction:
+        case Just(config):
+            configured_model = GPTModel.from_string(str(config.model))
+            if configured_model is None:
+                raise ValueError(
+                    f"Unsupported GPT extraction model: {config.model}"
+                )
+            return ExtractionRuntimeConfiguration(
+                prompt_key=PromptKey(config.prompt_key),
+                prompt_id=String(config.hosted_prompt_id),
+                model=configured_model,
+                response_schema=String(config.response_schema),
+                response_model=_response_model_for_schema(
+                    str(config.response_schema)
+                ),
+            )
+        case _:
+            raise ValueError(
+                f"GPT extraction is not configured for {profile.display_name}"
+            )
 
 def start_run_timer(run_name: String) -> Run[Unit]:
     """
@@ -67,7 +114,9 @@ def read_elapsed_display(expected_run_name: String) -> Run[Maybe[String]]:
         )
     )
 
-def input_number_to_extract() -> Run[int]:
+def input_number_to_extract(
+    config: ExtractionRuntimeConfiguration,
+) -> Run[int]:
     """
     Prompt the user to input the number of articles to extract incidents from.
     """
@@ -78,7 +127,7 @@ def input_number_to_extract() -> Run[int]:
     def after_input(num: int) -> Run[int]:
         return \
             put_line(f"Extracting incidents from {num} articles...\n") ^ \
-            put_line(f"JSON schema: \n{to_json(FormatType)}") ^ \
+            put_line(f"JSON schema: \n{to_json(config.response_model)}") ^ \
             pure(num)
     return \
         input_number(PromptKey("extractnumber")) >> check_if_zero >> after_input
@@ -139,7 +188,9 @@ def variables_dict(article: Article) -> dict[str, str | None]:
         "article_date": article.full_date
     }
 
-def extract_article(article: Article) -> Run[GPTFullResponse]:
+def extract_article(
+    article: Article, config: ExtractionRuntimeConfiguration
+) -> Run[GPTFullResponse]:
     """
     Extract incident information from a single article using GPT
     """
@@ -147,9 +198,9 @@ def extract_article(article: Article) -> Run[GPTFullResponse]:
     return (
         #view(prompt_key) >> (lambda pk: \
         to_gpt_tuple & response_with_gpt_prompt(
-            PromptKey(PROMPT_KEY_STR),
+            config.prompt_key,
             variables,
-            FormatType,
+            config.response_model,
             EnvKey(MODEL_KEY_STR),
             effort="medium",
             stream=False  ## stream not working for now
@@ -170,7 +221,10 @@ def save_json(article_class_t: ArticleClassTuple,
         sql_exec(
             SQL(gpt_victims_sql()),
             SQLParams((
-                String(cast(FormatType, resp_t.parsed.output).incidents_json),
+                String(cast(
+                    ArticleIncidentExtraction,
+                    resp_t.parsed.output,
+                ).incidents_json),
                 record_id,
                 env["publication_profile"].identity.database_id.value,
             )),
@@ -179,12 +233,14 @@ def save_json(article_class_t: ArticleClassTuple,
         pure(resp_t)
     )
 
-def save_extracted_article(article: Article, resp_t: GPTResponseTuple) \
-    -> Run[GPTFullResponse]:
-    """
-    Save and refresh the article information.
-    """
-    gpt_class = Article.extracted_gpt_class(resp_t.parsed.output)
+def save_extracted_article(
+    article: Article,
+    resp_t: GPTResponseTuple,
+    incident_start_year: int,
+) -> Run[GPTFullResponse]:
+    """Save and refresh the article information."""
+    extraction = cast(ArticleIncidentExtraction, resp_t.parsed.output)
+    gpt_class = Article.extracted_gpt_class(extraction, incident_start_year)
     save_new_json = bind_first(save_json, Tuple(article, gpt_class))
     return \
         save_article_class(Tuple(article, gpt_class)) ^ \
@@ -192,22 +248,30 @@ def save_extracted_article(article: Article, resp_t: GPTResponseTuple) \
         save_new_json >> \
         _to_full
 
-def save_article_fn(article: Article) -> GPTFullKreisli:
-    """
-    Return a monadic function that saves the extracted article.
-    """
-    # bind_extracted is typed as (GPTResponseTuple) -> Run[GPTFullResponse]
-    bind_extracted = bind_first(save_extracted_article, article)
-    # from_either lifts it to (GPTFullResponse) -> Run[GPTFullResponse]
+
+def save_article_fn(
+    article: Article,
+    incident_start_year: int,
+) -> GPTFullKreisli:
+    """Return a monadic function that saves the extracted article."""
+    def bind_extracted(resp_t: GPTResponseTuple) -> Run[GPTFullResponse]:
+        return save_extracted_article(
+            article, resp_t, incident_start_year
+        )
     return bind_first(from_either, bind_extracted)
 
-def extract_single_article(article: Article) -> Run[ExtractClassResult]:
+
+def extract_single_article(
+    article: Article,
+    config: ExtractionRuntimeConfiguration,
+    incident_start_year: int,
+) -> Run[ExtractClassResult]:
     """
     Extract incident info from a single article,
     returning (record_id, gptClass) on success.
     """
     save_gpt = save_gpt_fn(
-        article, PromptKey(PROMPT_KEY_STR), String(str(FormatType))
+        article, config.prompt_key, config.response_schema
     )
     record_id = article.record_id or 0
     def _on_response(gpt_full: GPTFullResponse) -> Run[ExtractClassResult]:
@@ -215,20 +279,21 @@ def extract_single_article(article: Article) -> Run[ExtractClassResult]:
             case Left():
                 return rethrow(gpt_full)
             case Right(resp_t):
-                gpt_class = Article.extracted_gpt_class(resp_t.parsed.output)
+                extraction = cast(ArticleIncidentExtraction, resp_t.parsed.output)
+                gpt_class = Article.extracted_gpt_class(
+                    extraction, incident_start_year
+                )
                 class_code = CLASS_CODE_NULL if gpt_class is None else gpt_class
-                save_new_json = bind_first(save_json, Tuple(article, gpt_class))
                 return \
-                    save_article_class(Tuple(article, gpt_class)) ^ \
-                    pure(resp_t) >> \
-                    save_new_json >> \
-                    _to_full >> \
+                    save_extracted_article(
+                        article, resp_t, incident_start_year
+                    ) >> \
                     save_gpt >> \
                     rethrow ^ \
                     pure(Tuple(record_id, class_code))
     return \
         put_line(f"Extracting incident data from article {article}...\n") ^ \
-        extract_article(article) >> \
+        extract_article(article, config) >> \
         print_gpt_response >> \
         _on_response
 
@@ -375,10 +440,27 @@ def process_all_articles(articles: Articles) -> Run[NextStep]:
     Process all articles for which to extract incident information
     using applicative validation.
     """
+    return ask() >> (lambda env: _process_all_articles(
+        articles,
+        extraction_runtime_configuration(env["publication_profile"]),
+        int(str(
+            env["publication_profile"].analytical_scope.incident_date_scope.start
+        )[:4]),
+    ))
+
+
+def _process_all_articles(
+    articles: Articles,
+    config: ExtractionRuntimeConfiguration,
+    incident_start_year: int,
+) -> Run[NextStep]:
+    """Process articles using a resolved extraction configuration."""
     return process_items(
         render=render_as_failure,
-        happy=extract_single_article,
-        items=articles
+        happy=lambda article: extract_single_article(
+            article, config, incident_start_year
+        ),
+        items=articles,
     ) >> (lambda result: after_processing_either(articles, result))
 
 def gpt_incidents() -> Run[NextStep]:
@@ -386,23 +468,41 @@ def gpt_incidents() -> Run[NextStep]:
     Use GPT to further filter articles that are homicide related
     and in correct location
     """
-    def _extract() -> Run[NextStep]:
+    def _extract(config: ExtractionRuntimeConfiguration) -> Run[NextStep]:
+        return ask() >> (lambda env: _extract_with_profile(
+            env, config
+        ))
+
+    def _extract_with_profile(
+        env: Environment,
+        config: ExtractionRuntimeConfiguration,
+    ) -> Run[NextStep]:
+        incident_start_year = int(str(
+            env["publication_profile"].analytical_scope.incident_date_scope.start
+        )[:4])
         return (
             (start_run_timer(RUN_TIMER_NAME)
             ^ retrieve_extract_counts())
             >> display_extract_counts
-            ^ input_number_to_extract()
+            ^ input_number_to_extract(config)
             >> retrieve_articles
-            >> process_all_articles
+            >> (lambda articles: _process_all_articles(
+                articles, config, incident_start_year
+            ))
         )
 
-    return (
-        with_models(
-            GPT_MODELS,
+    def configure(profile: PublicationProfile) -> Run[NextStep]:
+        config = extraction_runtime_configuration(profile)
+        prompts = GPT_PROMPTS | {
+            str(config.prompt_key): (str(config.prompt_id),)
+        }
+        return with_models(
+            {EnvKey(MODEL_KEY_STR): config.model},
             with_namespace(
                 Namespace("gpt"),
-                to_prompts(GPT_PROMPTS),
-                _extract()
-            )
+                to_prompts(prompts),
+                _extract(config),
+            ),
         )
-    )
+
+    return ask() >> (lambda env: configure(env["publication_profile"]))
