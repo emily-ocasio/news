@@ -441,6 +441,11 @@ def rich_to_str(text: Union[Text, Table, str], end='\n') -> str:
     return capture.get()
 
 
+def green_text(text: str) -> str:
+    """Render text in Rich's standard green style."""
+    return rich_to_str(Text(text, style="green"), end='')
+
+
 def filter_row(row: Mapping) -> bool:
     """
     Determines whether there are matches in either

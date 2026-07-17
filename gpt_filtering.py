@@ -25,7 +25,7 @@ from article import Article, Articles, ArticleAppError, from_rows
 from calculations import articles_to_filter_sql, \
     articles_ready_for_filter_counts_sql, gpt_homicide_class_sql, \
     insert_gptresults_sql
-from calculations.calc_core import elapsed_line
+from calculations.calc_core import elapsed_line, green_text
 from state import WashingtonPostArticleHomicideClassification, \
     NewYorkTimesArticleHomicideClassification, GPTClassificationResult
 from publication_profiles import PublicationProfile
@@ -289,7 +289,7 @@ def save_article_class(article_class_t: ArticleClassTuple) \
                 env["publication_profile"].identity.database_id.value,
             )),
         ) ^
-        put_line(f"New GPT class saved: {gpt_class}\n") ^
+        put_line(green_text(f"New GPT class saved: {gpt_class}\n")) ^
         pure(unit)
     )
 
