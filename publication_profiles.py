@@ -99,6 +99,14 @@ class GeocoderProviderKey(String):
     """Registered geocoder-provider key."""
 
 
+@dataclass(frozen=True)
+class GeocoderCacheTables:
+    """DuckDB cache tables owned by one publication's geocoder."""
+
+    cache: str
+    address_map: str
+
+
 class ExternalHomicideScope(String):
     """Human-readable external homicide reference-data scope."""
 
@@ -234,6 +242,7 @@ class PublicationPolicies:
     first_filter_policy: FirstFilterPolicy
     gpt: PublicationGPTConfigurations
     geocoder: Maybe[GeocoderProviderKey]
+    geocoder_cache_tables: GeocoderCacheTables
     external_homicide_scope: ExternalHomicideScope
     splink_profile: SplinkProfileKey
 
@@ -282,6 +291,13 @@ class PublicationProfile:
         return self.analytical_scope.target_location
 
     @property
+    def geocoder_provider(self) -> GeocoderProviderKey:
+        """Return the configured geocoder for an operational profile."""
+        if isinstance(self.policies.geocoder, Just):
+            return self.policies.geocoder.a
+        raise ValueError(f"No geocoder configured for {self.key}")
+
+    @property
     def session_label(self) -> String:
         """Render the selected publication and target location."""
         return String(
@@ -314,7 +330,7 @@ def _nyt_capabilities() -> PublicationCapabilities:
         gpt_classification=Availability.AVAILABLE,
         incident_extraction=Availability.AVAILABLE,
         incident_staging=Availability.AVAILABLE,
-        geocoding=Availability.UNAVAILABLE,
+    geocoding=Availability.AVAILABLE,
         named_victim_deduplication=Availability.UNAVAILABLE,
         orphan_linkage=Availability.UNAVAILABLE,
         orphan_adjudication=Availability.UNAVAILABLE,
@@ -378,6 +394,7 @@ WP_PROFILE = PublicationProfile(
             ),
         ),
         geocoder=Just(GeocoderProviderKey("mar")),
+        geocoder_cache_tables=GeocoderCacheTables("mar_cache", "mar_addr_map"),
         external_homicide_scope=ExternalHomicideScope(
             "SHR records scoped to DC and the WP incident range"
         ),
@@ -451,7 +468,10 @@ NYT_PROFILE = PublicationProfile(
                 )
             ),
         ),
-        geocoder=Nothing,
+        geocoder=Just(GeocoderProviderKey("stanford_arcgis")),
+        geocoder_cache_tables=GeocoderCacheTables(
+            "arcgis_cache", "arcgis_addr_map"
+        ),
         external_homicide_scope=ExternalHomicideScope(
             "SHR records scoped to NYC and the NYT incident range; exact record "
             "selection remains unresolved until Step 17"

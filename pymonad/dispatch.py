@@ -7,7 +7,13 @@ from pathlib import Path
 from typing import Callable
 import time
 
-from .geocode import GeocodeResult, MarGeocode, mar_geocode_handler
+from .geocode import (
+    GeocodeResult,
+    MarGeocode,
+    StanfordArcGISGeocode,
+    mar_geocode_handler,
+    stanford_arcgis_geocode_handler,
+)
 
 from .monad import Unit, unit
 from .string import String
@@ -97,6 +103,11 @@ def _getline(x: GetLine) -> String:
 @intentdef(MarGeocode)
 def _mar_geocode(x: MarGeocode) -> GeocodeResult:
     return mar_geocode_handler(x)
+
+
+@intentdef(StanfordArcGISGeocode)
+def _stanford_arcgis_geocode(x: StanfordArcGISGeocode) -> GeocodeResult:
+    return stanford_arcgis_geocode_handler(x)
 
 
 @intentdef(Sleep)

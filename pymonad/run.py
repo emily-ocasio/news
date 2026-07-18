@@ -13,7 +13,7 @@ from typing import cast, Any, Generic, TypeVar
 
 from .applicative import Applicative
 from .array import Array
-from .dispatch import GetLine, PutLine, InputPrompt, MarGeocode, Sleep, \
+from .dispatch import GetLine, PutLine, InputPrompt, MarGeocode, StanfordArcGISGeocode, Sleep, \
     GeocodeResult, FileExists, RenameFile, MonotonicNow
 from .either import Either, Left, Right
 from .environment import Environment, Namespace, PromptKey, AllPrompts, \
@@ -301,6 +301,11 @@ def get_line(prompt: InputPrompt) -> Run[String]:
 def geocode_address(address: str, mar_key: str) -> Run[GeocodeResult]:
     """Create a Run action to geocode an address via MAR."""
     return Run(lambda self: self._perform(MarGeocode(address, mar_key), self), \
+               _unhandled)
+
+def geocode_arcgis_address(address: str) -> Run[GeocodeResult]:
+    """Create a Run action to geocode an address via Stanford ArcGIS."""
+    return Run(lambda self: self._perform(StanfordArcGISGeocode(address), self), \
                _unhandled)
 
 def sleep_ms(ms: int) -> Run[None]:

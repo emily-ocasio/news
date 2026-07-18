@@ -73,6 +73,13 @@ class MarGeocode:
     # You can add optional params here if needed (e.g., preferScoreMin, etc.)
 
 
+@dataclass(frozen=True)
+class StanfordArcGISGeocode:
+    """Effect: Geocode a location through Stanford's ArcGIS service."""
+
+    address: str
+
+
 def mar_result_type(j: dict) -> AddressResultType:
     """Determine the result type from MAR geocode JSON response."""
     success = j.get("Success", False)
@@ -140,6 +147,54 @@ def mar_result_type_with_input(addr_key: str, j: dict) -> AddressResultType:
     ):
         return AddressResultType.UNRECOGNIZED_PLACE
     return derived
+
+
+def arcgis_result_type_with_input(addr_key: str, j: dict) -> AddressResultType:
+    """Map ArcGIS ``Addr_Type`` to the project's MAR-compatible categories."""
+    candidates = j.get("candidates", [])
+    if not candidates:
+        base_guess = addr_key_type(addr_key)
+        if base_guess == AddressResultType.BLOCK:
+            return AddressResultType.NO_RESULT_BLOCK
+        if base_guess == AddressResultType.INTERSECTION:
+            return AddressResultType.NO_RESULT_INTERSECTION
+        if base_guess == AddressResultType.ADDRESS:
+            return AddressResultType.NO_RESULT_ADDRESS
+        if base_guess == AddressResultType.STREET_ONLY:
+            return AddressResultType.NO_RESULT_STREET_ONLY
+        return AddressResultType.NO_RESULT
+
+    native_type = str(
+        candidates[0].get("attributes", {}).get("Addr_Type", "")
+    ).strip().lower()
+    if native_type in {"intersection", "streetintersection", "streetint"}:
+        return AddressResultType.INTERSECTION
+    if native_type in {"streetname", "street", "streetonly"}:
+        return AddressResultType.STREET_ONLY
+    if native_type in {"block", "addressrange", "streetaddressrange"}:
+        return AddressResultType.BLOCK
+    if native_type in {"poi", "locality", "postal", "admin", "place"}:
+        return AddressResultType.NAMED_PLACE
+
+    input_type = addr_key_type(addr_key)
+    if input_type in (
+        AddressResultType.BLOCK,
+        AddressResultType.INTERSECTION,
+        AddressResultType.STREET_ONLY,
+    ):
+        return input_type
+    return AddressResultType.ADDRESS
+
+
+def arcgis_result_score(j: dict) -> float:
+    """Return ArcGIS's native top-candidate score."""
+    candidates = j.get("candidates", [])
+    if not candidates:
+        return 0
+    try:
+        return float(candidates[0].get("score", 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 def mar_result_score(j: dict) -> float:
@@ -402,3 +457,60 @@ def mar_geocode_handler(x: MarGeocode) -> GeocodeResult:
             y_lat=0,
             raw_json={"message": f"parse_error: {str(e)}"},
         )
+
+
+def stanford_arcgis_geocode_handler(x: StanfordArcGISGeocode) -> GeocodeResult:
+    """Call Stanford's ArcGIS findAddressCandidates endpoint."""
+    url = (
+        "https://locator.stanford.edu/arcgis/rest/services/geocode/USA/"
+        "GeocodeServer/findAddressCandidates"
+    )
+    params = {
+        "SingleLine": f"{x.address}, New York",
+        "forStorage": "true",
+        "outFields": "Addr_Type",
+        "f": "json",
+    }
+    try:
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+        payload = response.json()
+    except requests.exceptions.RequestException as exc:
+        return GeocodeResult(
+            ok=False,
+            normalized_input=params["SingleLine"],
+            matched_address="",
+            x_lon=0,
+            y_lat=0,
+            raw_json={"message": f"network_error: {str(exc)}"},
+        )
+    except (json.JSONDecodeError, ValueError) as exc:
+        return GeocodeResult(
+            ok=False,
+            normalized_input=params["SingleLine"],
+            matched_address="",
+            x_lon=0,
+            y_lat=0,
+            raw_json={"message": f"invalid_json: {str(exc)}"},
+        )
+
+    candidates = payload.get("candidates", [])
+    if not candidates:
+        return GeocodeResult(
+            ok=False,
+            normalized_input=params["SingleLine"],
+            matched_address="",
+            x_lon=0,
+            y_lat=0,
+            raw_json=payload,
+        )
+    candidate = candidates[0]
+    location = candidate.get("location", {})
+    return GeocodeResult(
+        ok=True,
+        normalized_input=params["SingleLine"],
+        matched_address=str(candidate.get("address", "")),
+        x_lon=float(location.get("x", 0)),
+        y_lat=float(location.get("y", 0)),
+        raw_json=payload,
+    )

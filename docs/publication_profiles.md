@@ -48,7 +48,7 @@ not fill unresolved fields with silent defaults.
 | Target geography | District of Columbia municipal boundary | New York City's five boroughs |
 | Classification GPT capability | Existing WP configuration | Unavailable pending Step 8 |
 | Extraction GPT capability | Existing WP configuration | Configured; pending manual validation |
-| Geocoder | Existing MAR provider | Unavailable pending Step 12 |
+| Geocoder | Existing MAR provider | Stanford ArcGIS Locator Service |
 | External homicide reference | SHR records scoped to DC and the WP incident range | SHR records scoped to NYC and the NYT incident range |
 | SQLite incident-staging table | `articles_wp_subset` | `articles_nyt_subset` |
 | Derived DuckDB namespace | `derived/wp/news.duckdb` | `derived/nyt/news.duckdb` |
@@ -207,9 +207,13 @@ default.
 ## Geocoding
 
 - Washington Post/DC geocoding continues to use the existing MAR provider.
-- The New York Times/NYC provider remains unresolved until Step 12.
-- Stanford Locator Service is the current candidate for NYC and may eventually
-  support all locations.
+- The New York Times/NYC provider is Stanford's ArcGIS Locator Service at
+  `https://locator.stanford.edu/arcgis/rest/services/geocode/USA/GeocodeServer/findAddressCandidates`.
+- NYT geocoding requests append `, New York` to the extracted location and use
+  `forStorage=true`, `outFields=Addr_Type`, and `f=json`.
+- Provider-specific cache table names are selected by the active profile:
+  WP uses `mar_cache`/`mar_addr_map`; NYT uses
+  `arcgis_cache`/`arcgis_addr_map`.
 - There is no present requirement to retrofit existing Washington Post results
   to Stanford Locator Service or to replace their MAR-derived geocodes.
 
@@ -276,7 +280,7 @@ not silently execute WP behavior or access WP resources.
 | --- | --- | ---: |
 | NYT classification prompt, model, and schema | Unavailable; no WP fallback | 8 |
 | NYT extraction prompt, model, and schema | Resolved; manual validation pending | 10 |
-| NYC geocoding provider | Stanford Locator Service is the current candidate | 12 |
+| NYC geocoding provider | Stanford ArcGIS Locator Service | 12 |
 | Exact NYC SHR record-selection rules | Intended scope is all and only NYC homicides | 17 |
 
 These are controlled unresolved requirements. They must remain visible in the

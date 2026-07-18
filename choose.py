@@ -38,7 +38,7 @@ initial_prompts = (
     "Candidate [V]ictim list",
     "Compute vector similarity [X]",
     "Build [I]ncident views (DuckDB)",
-    "Run [M]AR geocoding (addresses)",
+    "Run [M]AR/ArcGIS geocoding (addresses)",
     "Run [D]edup incidents (Splink)",
     "Splink [C]harts (latest dedupe/linkage)",
     "Match [U]nnamed victims (Splink)",

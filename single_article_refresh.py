@@ -33,8 +33,11 @@ from pymonad import (
     Unit,
     ask,
     geocode_address,
+    geocode_arcgis_address,
     mar_result_score,
     mar_result_type_with_input,
+    arcgis_result_type_with_input,
+    arcgis_result_score,
     pure,
     put_line,
     sql_exec,
@@ -48,6 +51,7 @@ from pymonad import (
 )
 from pymonad.traverse import array_traverse_run
 from orphan_adjudication_controller import E2E_CACHE_STAGE
+from publication_profiles import Availability
 
 
 def _looks_like_missing_base_table_error(err: object) -> bool:
@@ -484,6 +488,15 @@ def _refresh_duckdb_victims_for_article(record_id: int) -> Run[Unit]:
     )
 
 
+def _provider_sql(env: Environment, template: SQL) -> SQL:
+    tables = env["publication_profile"].policies.geocoder_cache_tables
+    return SQL(
+        str(template)
+        .replace("mar_cache", tables.cache)
+        .replace("mar_addr_map", tables.address_map)
+    )
+
+
 def _upsert_geocode_cache_for_addr(env: Environment, addr_raw: str) -> Run[Unit]:
     addr_key = (addr_raw or "").strip().upper()
     if addr_key == "":
@@ -493,28 +506,40 @@ def _upsert_geocode_cache_for_addr(env: Environment, addr_raw: str) -> Run[Unit]
         if len(rows) > 0:
             return pure(unit)
 
-        return (
+        provider = str(env["publication_profile"].geocoder_provider)
+        request = (
             geocode_address(addr_key, env["mar_key"])
-            >> (lambda g: _insert_geocode_result(addr_key, g))
+            if provider == "mar"
+            else geocode_arcgis_address(addr_key)
         )
+        return request >> (lambda g: _insert_geocode_result(env, addr_key, g))
 
     return (
         sql_exec(
-            INSERT_ADDR_MAP_SQL,
+            _provider_sql(env, INSERT_ADDR_MAP_SQL),
             SQLParams((String(addr_raw), String(addr_key))),
         )
-        ^ sql_query(CACHE_GET_SQL, SQLParams((String(addr_key),)))
+        ^ sql_query(_provider_sql(env, CACHE_GET_SQL), SQLParams((String(addr_key),)))
         >> _handle_cached
     )
 
 
-def _insert_geocode_result(addr_key: str, g) -> Run[Unit]:
-    result_type = mar_result_type_with_input(addr_key, g.raw_json).value
-    score_value = mar_result_score(g.raw_json)
+def _insert_geocode_result(env: Environment, addr_key: str, g) -> Run[Unit]:
+    provider = str(env["publication_profile"].geocoder_provider)
+    result_type = (
+        mar_result_type_with_input(addr_key, g.raw_json).value
+        if provider == "mar"
+        else arcgis_result_type_with_input(addr_key, g.raw_json).value
+    )
+    score_value = (
+        mar_result_score(g.raw_json)
+        if provider == "mar"
+        else arcgis_result_score(g.raw_json)
+    )
     if g.ok:
         return (
             sql_exec(
-                INSERT_CACHE_SQL,
+                _provider_sql(env, INSERT_CACHE_SQL),
                 SQLParams(
                     (
                         String(addr_key),
@@ -551,9 +576,9 @@ def _insert_geocode_result(addr_key: str, g) -> Run[Unit]:
 def _refresh_duckdb_geocode_for_article(env: Environment, record_id: int) -> Run[Unit]:
     def _run_core() -> Run[Unit]:
         return (
-            sql_exec(CREATE_CACHE_SQL)
-            ^ sql_exec(CREATE_ADDR_MAP_SQL)
-            ^ sql_exec(ALTER_CACHE_SQL)
+            sql_exec(_provider_sql(env, CREATE_CACHE_SQL))
+            ^ sql_exec(_provider_sql(env, CREATE_ADDR_MAP_SQL))
+            ^ sql_exec(_provider_sql(env, ALTER_CACHE_SQL))
             ^ sql_query(
                 SQL(
                     """
@@ -579,7 +604,7 @@ def _refresh_duckdb_geocode_for_article(env: Environment, record_id: int) -> Run
                     ^ pure(Array.mempty())
                 )
             )
-            ^ sql_exec(CREATE_GEOCODED_VIEW_SQL)
+            ^ sql_exec(_provider_sql(env, CREATE_GEOCODED_VIEW_SQL))
             ^ sql_exec(
                 SQL(
                     """
@@ -707,7 +732,9 @@ def _delete_article_rows_if_exists(table_name: str, record_id: int) -> Run[Unit]
     )
 
 
-def _purge_duckdb_for_non_m_article(record_id: int, run_id: str) -> Run[Unit]:
+def _purge_duckdb_for_non_m_article(
+    env: Environment, record_id: int, run_id: str
+) -> Run[Unit]:
     return (
         put_line(
             f"[F] Article {record_id} no longer in active classified/M scope; "
@@ -716,7 +743,7 @@ def _purge_duckdb_for_non_m_article(record_id: int, run_id: str) -> Run[Unit]:
         ^ _delete_article_rows_if_exists("incidents_cached", record_id)
         ^ _delete_article_rows_if_exists("victims_cached", record_id)
         ^ _delete_article_rows_if_exists("victims_cached_enh", record_id)
-        ^ _invalidate_adjudications_for_article(record_id, run_id)
+        ^ _invalidate_adjudications_for_article(env, record_id, run_id)
         ^ pure(unit)
     )
 
@@ -738,7 +765,18 @@ def _ensure_splink_udfs_loaded() -> Run[None]:
     )
 
 
-def _invalidate_adjudications_for_article(record_id: int, run_id: str) -> Run[Unit]:
+def _invalidate_adjudications_for_article(
+    env: Environment, record_id: int, run_id: str
+) -> Run[Unit]:
+    if (
+        env["publication_profile"].capabilities.orphan_adjudication
+        is not Availability.AVAILABLE
+    ):
+        return put_line(
+            "[F] Skipping adjudication cache invalidation: orphan adjudication "
+            f"is unavailable for {env['publication_profile'].display_name}."
+        ) ^ pure(unit)
+
     rec_id_s = str(record_id)
     rec_prefix = String(f"{rec_id_s}:%")
 
@@ -830,7 +868,7 @@ def _refresh_duckdb_for_article(env: Environment, record_id: int, run_id: str) -
             ^ _refresh_duckdb_geocode_for_article(env, record_id)
             ^ _ensure_splink_udfs_loaded()
             ^ _refresh_duckdb_victims_enh_for_article(record_id)
-            ^ _invalidate_adjudications_for_article(record_id, run_id)
+            ^ _invalidate_adjudications_for_article(env, record_id, run_id)
             ^ pure(unit)
         )
 
@@ -861,7 +899,7 @@ def refresh_single_article_after_extract(record_id: int) -> Run[Unit]:
                 lambda env: (
                     _refresh_duckdb_for_article(env, record_id, run_id)
                     if scope_ok
-                    else _purge_duckdb_for_non_m_article(record_id, run_id)
+                    else _purge_duckdb_for_non_m_article(env, record_id, run_id)
                 )
             )
         )

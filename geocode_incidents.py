@@ -16,6 +16,7 @@ from pymonad import (
     ask,
     SQLParams,
     geocode_address,
+    geocode_arcgis_address,
     GeocodeResult,
     String,
     process_items,
@@ -25,6 +26,8 @@ from pymonad import (
     addr_key_type,
     mar_result_type_with_input,
     mar_result_score,
+    arcgis_result_type_with_input,
+    arcgis_result_score,
     FailureType,
     throw,
     ErrorPayload,
@@ -273,6 +276,26 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
     - Builds view stg_article_incidents_geo
     """
 
+    profile = env["publication_profile"]
+    provider = str(profile.geocoder_provider)
+    cache_table = profile.policies.geocoder_cache_tables.cache
+    address_map_table = profile.policies.geocoder_cache_tables.address_map
+
+    def provider_sql(template: SQL) -> SQL:
+        return SQL(
+            str(template)
+            .replace("mar_cache", cache_table)
+            .replace("mar_addr_map", address_map_table)
+        )
+
+    create_cache_sql = provider_sql(CREATE_CACHE_SQL)
+    create_addr_map_sql = provider_sql(CREATE_ADDR_MAP_SQL)
+    alter_cache_sql = provider_sql(ALTER_CACHE_SQL)
+    cache_get_sql = provider_sql(CACHE_GET_SQL)
+    insert_cache_sql = provider_sql(INSERT_CACHE_SQL)
+    insert_addr_map_sql = provider_sql(INSERT_ADDR_MAP_SQL)
+    create_view_sql = provider_sql(CREATE_GEOCODED_VIEW_SQL)
+
     def _process_rows(rows: Array[dict]) -> Run[None]:
         """
         Geocode all addresses using applicative traversal:
@@ -285,6 +308,13 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
         def cache_result_type(
             raw_json_value: object, addr_key: str
         ) -> AddressResultType:
+            if provider == "stanford_arcgis":
+                try:
+                    return arcgis_result_type_with_input(
+                        addr_key, json.loads(str(raw_json_value or "{}"))
+                    )
+                except (json.JSONDecodeError, TypeError):
+                    return AddressResultType.NO_RESULT
             if isinstance(raw_json_value, str):
                 try:
                     parsed = json.loads(raw_json_value or "{}")
@@ -297,6 +327,13 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
             return mar_result_type_with_input(addr_key, parsed)
 
         def cache_result_score(raw_json_value: object) -> float:
+            if provider == "stanford_arcgis":
+                try:
+                    return arcgis_result_score(
+                        json.loads(str(raw_json_value or "{}"))
+                    )
+                except (json.JSONDecodeError, TypeError):
+                    return 0
             if isinstance(raw_json_value, str):
                 try:
                     parsed = json.loads(raw_json_value or "{}")
@@ -338,7 +375,11 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
         # article_ids is a CSV of distinct article IDs for that address
         addr_items: Array[tuple[str, str, str]] = (
             lambda r: (
-                normalize_for_mar(cast(str, r["addr_raw"])),
+                (
+                    normalize_for_mar(cast(str, r["addr_raw"]))
+                    if provider == "mar"
+                    else cast(str, r["addr_raw"]).strip()
+                ),
                 cast(str, r.get("article_ids") or ""),
                 cast(str, r["addr_raw"]),
             )
@@ -371,7 +412,7 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
             addr_key, article_ids, addr_raw = item
             def upsert_addr_map() -> Run[None]:
                 return sql_exec(
-                    INSERT_ADDR_MAP_SQL,
+                    insert_addr_map_sql,
                     SQLParams((String(addr_raw), String(addr_key))),
                 ) ^ pure(None)
             if addr_key.lower() == "unknown":
@@ -382,7 +423,7 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
                         f" {addr_key} articles={article_ids}"
                     )
                     ^ sql_exec(
-                        INSERT_CACHE_SQL,
+                        insert_cache_sql,
                         SQLParams(
                             (
                                 String(addr_key),
@@ -399,12 +440,22 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
                 )
             else:
                 def handle_mar(g: GeocodeResult) -> Run[None]:
-                    address_type = mar_result_type_with_input(addr_key, g.raw_json).value
-                    geo_score = mar_result_score(g.raw_json)
+                    address_type = (
+                        mar_result_type_with_input(addr_key, g.raw_json).value
+                        if provider == "mar"
+                        else arcgis_result_type_with_input(
+                            addr_key, g.raw_json
+                        ).value
+                    )
+                    geo_score = (
+                        mar_result_score(g.raw_json)
+                        if provider == "mar"
+                        else arcgis_result_score(g.raw_json)
+                    )
                     if g.ok:
                         return (
                             sql_exec(
-                                INSERT_CACHE_SQL,
+                                insert_cache_sql,
                                 SQLParams(
                                     (
                                         String(addr_key),
@@ -418,7 +469,7 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
                                 ),
                             )
                             ^ put_line(
-                                "[GEO] MAR response OK, matched address:"
+                                f"[GEO] {provider} response OK, matched address:"
                                 f" {g.matched_address} articles={article_ids}"
                             )
                             ^ pure(None)
@@ -426,7 +477,7 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
                     if g.raw_json.get("message") == "No Result present":
                         return (
                             sql_exec(
-                                INSERT_CACHE_SQL,
+                                insert_cache_sql,
                                 SQLParams(
                                     (
                                         String(addr_key),
@@ -447,7 +498,7 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
                         )
                     return (
                         put_line(
-                            "[GEO] MAR transient failure for"
+                            f"[GEO] {provider} transient failure for"
                             f" {addr_key} articles={article_ids}: {g}"
                         )
                         ^ throw(
@@ -458,19 +509,23 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
                         )
                     )
 
-                def request_mar() -> Run[None]:
+                def request_provider() -> Run[None]:
                     return (
                         upsert_addr_map()
                         ^ put_line(
-                            f"[GEO] MAR request: {addr_key} articles={article_ids}"
+                            f"[GEO] {provider} request: {addr_key} articles={article_ids}"
                         )
-                        ^ geocode_address(addr_key, env["mar_key"])
+                        ^ (
+                            geocode_address(addr_key, env["mar_key"])
+                            if provider == "mar"
+                            else geocode_arcgis_address(addr_key)
+                        )
                         >> handle_mar
                     )
 
                 def handle_cache(rs: Array) -> Run[None]:
                     if len(rs) == 0:
-                        return upsert_addr_map() ^ request_mar()
+                        return upsert_addr_map() ^ request_provider()
                     debug_run = (
                         put_line(
                             "[GEO][DEBUG] block normalization: "
@@ -493,7 +548,7 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
                             (
                                 sql_exec(
                                     SQL(
-                                        "UPDATE mar_cache SET address_type = ?, geo_score = ? WHERE input_address = ?;"
+                                        f"UPDATE {cache_table} SET address_type = ?, geo_score = ? WHERE input_address = ?;"
                                     ),
                                     SQLParams((String(type_value.value), score_value, String(addr_key))),
                                 )
@@ -535,7 +590,7 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
                                         addr_key,
                                     )
                                 )
-                                ^ request_mar()
+                                ^ request_provider()
                             )
                         if type_value in (
                             AddressResultType.STREET_ONLY,
@@ -548,7 +603,7 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
                                     f"{addr_key} type={type_value.value} "
                                     f"score={score_value} articles={article_ids}"
                                 )
-                                ^ request_mar()
+                                ^ request_provider()
                             )
                         if should_bypass_cache(rs, addr_key):
                             if (
@@ -578,7 +633,7 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
                                             addr_key,
                                         )
                                     )
-                                    ^ request_mar()
+                                    ^ request_provider()
                                 )
                             return (
                                 debug_run
@@ -595,7 +650,7 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
                                         addr_key,
                                     )
                                 )
-                                ^ request_mar()
+                                ^ request_provider()
                             )
                         if (
                             matched_is_missing
@@ -614,7 +669,7 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
                                         addr_key,
                                     )
                                 )
-                                ^ request_mar()
+                                ^ request_provider()
                             )
                         if (
                             matched_is_missing
@@ -665,19 +720,23 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
                         return (
                             sql_exec(
                                 SQL(
-                                    "UPDATE mar_cache SET geo_score = ? WHERE input_address = ?;"
+                                    f"UPDATE {cache_table} SET geo_score = ? WHERE input_address = ?;"
                                 ),
                                 SQLParams((score_value, String(addr_key))),
                             )
                             if cached_score_value is None
                             else pure(unit)
-                        ) ^ proceed(AddressResultType(str(cached_type_value)))
+                        ) ^ proceed(
+                            cache_result_type(raw_json_value, addr_key)
+                            if provider == "stanford_arcgis"
+                            else AddressResultType(str(cached_type_value))
+                        )
 
                     computed_type = cache_result_type(raw_json_value, addr_key)
                     return (
                         sql_exec(
                             SQL(
-                                "UPDATE mar_cache SET address_type = ?, geo_score = ? WHERE input_address = ?;"
+                                f"UPDATE {cache_table} SET address_type = ?, geo_score = ? WHERE input_address = ?;"
                             ),
                             SQLParams((String(computed_type.value), score_value, String(addr_key))),
                         )
@@ -686,7 +745,7 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
 
                 return (
                     upsert_addr_map()
-                    ^ sql_query(CACHE_GET_SQL, SQLParams((String(addr_key),)))
+                    ^ sql_query(cache_get_sql, SQLParams((String(addr_key),)))
                     >> handle_cache
                 )
 
@@ -718,9 +777,9 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
         sql_script(SQL(r"""
             LOAD splink_udfs;
         """)) ^
-        sql_exec(CREATE_CACHE_SQL)
-        ^ sql_exec(CREATE_ADDR_MAP_SQL)
-        ^ sql_exec(ALTER_CACHE_SQL)
+        sql_exec(create_cache_sql)
+        ^ sql_exec(create_addr_map_sql)
+        ^ sql_exec(alter_cache_sql)
         ^ put_line(
             f"[GEO] Address normalization version: {ADDRESS_NORMALIZATION_VERSION}"
         )
@@ -729,7 +788,7 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
             lambda rows: put_line(f"[GEO] Found {len(rows)} distinct raw addresses.")
             ^ _process_rows(Array(tuple(rows)))
         )
-        ^ sql_exec(CREATE_GEOCODED_VIEW_SQL)
+        ^ sql_exec(create_view_sql)
         ^ put_line("[GEO] Built view stg_article_incidents_geo.")
         ^ sql_exec(
             SQL(
