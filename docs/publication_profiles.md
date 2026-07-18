@@ -47,7 +47,7 @@ not fill unresolved fields with silent defaults.
 | First-filter policy | Preserve existing WP behavior | Use the same policy with NYC-specific location evidence |
 | Target geography | District of Columbia municipal boundary | New York City's five boroughs |
 | Classification GPT capability | Existing WP configuration | Unavailable pending Step 8 |
-| Extraction GPT capability | Existing WP configuration | Unavailable pending Step 10 |
+| Extraction GPT capability | Existing WP configuration | Configured; pending manual validation |
 | Geocoder | Existing MAR provider | Unavailable pending Step 12 |
 | External homicide reference | SHR records scoped to DC and the WP incident range | SHR records scoped to NYC and the NYT incident range |
 | Derived DuckDB namespace | `derived/wp/news.duckdb` | `derived/nyt/news.duckdb` |
@@ -188,9 +188,20 @@ until a separately agreed change is made.
   existing publication-neutral workflow codes.
 - Validation is performed manually by the project owner.
 
-The extraction prompt, model, and response schema remain deliberately
-unresolved until Step 10. The application must not reuse WP GPT configuration
-as an implicit NYT default.
+### New York Times extraction
+
+- Prompt key: `extract_incidents_nyc`.
+- Hosted prompt ID:
+  `pmpt_6a594f1449f08190b653de53875d1e040524f9eaba100ec4`.
+- Model: `gpt-5-mini`.
+- Response schema: `ArticleIncidentExtraction`.
+- Validation is performed manually by the project owner.
+
+NYT extraction is available for GPT extraction and the `[F]` controller's `[G]`
+action. Because NYT incident staging is still unavailable, `[F]` `[G]` saves
+the extraction result but skips the post-extraction derived-data refresh. The
+application must not reuse WP refresh or geocoding behavior as an implicit NYT
+default.
 
 ## Geocoding
 
@@ -234,12 +245,11 @@ application. The NYT profile begins with publication-specific pipeline
 capabilities unavailable. Each capability becomes operational only when its
 corresponding implementation stage passes its acceptance gate.
 
-Unavailable NYT capabilities include, initially:
+Unavailable NYT capabilities currently include:
 
 - Article selection and workflow transitions.
 - First filtering.
 - GPT classification.
-- Incident extraction.
 - Incident staging.
 - Geocoding.
 - Named-victim deduplication.
@@ -256,7 +266,7 @@ not silently execute WP behavior or access WP resources.
 | Field | Current position | Resolution stage |
 | --- | --- | ---: |
 | NYT classification prompt, model, and schema | Unavailable; no WP fallback | 8 |
-| NYT extraction prompt, model, and schema | Unavailable; no WP fallback | 10 |
+| NYT extraction prompt, model, and schema | Resolved; manual validation pending | 10 |
 | NYC geocoding provider | Stanford Locator Service is the current candidate | 12 |
 | Exact NYC SHR record-selection rules | Intended scope is all and only NYC homicides | 17 |
 

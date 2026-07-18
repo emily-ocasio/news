@@ -302,12 +302,12 @@ def _capabilities(availability: Availability) -> PublicationCapabilities:
 
 
 def _nyt_capabilities() -> PublicationCapabilities:
-    """NYT capabilities available through the first-filter stage."""
+    """NYT capabilities available through the extraction stage."""
     return PublicationCapabilities(
         article_selection=Availability.AVAILABLE,
         first_filter=Availability.AVAILABLE,
         gpt_classification=Availability.AVAILABLE,
-        incident_extraction=Availability.UNAVAILABLE,
+        incident_extraction=Availability.AVAILABLE,
         incident_staging=Availability.UNAVAILABLE,
         geocoding=Availability.UNAVAILABLE,
         named_victim_deduplication=Availability.UNAVAILABLE,
@@ -434,7 +434,16 @@ NYT_PROFILE = PublicationProfile(
                     ),
                 )
             ),
-            extraction=Nothing,
+            extraction=Just(
+                GPTConfiguration(
+                    GPTPromptKey("extract_incidents_nyc"),
+                    HostedPromptId(
+                        "pmpt_6a594f1449f08190b653de53875d1e040524f9eaba100ec4"
+                    ),
+                    GPTModelName("gpt-5-mini"),
+                    ResponseSchemaName("ArticleIncidentExtraction"),
+                )
+            ),
         ),
         geocoder=Nothing,
         external_homicide_scope=ExternalHomicideScope(

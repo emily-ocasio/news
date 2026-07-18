@@ -487,16 +487,27 @@ def _apply_action(
     """
     def _post_extract_refresh() -> Run[None]:
         record_id = article.record_id or 0
-        return run_except(refresh_single_article_after_extract(record_id)) >> (
-            lambda res: (
-                put_line(
-                    "[F] Warning: post-[G] single-article refresh failed: "
-                    f"{res.l}"
+        def _refresh_for_profile(env: Environment) -> Run[None]:
+            if (
+                env["publication_profile"].capabilities.incident_staging
+                is not Availability.AVAILABLE
+            ):
+                return put_line(
+                    "[F] Skipping post-[G] single-article refresh: "
+                    "incident staging is unavailable for the active publication."
+                ) ^ pure(None)
+            return run_except(refresh_single_article_after_extract(record_id)) >> (
+                lambda res: (
+                    put_line(
+                        "[F] Warning: post-[G] single-article refresh failed: "
+                        f"{res.l}"
+                    )
+                    if isinstance(res, Left)
+                    else pure(None)
                 )
-                if isinstance(res, Left)
-                else pure(None)
             )
-        )
+
+        return ask() >> _refresh_for_profile
 
     def _run_forced_article_adjudication_refresh() -> Run[NextStep]:
         record_id = article.record_id or 0
