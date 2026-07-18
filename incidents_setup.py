@@ -24,6 +24,7 @@ from pymonad import (
 )
 from pymonad.traverse import array_traverse_run
 from menuprompts import NextStep
+from publication_profiles import PublicationProfile
 
 SUMMARY_EMBED_MODEL = EmbeddingModel.TEXT_EMBEDDING_3_SMALL
 SUMMARY_EMBED_DIM = 1536
@@ -549,8 +550,11 @@ VICTIMS_CACHED_ENH_SELECT_SQL = _extract_create_table_select_sql(
     "victims_cached_enh",
 )
 # --- Incident-level extraction & feature engineering ---
-CREATE_STG_ARTICLE_INCIDENTS_SQL = SQL(
-    """--sql
+def _create_stg_article_incidents_sql(profile: PublicationProfile) -> SQL:
+    staging_table = profile.resources.article_staging_table
+    start_year = str(profile.analytical_scope.incident_date_scope.start)[:4]
+    return SQL(
+        f"""--sql
 CREATE OR REPLACE VIEW stg_article_incidents AS
 WITH base AS (
   SELECT
@@ -578,7 +582,7 @@ WITH base AS (
     json_extract_string(i.value,'$.offender_ethnicity') AS offender_ethnicity,
     try_cast(json_extract_string(i.value,'$.victim_count') AS INTEGER) AS victim_count,
     json_extract_string(i.value,'$.summary')        AS summary
-  FROM sqldb.articles_wp_subset a
+  FROM sqldb.{staging_table} a
   CROSS JOIN json_each(
     CASE
       WHEN a.gptVictimJson IS NOT NULL AND a.gptVictimJson <> '' AND json_valid(a.gptVictimJson)
@@ -652,9 +656,9 @@ SELECT
   offender_sex, offender_race, offender_ethnicity,
   victim_count, summary, summary_norm
 FROM norm
-WHERE year_raw >= 1977;
+WHERE year_raw >= {start_year};
 """
-)
+    )
 
 CREATE_INCIDENTS_CACHED_SQL = SQL(
     """
@@ -685,33 +689,36 @@ def build_incident_views() -> Run[NextStep]:
     Requires env:
       Uses existing SQLite + DuckDB connections from the environment.
     """
-    return ask() >> (
-        lambda env:
+    def _build_for_profile(env: Environment) -> Run[NextStep]:
+        profile = env["publication_profile"]
+        staging_table = profile.resources.article_staging_table
+        classified_dataset = profile.policies.workflow_datasets.classified
+        publication_id = profile.identity.database_id.value
+        staging_sql = _create_stg_article_incidents_sql(profile)
+        return (
         # --- 1) Rebuild subset in SQLite
         # (this runs in the existing run_sql context) ---
-        # For now, just articles labeled 'M' in CLASS_WP
-        # which represents the articles from Washington Post
-        # in future, we will include other newspapers
-        # and set up city_id appropriately
-        put_line("[I] Rebuilding SQLite subset table articles_wp_subset…")
-        ^ sql_exec(SQL("DROP TABLE IF EXISTS articles_wp_subset;"))
+        put_line(f"[I] Rebuilding SQLite subset table {staging_table}…")
+        ^ sql_exec(SQL(f"DROP TABLE IF EXISTS {staging_table};"))
         ^ sql_exec(
             SQL(
-                """
-            CREATE TABLE articles_wp_subset AS
+                f"""
+            CREATE TABLE {staging_table} AS
             SELECT RecordId, Publication, PubDate, Title, FullText, gptVictimJson, LastUpdated
             FROM articles
-            WHERE Dataset='CLASS_WP' AND gptClass='M';
+            WHERE Publication={publication_id}
+              AND Dataset='{classified_dataset}'
+              AND gptClass='M';
         """
             )
         )
         ^ sql_exec(
             SQL(
-                "CREATE INDEX IF NOT EXISTS idx_articles_wp_subset_pk "
-                "ON articles_wp_subset(RecordId);"
+                f"CREATE INDEX IF NOT EXISTS idx_{staging_table}_pk "
+                f"ON {staging_table}(RecordId);"
             )
         )
-        ^ sql_query(SQL("SELECT COUNT(*) AS n FROM articles_wp_subset;"))
+        ^ sql_query(SQL(f"SELECT COUNT(*) AS n FROM {staging_table};"))
         >> (lambda rows: put_line(f"[I] SQLite subset rows: {rows[0]['n']}"))
         ^
         # --- 2) Build DuckDB view + materialized cache from the subset ---
@@ -726,7 +733,7 @@ def build_incident_views() -> Run[NextStep]:
                 """
                     )
                 )
-                ^ sql_script(CREATE_STG_ARTICLE_INCIDENTS_SQL)
+                ^ sql_script(staging_sql)
                 ^ sql_query(COUNT_VIEW_SQL)
                 >> (lambda rows: put_line(f"[I] View rows: {rows[0]['n']}"))
                 ^ sql_script(CREATE_INCIDENTS_CACHED_SQL)
@@ -770,4 +777,6 @@ def build_incident_views() -> Run[NextStep]:
         )
         ^ put_line("[I] Done.")
         ^ pure(NextStep.CONTINUE)
-    )
+        )
+
+    return ask() >> _build_for_profile

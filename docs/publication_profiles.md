@@ -50,6 +50,7 @@ not fill unresolved fields with silent defaults.
 | Extraction GPT capability | Existing WP configuration | Configured; pending manual validation |
 | Geocoder | Existing MAR provider | Unavailable pending Step 12 |
 | External homicide reference | SHR records scoped to DC and the WP incident range | SHR records scoped to NYC and the NYT incident range |
+| SQLite incident-staging table | `articles_wp_subset` | `articles_nyt_subset` |
 | Derived DuckDB namespace | `derived/wp/news.duckdb` | `derived/nyt/news.duckdb` |
 | Output namespace | `out/wp/` | `out/nyt/` |
 
@@ -229,11 +230,19 @@ substitution of a state predicate is not an acceptable default.
 
 - Raw source articles remain together in the shared SQLite database
   `newarticles.db` and are distinguished by publication ID.
+- SQLite maintains one publication-specific incident-staging table per profile.
+  This preserves indexed SQLite selection from the large raw `articles` table
+  before DuckDB reads the smaller staging table. The staging tables are
+  `articles_wp_subset` and `articles_nyt_subset`; each is rebuilt only by its
+  active profile.
 - Derived working data uses publication-specific DuckDB namespaces:
   `derived/wp/news.duckdb` and `derived/nyt/news.duckdb`.
 - Publication outputs use `out/wp/` and `out/nyt/`.
 - Caches, model artifacts, thresholds, predictions, clusters, orphan linkage,
   adjudications, and external-linkage results must not cross those boundaries.
+- Publication identity is enforced by the active profile, the profile-specific
+  SQLite staging table, and the publication-specific DuckDB namespace. Derived
+  tables do not require a separate per-row `publication_id` column.
 - A future combined Stata export may read finalized canonical outputs from
   both namespaces, while preserving publication and target-location
   provenance. It must not combine or rerun intermediate processing.

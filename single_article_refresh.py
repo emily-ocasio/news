@@ -64,42 +64,50 @@ def _looks_like_missing_base_table_error(err: object) -> bool:
         "victims_cached_enh",
         "llm_cache",
         "orphan_adj_cache_readiness",
-        "sqldb.articles_wp_subset",
+        "sqldb.articles_",
     )
     return any(m in msg for m in missing_markers) and any(
         t in msg for t in base_table_markers
     )
 
 
-def _refresh_sqlite_subset_row(record_id: int) -> Run[Unit]:
+def _refresh_sqlite_subset_row(
+    env: Environment, record_id: int
+) -> Run[Unit]:
+    profile = env["publication_profile"]
+    staging_table = profile.resources.article_staging_table
+    classified_dataset = profile.policies.workflow_datasets.classified
+    publication_id = profile.identity.database_id.value
+
     def _run_core() -> Run[Unit]:
         return (
             sql_exec(
-                SQL("DELETE FROM articles_wp_subset WHERE RecordId = ?;"),
+                SQL(f"DELETE FROM {staging_table} WHERE RecordId = ?;"),
                 SQLParams((record_id,)),
             )
             ^ sql_exec(
                 SQL(
-                    """
-                    INSERT INTO articles_wp_subset (
+                    f"""
+                    INSERT INTO {staging_table} (
                         RecordId, Publication, PubDate, Title, FullText, gptVictimJson, LastUpdated
                     )
                     SELECT RecordId, Publication, PubDate, Title, FullText, gptVictimJson, LastUpdated
                     FROM articles
                     WHERE RecordId = ?
-                      AND Dataset='CLASS_WP'
+                      AND Publication={publication_id}
+                      AND Dataset='{classified_dataset}'
                       AND gptClass='M';
                     """
                 ),
                 SQLParams((record_id,)),
             )
             ^ sql_query(
-                SQL("SELECT COUNT(*) AS n FROM articles_wp_subset WHERE RecordId = ?;"),
+                SQL(f"SELECT COUNT(*) AS n FROM {staging_table} WHERE RecordId = ?;"),
                 SQLParams((record_id,)),
             )
             >> (
                 lambda rows: put_line(
-                    "[F] Refreshed articles_wp_subset row "
+                    f"[F] Refreshed {staging_table} row "
                     f"for {record_id}: present={rows[0]['n']}"
                 )
                 ^ pure(unit)
@@ -109,7 +117,7 @@ def _refresh_sqlite_subset_row(record_id: int) -> Run[Unit]:
     return run_except(_run_core()) >> (
         lambda res: (
             (
-                put_line("[F] Skipped subset refresh: articles_wp_subset does not exist.")
+                put_line(f"[F] Skipped subset refresh: {staging_table} does not exist.")
                 if isinstance(res, Left)
                 else pure(None)
             )
@@ -118,15 +126,21 @@ def _refresh_sqlite_subset_row(record_id: int) -> Run[Unit]:
     )
 
 
-def _is_article_in_scope_for_incidents(record_id: int) -> Run[bool]:
+def _is_article_in_scope_for_incidents(
+    env: Environment, record_id: int
+) -> Run[bool]:
+    profile = env["publication_profile"]
+    classified_dataset = profile.policies.workflow_datasets.classified
+    publication_id = profile.identity.database_id.value
     return (
         sql_query(
             SQL(
-                """
+                f"""
                 SELECT COUNT(*) AS n
                 FROM articles
                 WHERE RecordId = ?
-                  AND Dataset='CLASS_WP'
+                  AND Publication={publication_id}
+                  AND Dataset='{classified_dataset}'
                   AND gptClass='M';
                 """
             ),
@@ -137,6 +151,9 @@ def _is_article_in_scope_for_incidents(record_id: int) -> Run[bool]:
 
 
 def _refresh_duckdb_incidents_for_article(env: Environment, record_id: int) -> Run[Unit]:
+    profile = env["publication_profile"]
+    staging_table = profile.resources.article_staging_table
+    start_year = str(profile.analytical_scope.incident_date_scope.start)[:4]
     return (
         put_line(f"[F] incidents refresh entry for article {record_id}.")
         ^ put_line(f"[F] incidents refresh step: ensure index on incidents_cached.article_id ({record_id})")
@@ -261,7 +278,7 @@ def _refresh_duckdb_incidents_for_article(env: Environment, record_id: int) -> R
                           json_extract_string(i.value,'$.offender_ethnicity') AS offender_ethnicity,
                           try_cast(json_extract_string(i.value,'$.victim_count') AS INTEGER) AS victim_count,
                           json_extract_string(i.value,'$.summary')        AS summary
-                        FROM sqldb.articles_wp_subset a
+                        FROM sqldb.{staging_table} a
                         CROSS JOIN json_each(
                           CASE
                             WHEN a.gptVictimJson IS NOT NULL
@@ -350,7 +367,7 @@ def _refresh_duckdb_incidents_for_article(env: Environment, record_id: int) -> R
                         offender_sex, offender_race, offender_ethnicity,
                         victim_count, summary, summary_norm
                       FROM norm
-                  WHERE year_raw >= 1977
+                  WHERE year_raw >= {start_year}
                 ) s;
                 """
             ),
@@ -379,7 +396,7 @@ def _refresh_duckdb_incidents_for_article(env: Environment, record_id: int) -> R
                     )
                     if len(rows) > 0
                     else put_line(
-                        "[F] No in-scope incidents (year >= 1977) "
+                        f"[F] No in-scope incidents (year >= {start_year}) "
                         f"for {record_id}; skipping summary vectorization."
                     )
                     ^ pure(unit)
@@ -693,7 +710,7 @@ def _delete_article_rows_if_exists(table_name: str, record_id: int) -> Run[Unit]
 def _purge_duckdb_for_non_m_article(record_id: int, run_id: str) -> Run[Unit]:
     return (
         put_line(
-            f"[F] Article {record_id} no longer in CLASS_WP/M scope; "
+            f"[F] Article {record_id} no longer in active classified/M scope; "
             "purging cached incident/geocode rows and invalidating adjudication caches."
         )
         ^ _delete_article_rows_if_exists("incidents_cached", record_id)
@@ -849,12 +866,19 @@ def refresh_single_article_after_extract(record_id: int) -> Run[Unit]:
             )
         )
 
-    return (
-        put_line(f"[F] Starting single-article post-[G] refresh for {record_id} (run_id={run_id})...")
-        ^ _refresh_sqlite_subset_row(record_id)
-        ^ put_line(f"[F] Entering DuckDB single-article refresh for {record_id}...")
-        ^ _is_article_in_scope_for_incidents(record_id)
-        >> _after_scope
-        ^ put_line(f"[F] Completed single-article post-[G] refresh for {record_id}.")
-        ^ pure(unit)
-    )
+    def _refresh_for_profile(env: Environment) -> Run[Unit]:
+        """Refresh one article using the active publication profile."""
+        return (
+            put_line(
+                f"[F] Starting single-article post-[G] refresh for {record_id} "
+                f"(run_id={run_id})..."
+            )
+            ^ _refresh_sqlite_subset_row(env, record_id)
+            ^ put_line(f"[F] Entering DuckDB single-article refresh for {record_id}...")
+            ^ _is_article_in_scope_for_incidents(env, record_id)
+            >> _after_scope
+            ^ put_line(f"[F] Completed single-article post-[G] refresh for {record_id}.")
+            ^ pure(unit)
+        )
+
+    return ask() >> _refresh_for_profile

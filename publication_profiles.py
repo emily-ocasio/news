@@ -59,6 +59,10 @@ class ClassifiedDataset(String):
     """Workflow dataset for classified articles."""
 
 
+class ArticleStagingTableName(String):
+    """SQLite table name used for one publication's incident staging."""
+
+
 class RawArticleDatabasePath(String):
     """Path to the shared raw-article SQLite database."""
 
@@ -172,6 +176,7 @@ class PublicationResources:
     """Resource paths selected for a publication session."""
 
     raw_article_database: RawArticleDatabasePath
+    article_staging_table: ArticleStagingTableName
     active_derived_database: ActiveDerivedDatabasePath
     canonical_derived_database: CanonicalDerivedDatabasePath
     output_namespace: OutputNamespacePath
@@ -308,7 +313,7 @@ def _nyt_capabilities() -> PublicationCapabilities:
         first_filter=Availability.AVAILABLE,
         gpt_classification=Availability.AVAILABLE,
         incident_extraction=Availability.AVAILABLE,
-        incident_staging=Availability.UNAVAILABLE,
+        incident_staging=Availability.AVAILABLE,
         geocoding=Availability.UNAVAILABLE,
         named_victim_deduplication=Availability.UNAVAILABLE,
         orphan_linkage=Availability.UNAVAILABLE,
@@ -380,6 +385,7 @@ WP_PROFILE = PublicationProfile(
     ),
     resources=PublicationResources(
         raw_article_database=RawArticleDatabasePath("newarticles.db"),
+        article_staging_table=ArticleStagingTableName("articles_wp_subset"),
         active_derived_database=ActiveDerivedDatabasePath(
             "derived/wp/news.duckdb"
         ),
@@ -454,6 +460,7 @@ NYT_PROFILE = PublicationProfile(
     ),
     resources=PublicationResources(
         raw_article_database=RawArticleDatabasePath("newarticles.db"),
+        article_staging_table=ArticleStagingTableName("articles_nyt_subset"),
         active_derived_database=ActiveDerivedDatabasePath(
             "derived/nyt/news.duckdb"
         ),
