@@ -21,6 +21,7 @@ from .geocode import (
     GeocodeResult,
     AddressResultType,
     addr_key_type,
+    addr_key_type_without_comma_suffix,
     mar_result_type,
     mar_result_score,
     address_result_type_for_score,

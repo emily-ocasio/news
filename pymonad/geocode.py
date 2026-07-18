@@ -49,9 +49,10 @@ def addr_key_type(addr_key: str) -> AddressResultType:
     upper = (addr_key or "").upper()
     street_type = r"(STREET|AVENUE|ROAD|PLACE|PLAZA|TERRACE|BOULEVARD|PARKWAY|HIGHWAY|DRIVE|COURT|LANE|CIRCLE|WAY|SQUARE)"
     quadrant = r"(NW|NE|SW|SE)"
-    street_addr = rf"^[0-9]+\s+.+\s+{street_type}(?:\s+{quadrant})?$"
+    house_number = r"[0-9]+(?:-[0-9]+)?"
+    street_addr = rf"^{house_number}\s+.+\s+{street_type}(?:\s+{quadrant})?$"
     street_only = rf"^.+\s+{street_type}(?:\s+{quadrant})?$"
-    block = rf"^[0-9]+\s+(BLOCK|BLK)\s+OF\s+.+\s+{street_type}(?:\s+{quadrant})?$"
+    block = rf"^{house_number}\s+(BLOCK|BLK)\s+OF\s+.+\s+{street_type}(?:\s+{quadrant})?$"
     intersection = rf".+\s+{street_type}(?:\s+{quadrant})?\s+(AND|&|AT)\s+.+\s+{street_type}(?:\s+{quadrant})?$"
     if re.match(block, upper):
         return AddressResultType.BLOCK
@@ -62,6 +63,12 @@ def addr_key_type(addr_key: str) -> AddressResultType:
     if re.match(street_only, upper):
         return AddressResultType.STREET_ONLY
     return AddressResultType.UNRECOGNIZED_PLACE
+
+
+def addr_key_type_without_comma_suffix(addr_key: str) -> AddressResultType:
+    """Classify an address after removing its comma-delimited locality suffix."""
+    heuristic_key = addr_key.split(",", 1)[0].strip()
+    return addr_key_type(heuristic_key)
 
 
 @dataclass(frozen=True)
@@ -104,7 +111,7 @@ def mar_result_type_with_input(addr_key: str, j: dict) -> AddressResultType:
     """Determine result type using input address plus MAR response."""
     base_type = mar_result_type(j)
     if base_type == AddressResultType.NO_SUCCESS or base_type == AddressResultType.NO_RESULT:
-        base_guess = addr_key_type(addr_key)
+        base_guess = addr_key_type_without_comma_suffix(addr_key)
         if base_guess == AddressResultType.BLOCK:
             return AddressResultType.NO_SUCCESS_BLOCK if base_type == AddressResultType.NO_SUCCESS else AddressResultType.NO_RESULT_BLOCK
         if base_guess == AddressResultType.INTERSECTION:
@@ -169,6 +176,14 @@ def arcgis_result_type_with_input(addr_key: str, j: dict) -> AddressResultType:
     ).strip().lower()
     if native_type in {"intersection", "streetintersection", "streetint"}:
         return AddressResultType.INTERSECTION
+    if native_type in {
+        "pointaddress",
+        "pointaddressint",
+        "streetaddress",
+        "streetaddressext",
+        "subaddress",
+    }:
+        return AddressResultType.ADDRESS
     if native_type in {"streetname", "street", "streetonly"}:
         return AddressResultType.STREET_ONLY
     if native_type in {"block", "addressrange", "streetaddressrange"}:
@@ -176,7 +191,7 @@ def arcgis_result_type_with_input(addr_key: str, j: dict) -> AddressResultType:
     if native_type in {"poi", "locality", "postal", "admin", "place"}:
         return AddressResultType.NAMED_PLACE
 
-    input_type = addr_key_type(addr_key)
+    input_type = addr_key_type_without_comma_suffix(addr_key)
     if input_type in (
         AddressResultType.BLOCK,
         AddressResultType.INTERSECTION,

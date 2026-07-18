@@ -24,6 +24,7 @@ from pymonad import (
     FailureDetails,
     AddressResultType,
     addr_key_type,
+    addr_key_type_without_comma_suffix,
     mar_result_type_with_input,
     mar_result_score,
     arcgis_result_type_with_input,
@@ -352,7 +353,11 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
             addr_key: str,
         ) -> str:
             if result_type == AddressResultType.ADDRESS:
-                if addr_key_type(addr_key) != AddressResultType.ADDRESS:
+                if (
+                    addr_key_type_without_comma_suffix(addr_key)
+                    if provider == "stanford_arcgis"
+                    else addr_key_type(addr_key)
+                ) != AddressResultType.ADDRESS:
                     labeled = msg if "type=" in msg else f"{msg} type={result_type.value}"
                     colored = f"\x1b[31m{labeled}\x1b[0m"
                     if "articles=" in msg:
@@ -575,7 +580,11 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
                     def proceed(type_value: AddressResultType) -> Run[None]:
                         if (
                             type_value == AddressResultType.ADDRESS
-                            and addr_key_type(addr_key)
+                            and (
+                                addr_key_type_without_comma_suffix(addr_key)
+                                if provider == "stanford_arcgis"
+                                else addr_key_type(addr_key)
+                            )
                             == AddressResultType.UNRECOGNIZED_PLACE
                         ):
                             return (
