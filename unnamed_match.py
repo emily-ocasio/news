@@ -16,12 +16,13 @@ from blocking import (
     with_orphan_article_exclusions,
 )
 
-from comparison import ORPHAN_COMPARISONS
+from comparison import ORPHAN_COMPARISONS, ORPHAN_COMPARISONS_NYT
 
 from menuprompts import NextStep, MenuPrompts, MenuChoice, input_from_menu
 from splink_types import SplinkType
 from cluster_compare import ClusterCompareRequest, compare_cluster_tables
-from publication_outputs import publication_sql_export
+from publication_outputs import publication_output_filename, publication_sql_export
+from publication_profiles import PublicationProfile
 from pymonad import (
     Environment,
     Run,
@@ -409,16 +410,16 @@ def _debug_preview_orphans() -> Run[Unit]:
         ^ pure(unit)
     )
 
-def _dedupe_model_path() -> Path:
+def _dedupe_model_path(profile: PublicationProfile) -> Path:
     key_str = str(SplinkType.DEDUP).replace("/", "_")
-    return Path("splink_models") / f"splink_model_{key_str}.json"
+    return Path("splink_models") / str(profile.key) / f"splink_model_{key_str}.json"
 
 
-def _load_dedupe_model_settings() -> Run[dict]:
+def _load_dedupe_model_settings(profile: PublicationProfile) -> Run[dict]:
     """
     Load the trained dedupe model settings from disk.
     """
-    model_path = _dedupe_model_path()
+    model_path = _dedupe_model_path(profile)
 
     def _load(_: bool) -> Run[dict]:
         try:
@@ -448,14 +449,20 @@ def _load_dedupe_model_settings() -> Run[dict]:
     )
 
 
-def _settings_for_orphan_linkage(comparisons: list) -> dict:
+def _orphan_comparisons(profile: PublicationProfile) -> list:
+    if str(profile.policies.splink_profile) == "nyt_nyc":
+        return ORPHAN_COMPARISONS_NYT
+    return ORPHAN_COMPARISONS
+
+
+def _settings_for_orphan_linkage(profile: PublicationProfile) -> dict:
     return {
         "link_type": "link_only",
         "unique_id_column_name": "unique_id",
         "blocking_rules_to_generate_predictions": with_orphan_article_exclusions(
             ORPHAN_VICTIM_BLOCKS
         ),
-        "comparisons": comparisons,
+        "comparisons": _orphan_comparisons(profile),
     }
 
 
@@ -474,7 +481,7 @@ def _settings_for_orphan_reuse(dedupe_settings: dict) -> dict:
 
 
 def _link_orphans_to_entities(
-    _: Environment,
+    env: Environment,
     *,
     reuse_model: bool,
 ) -> Run[Unit]:
@@ -513,7 +520,7 @@ def _link_orphans_to_entities(
         ) ^ pure(unit)
 
     if reuse_model:
-        return _load_dedupe_model_settings() >> (
+        return _load_dedupe_model_settings(env["publication_profile"]) >> (
             lambda settings: _run_linkage(
                 _settings_for_orphan_reuse(settings),
                 train_first=False,
@@ -521,7 +528,7 @@ def _link_orphans_to_entities(
             )
         )
     return _run_linkage(
-        _settings_for_orphan_linkage(ORPHAN_COMPARISONS),
+        _settings_for_orphan_linkage(env["publication_profile"]),
         train_first=True,
         skip_u_estimation=False,
     )
@@ -1242,42 +1249,49 @@ def _export_orphan_matches_debug_excel() -> Run[Unit]:
     )
 
     def _register_previous_orphan_matches_if_exists() -> Run[bool]:
-        base_path = "orphan_matches_final_base.xlsx"
-        current_path = "orphan_matches_final.xlsx"
-
-        def _load_base() -> Run[bool]:
-            return (
-                sql_import(base_path, "orphan_matches_final_prev")
-                ^ put_line(
-                    "[U] Loaded existing orphan_matches_final_base.xlsx "
-                    "into orphan_matches_final_prev."
-                )
-                ^ pure(True)
+        def _for_environment(env: Environment) -> Run[bool]:
+            profile = env["publication_profile"]
+            base_path = publication_output_filename(
+                profile, "orphan_matches_final_base.xlsx"
+            )
+            current_path = publication_output_filename(
+                profile, "orphan_matches_final.xlsx"
             )
 
-        def _maybe_rename_and_load(has_current: bool) -> Run[bool]:
-            if not has_current:
+            def _load_base() -> Run[bool]:
                 return (
-                    put_line(
-                        "[U] No existing orphan_matches_final_base.xlsx or "
-                        "orphan_matches_final.xlsx found."
+                    sql_import(base_path, "orphan_matches_final_prev")
+                    ^ put_line(
+                        f"[U] Loaded existing {base_path} "
+                        "into orphan_matches_final_prev."
                     )
-                    ^ pure(False)
+                    ^ pure(True)
                 )
-            return (
-                rename_file(current_path, base_path)
-                ^ put_line(
-                    "[U] Renamed orphan_matches_final.xlsx "
-                    "to orphan_matches_final_base.xlsx."
+
+            def _maybe_rename_and_load(has_current: bool) -> Run[bool]:
+                if not has_current:
+                    return (
+                        put_line(
+                            f"[U] No existing {base_path} or "
+                            f"{current_path} found."
+                        )
+                        ^ pure(False)
+                    )
+                return (
+                    rename_file(current_path, base_path)
+                    ^ put_line(
+                        f"[U] Renamed {current_path} to {base_path}."
+                    )
+                    ^ _load_base()
                 )
-                ^ _load_base()
+
+            return file_exists(base_path) >> (
+                lambda has_base: _load_base()
+                if has_base
+                else file_exists(current_path) >> _maybe_rename_and_load
             )
 
-        return file_exists(base_path) >> (
-            lambda has_base: _load_base()
-            if has_base
-            else file_exists(current_path) >> _maybe_rename_and_load
-        )
+        return ask() >> _for_environment
 
     def _maybe_export_orphan_matches_diffs(has_prev: bool) -> Run[Unit]:
         if not has_prev:

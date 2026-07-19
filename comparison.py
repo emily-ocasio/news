@@ -239,10 +239,13 @@ NAME_COMP = cl.CustomComparison(
                 ComparisonComp.VICTIM_FORENAME_NULL
             )
         ).to_dict(),
-        ComparisonLevel(
-            "exact match victim name",
-            ComparisonComp.EXACT_VICTIM_FULLNAME.value
-        ).to_dict(),
+        cll.ExactMatchLevel("victim_fullname_concat").configure(
+            tf_adjustment_column="victim_fullname_concat"
+        ),
+        # ComparisonLevel(
+        #     "exact match victim name",
+        #     ComparisonComp.EXACT_VICTIM_FULLNAME.value
+        # ).to_dict(),
         cll.And(
             cll.JaroWinklerLevel("victim_forename_norm", 0.95),
             cll.JaroWinklerLevel("victim_surname_norm", 0.95)
@@ -590,13 +593,13 @@ VICTIM_COUNT_COMP = cl.CustomComparison(
             _exact_comp_builder("victim_count"),
             "victim_count"
         ).to_dict(),
-        # ComparisonLevel(
-        #     "victim counts within 1 (counts > 1)",
-        #     (
-        #         '"victim_count_l" > 1 AND "victim_count_r" > 1 '
-        #         'AND abs("victim_count_l" - "victim_count_r") <= 1'
-        #     )
-        # ).to_dict(),
+        ComparisonLevel(
+            "victim counts within 1 (counts > 3)",
+            (
+                '"victim_count_l" > 3 AND "victim_count_r" > 3 '
+                'AND abs("victim_count_l" - "victim_count_r") <= 1'
+            )
+        ).to_dict(),
         cll.ElseLevel()
     ]
 )
@@ -1567,6 +1570,22 @@ ORPHAN_COMPARISONS = [
     DATE_COMP,
     AGE_COMP,
     DIST_COMP_NEW,
+    VICTIM_SEX_COMP,
+    OFFENDER_COMP,
+    TF_WEAPON_COMP,
+    CIRC_COMP,
+    RELATIONSHIP_COMP,
+    SUMMARY_COMP,
+    VICTIM_COUNT_COMP,
+    OFFENDER_AGE_COMP,
+    OFFENDER_SEX_COMP,
+    cl.ExactMatch("victim_race").configure(term_frequency_adjustments=True),
+]
+
+ORPHAN_COMPARISONS_NYT = [
+    DATE_COMP,
+    AGE_COMP,
+    DIST_COMP_NYT,
     VICTIM_SEX_COMP,
     OFFENDER_COMP,
     TF_WEAPON_COMP,

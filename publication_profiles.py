@@ -332,7 +332,7 @@ def _nyt_capabilities() -> PublicationCapabilities:
         incident_staging=Availability.AVAILABLE,
     geocoding=Availability.AVAILABLE,
         named_victim_deduplication=Availability.AVAILABLE,
-        orphan_linkage=Availability.UNAVAILABLE,
+        orphan_linkage=Availability.AVAILABLE,
         orphan_adjudication=Availability.UNAVAILABLE,
         shr_linkage=Availability.UNAVAILABLE,
         finalized_export=Availability.UNAVAILABLE,

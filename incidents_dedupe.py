@@ -18,8 +18,9 @@ from publication_profiles import PublicationProfile
 from menuprompts import NextStep
 from splink_types import SplinkType
 from cluster_compare import ClusterCompareRequest, compare_cluster_tables
-from publication_outputs import publication_sql_export
+from publication_outputs import publication_output_filename, publication_sql_export
 from pymonad import (
+    Environment,
     Run,
     SQL,
     Unit,
@@ -756,40 +757,41 @@ def _export_final_clusters_excel() -> Run[Unit]:
     )
 
     def _register_previous_final_clusters_if_exists() -> Run[bool]:
-        base_path = "final_clusters_base.xlsx"
-        current_path = "final_clusters.xlsx"
+        def _for_environment(env: Environment) -> Run[bool]:
+            profile = env["publication_profile"]
+            base_path = publication_output_filename(profile, "final_clusters_base.xlsx")
+            current_path = publication_output_filename(profile, "final_clusters.xlsx")
 
-        def _load_base() -> Run[bool]:
-            return (
-                sql_import(base_path, "final_clusters_prev")
-                ^ put_line(
-                    "[D] Loaded existing final_clusters_base.xlsx into final_clusters_prev."
-                )
-                ^ pure(True)
-            )
-
-        def _maybe_rename_and_load(has_current: bool) -> Run[bool]:
-            if not has_current:
+            def _load_base() -> Run[bool]:
                 return (
-                    put_line(
-                        "[D] No existing final_clusters_base.xlsx or "
-                        "final_clusters.xlsx found."
+                    sql_import(base_path, "final_clusters_prev")
+                    ^ put_line(
+                        f"[D] Loaded existing {base_path} into final_clusters_prev."
                     )
-                    ^ pure(False)
+                    ^ pure(True)
                 )
-            return (
-                rename_file(current_path, base_path)
-                ^ put_line(
-                    "[D] Renamed final_clusters.xlsx to final_clusters_base.xlsx."
+
+            def _maybe_rename_and_load(has_current: bool) -> Run[bool]:
+                if not has_current:
+                    return (
+                        put_line(
+                            f"[D] No existing {base_path} or {current_path} found."
+                        )
+                        ^ pure(False)
+                    )
+                return (
+                    rename_file(current_path, base_path)
+                    ^ put_line(f"[D] Renamed {current_path} to {base_path}.")
+                    ^ _load_base()
                 )
-                ^ _load_base()
+
+            return file_exists(base_path) >> (
+                lambda has_base: _load_base()
+                if has_base
+                else file_exists(current_path) >> _maybe_rename_and_load
             )
 
-        return file_exists(base_path) >> (
-            lambda has_base: _load_base()
-            if has_base
-            else file_exists(current_path) >> _maybe_rename_and_load
-        )
+        return ask() >> _for_environment
 
     def _maybe_export_diffs(has_prev: bool) -> Run[Unit]:
         if not has_prev:
