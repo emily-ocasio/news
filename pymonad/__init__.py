@@ -28,6 +28,9 @@ from .geocode import (
     mar_result_type_with_input,
     arcgis_result_type_with_input,
     arcgis_result_score,
+    is_nominatim_result,
+    nominatim_result_type_with_input,
+    nominatim_result_score,
 )
 from .hashmap import HashMap
 from .hashset import HashSet
@@ -70,6 +73,7 @@ from .run import (
     _unhandled,
     geocode_address,
     geocode_arcgis_address,
+    geocode_nominatim_address,
     monotonic_now,
     file_exists,
     rename_file,

@@ -17,6 +17,7 @@ from pymonad import (
     SQLParams,
     geocode_address,
     geocode_arcgis_address,
+    geocode_nominatim_address,
     GeocodeResult,
     String,
     process_items,
@@ -29,6 +30,9 @@ from pymonad import (
     mar_result_score,
     arcgis_result_type_with_input,
     arcgis_result_score,
+    is_nominatim_result,
+    nominatim_result_type_with_input,
+    nominatim_result_score,
     FailureType,
     throw,
     ErrorPayload,
@@ -100,6 +104,15 @@ HALF_ADDRESS_RE = re.compile(
 )
 LEADING_A_RE = re.compile(r"^([0-9]+)(?:-?A)\b")
 STREET_ORDINAL_NUM_RE = re.compile(r"\b([0-9]+)\s+STREET\b")
+NYT_NEW_YORK_STREET_RE = re.compile(
+    r"\bNEW YORK (AVENUE|BOULEVARD)\b", re.IGNORECASE
+)
+NYT_QUEENS_LOCALITY_RE = re.compile(r"\b(QUEENS|JAMAICA)\b", re.IGNORECASE)
+NYT_STATION_RE = re.compile(r"\bSTATION\b", re.IGNORECASE)
+NYT_STATION_SUBWAY_BMT_RE = re.compile(
+    r"\b(?:SUBWAY|BMT|IRT)\s+(?=STATION\b)", re.IGNORECASE
+)
+NYT_STATION_DIRECTION_RE = re.compile(r"^(?:EAST|WEST)\s+", re.IGNORECASE)
 
 
 def _add_ordinal_suffix(m: re.Match[str]) -> str:
@@ -136,6 +149,27 @@ def normalize_for_mar(a: str) -> str:
     canonical = normalize_general(a)
     return apply_specific_overrides(canonical)
 
+
+def normalize_for_arcgis(a: str) -> str:
+    """Apply NYT-specific historical street-name normalization."""
+    normalized = (a or "").strip()
+    if (
+        NYT_NEW_YORK_STREET_RE.search(normalized)
+        and NYT_QUEENS_LOCALITY_RE.search(normalized)
+    ):
+        return NYT_NEW_YORK_STREET_RE.sub(
+            "GUY R BREWER BOULEVARD", normalized
+        )
+    return normalized
+
+
+def normalize_for_nominatim(a: str) -> str:
+    """Apply station-specific normalization for Nominatim requests."""
+    normalized = normalize_for_arcgis(a)
+    while NYT_STATION_SUBWAY_BMT_RE.search(normalized):
+        normalized = NYT_STATION_SUBWAY_BMT_RE.sub("", normalized)
+    return NYT_STATION_DIRECTION_RE.sub("", normalized)
+
 CREATE_CACHE_SQL = SQL(
     """--sql
 CREATE TABLE IF NOT EXISTS mar_cache (
@@ -145,7 +179,8 @@ CREATE TABLE IF NOT EXISTS mar_cache (
   y_lat DOUBLE,
   raw_json TEXT,
   address_type TEXT,
-  geo_score DOUBLE
+  geo_score DOUBLE,
+  review_code TEXT
 );
 """
 )
@@ -186,6 +221,7 @@ ALTER_CACHE_SQL = SQL(
     """--sql
 ALTER TABLE mar_cache ADD COLUMN IF NOT EXISTS address_type TEXT;
 ALTER TABLE mar_cache ADD COLUMN IF NOT EXISTS geo_score DOUBLE;
+ALTER TABLE mar_cache ADD COLUMN IF NOT EXISTS review_code TEXT;
 """
 )
 
@@ -193,8 +229,9 @@ ALTER TABLE mar_cache ADD COLUMN IF NOT EXISTS geo_score DOUBLE;
 INSERT_CACHE_SQL = SQL(
     """--sql
 INSERT OR REPLACE INTO mar_cache (
-  input_address, matched_address, x_lon, y_lat, raw_json, address_type, geo_score
-) VALUES (?, ?, ?, ?, ?, ?, ?)
+  input_address, matched_address, x_lon, y_lat, raw_json, address_type,
+  geo_score, review_code
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 """
 )
 
@@ -216,6 +253,7 @@ SELECT
   mc.y_lat AS lat,
   COALESCE(mc.address_type, 'NO_SUCCESS') AS address_type,
   mc.geo_score AS geo_score,
+  CAST(NULL AS TEXT) AS geo_address_review,
   CASE
     WHEN COALESCE(mc.address_type, 'NO_SUCCESS') IN ('INTERSECTION','NO_SUCCESS_INTERSECTION','NO_RESULT_INTERSECTION') THEN
       list_extract(
@@ -268,6 +306,174 @@ LEFT JOIN mar_cache mc
 """
 )
 
+CREATE_ARCGIS_GEOCODED_VIEW_SQL = SQL(
+    r"""
+CREATE OR REPLACE VIEW stg_article_incidents_geo AS
+WITH source AS (
+  SELECT
+    i.*,
+    mc.input_address,
+    mc.matched_address,
+    mc.x_lon AS lon,
+    mc.y_lat AS lat,
+    COALESCE(mc.address_type, 'NO_SUCCESS') AS address_type,
+    mc.geo_score AS geo_score,
+    NULLIF(mc.review_code, '') AS geo_address_review,
+    COALESCE(NULLIF(mc.matched_address, ''), mc.input_address,
+      trim(coalesce(i.location_raw, ''))) AS geo_source_address
+  FROM stg_article_incidents i
+  LEFT JOIN arcgis_addr_map m
+    ON trim(coalesce(i.location_raw, '')) = m.addr_raw
+  LEFT JOIN arcgis_cache mc
+    ON mc.input_address = m.addr_key
+), components AS (
+  SELECT
+    source.*,
+    CASE
+      WHEN address_type IN ('INTERSECTION', 'NO_SUCCESS_INTERSECTION',
+                            'NO_RESULT_INTERSECTION') THEN
+        regexp_replace(
+          list_extract(
+            regexp_split_to_array(
+              geo_source_address,
+              '[[:space:]]*(&|AND|AT)[[:space:]]*'
+            ),
+            1
+          ),
+          ',.*$',
+          ''
+        )
+      WHEN address_type IN ('BLOCK', 'NO_SUCCESS_BLOCK', 'NO_RESULT_BLOCK') THEN
+        regexp_replace(
+          regexp_replace(
+            geo_source_address,
+            '^ *[0-9]+(-[0-9]+)? +(BLOCK|BLK) +OF +',
+            ''
+          ),
+          ',.*$',
+          ''
+        )
+      WHEN address_type IN ('ADDRESS', 'NO_SUCCESS_ADDRESS',
+                            'NO_RESULT_ADDRESS') THEN
+        regexp_replace(
+          regexp_replace(
+            geo_source_address,
+            '^[[:space:]]*[0-9]+(-[0-9]+)?[[:space:]]+',
+            ''
+          ),
+          ',.*$',
+          ''
+        )
+      WHEN address_type IN ('STREET_ONLY', 'NO_SUCCESS_STREET_ONLY',
+                            'NO_RESULT_STREET_ONLY') THEN
+        regexp_replace(geo_source_address, ',.*$', '')
+      ELSE geo_source_address
+    END AS geo_address_short,
+    CASE
+      WHEN address_type IN ('INTERSECTION', 'NO_SUCCESS_INTERSECTION',
+                            'NO_RESULT_INTERSECTION') THEN
+        regexp_replace(
+          list_extract(
+            regexp_split_to_array(
+              geo_source_address,
+              '[[:space:]]*(&|AND|AT)[[:space:]]*'
+            ),
+            2
+          ),
+          ',.*$',
+          ''
+        )
+      ELSE NULL
+    END AS geo_address_short_2,
+    regexp_extract(
+      geo_source_address,
+      ',[[:space:]]*(.*)$',
+      1
+    ) AS geo_address_locality
+  FROM source
+)
+SELECT
+  components.*,
+  geo_source_address AS geo_address_norm
+FROM components;
+"""
+)
+
+
+def _leading_house_number(address: str) -> str | None:
+    """Return a leading house number, excluding ordinal street names."""
+    ordinal = re.match(r"^[0-9]+(ST|ND|RD|TH)\b", address.upper())
+    if ordinal is not None:
+        return None
+    house_number = re.match(r"^([0-9]+(?:-[0-9]+)?)\b", address)
+    return house_number.group(1) if house_number is not None else None
+
+
+def _arcgis_review_code(
+    input_address: object,
+    matched_address: object,
+    address_type: object,
+) -> str | None:
+    """Return a structural ArcGIS review code without changing its type."""
+    input_text = str(input_address or "").strip()
+    matched_text = str(matched_address or "").strip()
+    if not matched_text:
+        return None
+    input_number = _leading_house_number(input_text)
+    matched_number = _leading_house_number(matched_text)
+    if (
+        input_number
+        and matched_number
+        and input_number != matched_number
+    ):
+        return "house_number_changed"
+    if input_number and str(address_type) == AddressResultType.ADDRESS.value:
+        if matched_number is None:
+            return "house_number_missing"
+    if input_number and str(address_type) in {
+        AddressResultType.STREET_ONLY.value,
+        AddressResultType.INTERSECTION.value,
+        AddressResultType.NAMED_PLACE.value,
+    }:
+        return "input_type_changed"
+    return None
+
+
+def _arcgis_review_log(
+    review: tuple[object, object, object, object, object, object, object, object],
+) -> Run[Unit]:
+    """Log an ArcGIS structural discrepancy in a copyable form."""
+    (
+        input_address,
+        matched_address,
+        address_type,
+        score,
+        latitude,
+        longitude,
+        article_ids,
+        code,
+    ) = review
+    if not code:
+        return pure(unit)
+    if (
+        latitude is None
+        or longitude is None
+        or float(str(latitude or 0)) == 0
+        or float(str(longitude or 0)) == 0
+    ):
+        coordinates = "unavailable"
+    else:
+        coordinates = (
+            f"{float(str(latitude)):.5f}, {float(str(longitude)):.5f}"
+        )
+    message = (
+        "\033[31m[GEO] ArcGIS review: "
+        f"code={code} input={input_address!r} matched={matched_address!r} "
+        f"type={address_type} score={score} articles={article_ids} "
+        f"coordinates={coordinates}\033[0m"
+    )
+    return put_line(message) ^ pure(unit)
+
 
 def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
     """
@@ -287,6 +493,8 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
             str(template)
             .replace("mar_cache", cache_table)
             .replace("mar_addr_map", address_map_table)
+            .replace("arcgis_cache", cache_table)
+            .replace("arcgis_addr_map", address_map_table)
         )
 
     create_cache_sql = provider_sql(CREATE_CACHE_SQL)
@@ -295,7 +503,11 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
     cache_get_sql = provider_sql(CACHE_GET_SQL)
     insert_cache_sql = provider_sql(INSERT_CACHE_SQL)
     insert_addr_map_sql = provider_sql(INSERT_ADDR_MAP_SQL)
-    create_view_sql = provider_sql(CREATE_GEOCODED_VIEW_SQL)
+    create_view_sql = provider_sql(
+        CREATE_ARCGIS_GEOCODED_VIEW_SQL
+        if provider == "stanford_arcgis"
+        else CREATE_GEOCODED_VIEW_SQL
+    )
 
     def _process_rows(rows: Array[dict]) -> Run[None]:
         """
@@ -311,9 +523,10 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
         ) -> AddressResultType:
             if provider == "stanford_arcgis":
                 try:
-                    return arcgis_result_type_with_input(
-                        addr_key, json.loads(str(raw_json_value or "{}"))
-                    )
+                    parsed = json.loads(str(raw_json_value or "{}"))
+                    if is_nominatim_result(parsed):
+                        return nominatim_result_type_with_input(addr_key, parsed)
+                    return arcgis_result_type_with_input(addr_key, parsed)
                 except (json.JSONDecodeError, TypeError):
                     return AddressResultType.NO_RESULT
             if isinstance(raw_json_value, str):
@@ -330,9 +543,10 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
         def cache_result_score(raw_json_value: object) -> float:
             if provider == "stanford_arcgis":
                 try:
-                    return arcgis_result_score(
-                        json.loads(str(raw_json_value or "{}"))
-                    )
+                    parsed = json.loads(str(raw_json_value or "{}"))
+                    if is_nominatim_result(parsed):
+                        return nominatim_result_score(parsed)
+                    return arcgis_result_score(parsed)
                 except (json.JSONDecodeError, TypeError):
                     return 0
             if isinstance(raw_json_value, str):
@@ -365,6 +579,14 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
                     return f"{colored} articles={article_ids}"
             return msg
 
+        def cached_result_is_nominatim(raw_json_value: object) -> bool:
+            try:
+                return is_nominatim_result(
+                    json.loads(str(raw_json_value or "{}"))
+                )
+            except (json.JSONDecodeError, TypeError):
+                return False
+
         def should_bypass_cache(rs: Array, addr_key: str) -> bool:
             if len(rs) == 0:
                 return False
@@ -383,7 +605,11 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
                 (
                     normalize_for_mar(cast(str, r["addr_raw"]))
                     if provider == "mar"
-                    else cast(str, r["addr_raw"]).strip()
+                    else (
+                        normalize_for_nominatim(cast(str, r["addr_raw"]))
+                        if NYT_STATION_RE.search(cast(str, r["addr_raw"]))
+                        else normalize_for_arcgis(cast(str, r["addr_raw"]))
+                    )
                 ),
                 cast(str, r.get("article_ids") or ""),
                 cast(str, r["addr_raw"]),
@@ -415,6 +641,10 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
         # Happy path for a single address
         def happy(item: tuple[str, str, str]) -> Run[None]:
             addr_key, article_ids, addr_raw = item
+            use_nominatim = (
+                provider == "stanford_arcgis"
+                and NYT_STATION_RE.search(addr_raw) is not None
+            )
             def upsert_addr_map() -> Run[None]:
                 return sql_exec(
                     insert_addr_map_sql,
@@ -438,6 +668,7 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
                                 String(json.dumps({})),
                                 String(AddressResultType.NO_SUCCESS.value),
                                 None,
+                                None,
                             )
                         ),
                     )
@@ -448,6 +679,10 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
                     address_type = (
                         mar_result_type_with_input(addr_key, g.raw_json).value
                         if provider == "mar"
+                        else nominatim_result_type_with_input(
+                            addr_key, g.raw_json
+                        ).value
+                        if use_nominatim
                         else arcgis_result_type_with_input(
                             addr_key, g.raw_json
                         ).value
@@ -455,7 +690,14 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
                     geo_score = (
                         mar_result_score(g.raw_json)
                         if provider == "mar"
+                        else nominatim_result_score(g.raw_json)
+                        if use_nominatim
                         else arcgis_result_score(g.raw_json)
+                    )
+                    review_code = (
+                        _arcgis_review_code(addr_key, g.matched_address, address_type)
+                        if provider == "stanford_arcgis" and not use_nominatim
+                        else None
                     )
                     if g.ok:
                         return (
@@ -470,6 +712,10 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
                                         String(json.dumps(g.raw_json)),
                                         String(address_type),
                                         geo_score,
+                                        String(review_code or "")
+                                        if provider == "stanford_arcgis"
+                                        and not use_nominatim
+                                        else None,
                                     )
                                 ),
                             )
@@ -477,9 +723,28 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
                                 f"[GEO] {provider} response OK, matched address:"
                                 f" {g.matched_address} articles={article_ids}"
                             )
+                            ^ (
+                                _arcgis_review_log(
+                                    (
+                                        addr_key,
+                                        g.matched_address,
+                                        address_type,
+                                        geo_score,
+                                        g.y_lat,
+                                        g.x_lon,
+                                        article_ids,
+                                        review_code,
+                                    )
+                                )
+                                if provider == "stanford_arcgis" and not use_nominatim
+                                else pure(unit)
+                            )
                             ^ pure(None)
                         )
-                    if g.raw_json.get("message") == "No Result present":
+                    if g.raw_json.get("message") in {
+                        "No Result present",
+                        "No railway result present",
+                    }:
                         return (
                             sql_exec(
                                 insert_cache_sql,
@@ -492,6 +757,10 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
                                         String(json.dumps(g.raw_json)),
                                         String(address_type),
                                         geo_score,
+                                        String(review_code or "")
+                                        if provider == "stanford_arcgis"
+                                        and not use_nominatim
+                                        else None,
                                     )
                                 ),
                             )
@@ -523,7 +792,11 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
                         ^ (
                             geocode_address(addr_key, env["mar_key"])
                             if provider == "mar"
-                            else geocode_arcgis_address(addr_key)
+                            else (
+                                geocode_nominatim_address(addr_key)
+                                if use_nominatim
+                                else geocode_arcgis_address(addr_key)
+                            )
                         )
                         >> handle_mar
                     )
@@ -541,23 +814,57 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
                     )
                     if rs[0]["x_lon"] is None:
                         raw_json_value = rs[0].get("raw_json")
+                        if use_nominatim and not cached_result_is_nominatim(
+                            raw_json_value
+                        ):
+                            return (
+                                debug_run
+                                ^ put_line(
+                                    "[GEO] Cache refresh for station via "
+                                    f"Nominatim: {addr_key} articles={article_ids}"
+                                )
+                                ^ request_provider()
+                            )
                         cached_type_value = rs[0].get("address_type")
                         cached_score_value = rs[0].get("geo_score")
+                        cached_review_code = rs[0].get("review_code")
                         score_value = cache_result_score(raw_json_value)
                         type_value = (
                             AddressResultType(str(cached_type_value))
                             if cached_type_value
                             else cache_result_type(raw_json_value, addr_key)
                         )
+                        review_code = (
+                            cached_review_code
+                            if cached_review_code is not None
+                            else _arcgis_review_code(
+                                addr_key,
+                                "",
+                                type_value.value,
+                            )
+                        )
                         return (
                             (
                                 sql_exec(
                                     SQL(
-                                        f"UPDATE {cache_table} SET address_type = ?, geo_score = ? WHERE input_address = ?;"
+                                        f"UPDATE {cache_table} SET address_type = ?, "
+                                        "geo_score = ?, review_code = ? "
+                                        "WHERE input_address = ?;"
                                     ),
-                                    SQLParams((String(type_value.value), score_value, String(addr_key))),
+                                    SQLParams(
+                                        (
+                                            String(type_value.value),
+                                            score_value,
+                                            String(review_code or ""),
+                                            String(addr_key),
+                                        )
+                                    ),
                                 )
-                                if not cached_type_value or cached_score_value is None
+                                if (
+                                    not cached_type_value
+                                    or cached_score_value is None
+                                    or cached_review_code is None
+                                )
                                 else pure(unit)
                             )
                             ^ debug_run
@@ -572,12 +879,76 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
                     raw_json_value = rs[0].get("raw_json")
                     cached_type_value = rs[0].get("address_type")
                     cached_score_value = rs[0].get("geo_score")
+                    cached_review_code = rs[0].get("review_code")
                     score_value = cache_result_score(raw_json_value)
                     matched_is_missing = matched_address is None or (
                         isinstance(matched_address, str)
                         and matched_address.strip().lower() == "none"
                     )
+                    if use_nominatim and not cached_result_is_nominatim(
+                        raw_json_value
+                    ):
+                        return (
+                            debug_run
+                            ^ put_line(
+                                "[GEO] Cache refresh for station via "
+                                f"Nominatim: {addr_key} articles={article_ids}"
+                            )
+                            ^ request_provider()
+                        )
+                    # The existing WP decision tree intentionally has many exits.
+                    # NYT returns before entering those retry branches.
+                    # pylint: disable=too-many-return-statements
                     def proceed(type_value: AddressResultType) -> Run[None]:
+                        if provider == "stanford_arcgis" and not use_nominatim:
+                            review_code = (
+                                cached_review_code
+                                if cached_review_code is not None
+                                else _arcgis_review_code(
+                                    addr_key,
+                                    matched_address,
+                                    type_value.value,
+                                )
+                            )
+                            return (
+                                (
+                                    sql_exec(
+                                        SQL(
+                                            f"UPDATE {cache_table} SET "
+                                            "review_code = ? "
+                                            "WHERE input_address = ?;"
+                                        ),
+                                        SQLParams(
+                                            (
+                                                String(review_code or ""),
+                                                String(addr_key),
+                                            )
+                                        ),
+                                    )
+                                    if cached_review_code is None
+                                    else pure(unit)
+                                )
+                                ^ debug_run
+                                ^ _arcgis_review_log(
+                                    (
+                                        addr_key,
+                                        matched_address,
+                                        type_value.value,
+                                        score_value,
+                                        rs[0].get("y_lat"),
+                                        rs[0].get("x_lon"),
+                                        article_ids,
+                                        review_code,
+                                    )
+                                )
+                                ^ put_line(
+                                    f"[GEO] Cached (success): {addr_key} "
+                                    f"matched={matched_address} "
+                                    f"type={type_value.value} "
+                                    f"score={score_value}"
+                                )
+                                ^ pure(None)
+                            )
                         if (
                             type_value == AddressResultType.ADDRESS
                             and (
@@ -851,6 +1222,20 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
         ^ sql_exec(
             SQL(
                 r"""
+            ALTER TABLE victims_cached ADD COLUMN IF NOT EXISTS geo_address_locality TEXT;
+        """
+            )
+        )
+        ^ sql_exec(
+            SQL(
+                r"""
+            ALTER TABLE victims_cached ADD COLUMN IF NOT EXISTS geo_address_review TEXT;
+        """
+            )
+        )
+        ^ sql_exec(
+            SQL(
+                r"""
             UPDATE victims_cached vc
             SET geo_address_norm = g.geo_address_norm,
                 lon = CASE WHEN g.lon = 0 THEN NULL ELSE g.lon END,
@@ -858,7 +1243,9 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
                 address_type = g.address_type,
                 geo_score = g.geo_score,
                 geo_address_short = g.geo_address_short,
-                geo_address_short_2 = g.geo_address_short_2
+                geo_address_short_2 = g.geo_address_short_2,
+                geo_address_locality = g.geo_address_locality,
+                geo_address_review = g.geo_address_review
             FROM stg_article_incidents_geo g
             WHERE vc.article_id = g.article_id
               AND vc.incident_idx = g.incident_idx;

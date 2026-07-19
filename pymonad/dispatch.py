@@ -11,8 +11,10 @@ from .geocode import (
     GeocodeResult,
     MarGeocode,
     StanfordArcGISGeocode,
+    NominatimGeocode,
     mar_geocode_handler,
     stanford_arcgis_geocode_handler,
+    nominatim_geocode_handler,
 )
 
 from .monad import Unit, unit
@@ -108,6 +110,11 @@ def _mar_geocode(x: MarGeocode) -> GeocodeResult:
 @intentdef(StanfordArcGISGeocode)
 def _stanford_arcgis_geocode(x: StanfordArcGISGeocode) -> GeocodeResult:
     return stanford_arcgis_geocode_handler(x)
+
+
+@intentdef(NominatimGeocode)
+def _nominatim_geocode(x: NominatimGeocode) -> GeocodeResult:
+    return nominatim_geocode_handler(x)
 
 
 @intentdef(Sleep)

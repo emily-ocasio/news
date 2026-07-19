@@ -242,6 +242,12 @@ substitution of a state predicate is not an acceptable default.
 - Derived working data uses publication-specific DuckDB namespaces:
   `derived/wp/news.duckdb` and `derived/nyt/news.duckdb`.
 - Publication outputs use `out/wp/` and `out/nyt/`.
+- Excel workbooks produced by pipeline controllers are publication-scoped
+  outputs and belong under the active profile's output namespace. Existing
+  legacy WP workbooks at the repository root may be copied into `out/wp/` by a
+  one-time controlled maintenance operation before the generalized `[D]`
+  stage runs. That copy is not a runtime migration and must not be retained as
+  startup code.
 - Caches, model artifacts, thresholds, predictions, clusters, orphan linkage,
   adjudications, and external-linkage results must not cross those boundaries.
 - Publication identity is enforced by the active profile, the profile-specific

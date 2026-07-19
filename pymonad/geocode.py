@@ -7,6 +7,7 @@ from enum import Enum
 from urllib.parse import quote
 import json
 import re
+import time
 import requests
 
 
@@ -83,6 +84,13 @@ class MarGeocode:
 @dataclass(frozen=True)
 class StanfordArcGISGeocode:
     """Effect: Geocode a location through Stanford's ArcGIS service."""
+
+    address: str
+
+
+@dataclass(frozen=True)
+class NominatimGeocode:
+    """Effect: Geocode a location through the Nominatim search API."""
 
     address: str
 
@@ -210,6 +218,34 @@ def arcgis_result_score(j: dict) -> float:
         return float(candidates[0].get("score", 0))
     except (TypeError, ValueError):
         return 0
+
+
+def is_nominatim_result(j: object) -> bool:
+    """Return whether cached JSON was produced by the Nominatim handler."""
+    return isinstance(j, dict) and j.get("_provider") == "nominatim"
+
+
+def nominatim_result_type_with_input(
+    addr_key: str, j: dict
+) -> AddressResultType:
+    """Classify the selected Nominatim railway result as a named place."""
+    selected = j.get("_selected_result")
+    if (
+        isinstance(selected, dict)
+        and str(selected.get("addresstype", "")).lower() == "railway"
+    ):
+        return AddressResultType.NAMED_PLACE
+    return addr_key_type_without_comma_suffix(addr_key)
+
+
+def nominatim_result_score(j: dict) -> float:
+    """Return the fixed score for a selected Nominatim railway result."""
+    return (
+        100.0
+        if nominatim_result_type_with_input("", j)
+        == AddressResultType.NAMED_PLACE
+        else 0.0
+    )
 
 
 def mar_result_score(j: dict) -> float:
@@ -528,4 +564,94 @@ def stanford_arcgis_geocode_handler(x: StanfordArcGISGeocode) -> GeocodeResult:
         x_lon=float(location.get("x", 0)),
         y_lat=float(location.get("y", 0)),
         raw_json=payload,
+    )
+
+
+def nominatim_geocode_handler(x: NominatimGeocode) -> GeocodeResult:
+    """Call Nominatim and enforce its one-request-per-second limit."""
+    try:
+        return _nominatim_geocode_handler(x)
+    finally:
+        time.sleep(1.0)
+
+
+def _nominatim_geocode_handler(x: NominatimGeocode) -> GeocodeResult:
+    """Call Nominatim and select the first result tagged as a railway."""
+    url = "https://nominatim.openstreetmap.org/search"
+    params = {
+        "q": x.address,
+        "format": "jsonv2",
+        "addressdetails": "1",
+    }
+    try:
+        response = requests.get(
+            url,
+            params=params,
+            headers={"User-Agent": "news-articles-analysis-project"},
+            timeout=10,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except requests.exceptions.RequestException as exc:
+        return GeocodeResult(
+            ok=False,
+            normalized_input=x.address,
+            matched_address="",
+            x_lon=0,
+            y_lat=0,
+            raw_json={"_provider": "nominatim", "message": f"network_error: {str(exc)}"},
+        )
+    except (json.JSONDecodeError, ValueError) as exc:
+        return GeocodeResult(
+            ok=False,
+            normalized_input=x.address,
+            matched_address="",
+            x_lon=0,
+            y_lat=0,
+            raw_json={"_provider": "nominatim", "message": f"invalid_json: {str(exc)}"},
+        )
+
+    results = payload if isinstance(payload, list) else []
+    selected = next(
+        (
+            result
+            for result in results
+            if isinstance(result, dict)
+            and str(result.get("addresstype", "")).lower() == "railway"
+        ),
+        None,
+    )
+    raw_json = {
+        "_provider": "nominatim",
+        "_results": results,
+        "_selected_result": selected,
+    }
+    if selected is None:
+        return GeocodeResult(
+            ok=False,
+            normalized_input=x.address,
+            matched_address="",
+            x_lon=0,
+            y_lat=0,
+            raw_json={**raw_json, "message": "No railway result present"},
+        )
+    try:
+        longitude = float(selected.get("lon", 0))
+        latitude = float(selected.get("lat", 0))
+    except (TypeError, ValueError):
+        return GeocodeResult(
+            ok=False,
+            normalized_input=x.address,
+            matched_address="",
+            x_lon=0,
+            y_lat=0,
+            raw_json={**raw_json, "message": "Invalid railway coordinates"},
+        )
+    return GeocodeResult(
+        ok=True,
+        normalized_input=x.address,
+        matched_address=str(selected.get("display_name", "")),
+        x_lon=longitude,
+        y_lat=latitude,
+        raw_json=raw_json,
     )

@@ -13,7 +13,7 @@ from typing import cast, Any, Generic, TypeVar
 
 from .applicative import Applicative
 from .array import Array
-from .dispatch import GetLine, PutLine, InputPrompt, MarGeocode, StanfordArcGISGeocode, Sleep, \
+from .dispatch import GetLine, PutLine, InputPrompt, MarGeocode, StanfordArcGISGeocode, NominatimGeocode, Sleep, \
     GeocodeResult, FileExists, RenameFile, MonotonicNow
 from .either import Either, Left, Right
 from .environment import Environment, Namespace, PromptKey, AllPrompts, \
@@ -305,7 +305,17 @@ def geocode_address(address: str, mar_key: str) -> Run[GeocodeResult]:
 
 def geocode_arcgis_address(address: str) -> Run[GeocodeResult]:
     """Create a Run action to geocode an address via Stanford ArcGIS."""
-    return Run(lambda self: self._perform(StanfordArcGISGeocode(address), self), \
+    return Run(
+        lambda self: self._perform(
+            StanfordArcGISGeocode(address), self
+        ), \
+               _unhandled)
+
+
+def geocode_nominatim_address(address: str) -> Run[GeocodeResult]:
+    """Create a Run action to geocode an address via Nominatim."""
+    return Run(
+        lambda self: self._perform(NominatimGeocode(address), self), \
                _unhandled)
 
 def sleep_ms(ms: int) -> Run[None]:
