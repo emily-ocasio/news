@@ -29,7 +29,12 @@ def run_splink(prog: Run[A]) -> Run[A]:
                         return throw(ErrorPayload("Splink requires a DuckDB connection."))._step(current)
                     out = run_splink_dedupe_monadic(intent)._step(current)
                     put_splink_linker(intent.splink_key, out.linker)._step(current)
-                    save_splink_model(intent.splink_key, out.linker, intent.input_table)
+                    save_splink_model(
+                        intent.splink_key,
+                        out.linker,
+                        intent.input_table,
+                        str(env["publication_profile"].key),
+                    )
                     try:
                         cleanup_transient_splink_tables_after_run()._step(current)
                     except Exception:  # pylint: disable=W0718
@@ -48,7 +53,11 @@ def run_splink(prog: Run[A]) -> Run[A]:
                     con = env["connections"].get(DbBackend.DUCKDB)
                     if con is None:
                         return False
-                    reloaded = load_splink_model(key, con)
+                    reloaded = load_splink_model(
+                        key,
+                        con,
+                        str(env["publication_profile"].key),
+                    )
                     if reloaded is None:
                         return False
                     put_splink_linker(key, reloaded)._step(current)

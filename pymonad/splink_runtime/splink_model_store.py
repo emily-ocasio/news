@@ -17,9 +17,12 @@ SUMMARY_EMBED_MODEL = "text-embedding-3-small"
 SUMMARY_EMBED_DIMENSIONS = 1536
 
 
-def _splink_model_paths(splink_key: Any) -> tuple[Path, Path]:
+def _splink_model_paths(
+    splink_key: Any,
+    model_namespace: str = "",
+) -> tuple[Path, Path]:
     key_str = str(splink_key).replace("/", "_")
-    base_dir = Path("splink_models")
+    base_dir = Path("splink_models") / model_namespace if model_namespace else Path("splink_models")
     model_path = base_dir / f"splink_model_{key_str}.json"
     meta_path = base_dir / f"splink_model_{key_str}.meta.json"
     return model_path, meta_path
@@ -29,11 +32,12 @@ def save_splink_model(
     splink_key: Any,
     linker: Linker,
     input_table: PredictionInputTableNames,
+    model_namespace: str = "",
 ) -> None:
     """Persist a trained Splink model and metadata for later reload."""
     if splink_key is None:
         return
-    model_path, meta_path = _splink_model_paths(splink_key)
+    model_path, meta_path = _splink_model_paths(splink_key, model_namespace)
     model_path.parent.mkdir(parents=True, exist_ok=True)
     linker.misc.save_model_to_json(str(model_path), overwrite=True)
     actual_input_table: str | list[str] = input_table_value(input_table)
@@ -60,11 +64,12 @@ def save_splink_model(
 def load_splink_model(
     splink_key: Any,
     con: duckdb.DuckDBPyConnection,
+    model_namespace: str = "",
 ) -> Linker | None:
     """Load a previously saved Splink model from disk when available."""
     if splink_key is None:
         return None
-    model_path, meta_path = _splink_model_paths(splink_key)
+    model_path, meta_path = _splink_model_paths(splink_key, model_namespace)
     if not model_path.is_file() or not meta_path.is_file():
         return None
     try:

@@ -772,6 +772,19 @@ DIST_PLACE_TYPE = cllc.Or(
     cll.LiteralMatchLevel("address_type", "APPROXIMATE_PLACE", "string", "right"),
 )
 
+DIST_PLACE_TYPE_NYT = cllc.Or(
+    cll.LiteralMatchLevel("address_type", "NAMED_PLACE", "string", "left"),
+    cll.LiteralMatchLevel("address_type", "NAMED_PLACE", "string", "right"),
+    cll.LiteralMatchLevel("address_type", "NO_SUCCESS", "string", "left"),
+    cll.LiteralMatchLevel("address_type", "NO_SUCCESS", "string", "right"),
+    cll.LiteralMatchLevel("address_type", "UNRECOGNIZED_PLACE", "string", "left"),
+    cll.LiteralMatchLevel("address_type", "UNRECOGNIZED_PLACE", "string", "right"),
+    cll.LiteralMatchLevel("address_type", "NO_RESULT", "string", "left"),
+    cll.LiteralMatchLevel("address_type", "NO_RESULT", "string", "right"),
+    cll.LiteralMatchLevel("address_type", "APPROXIMATE_PLACE", "string", "left"),
+    cll.LiteralMatchLevel("address_type", "APPROXIMATE_PLACE", "string", "right"),
+)
+
 DIST_NO_SUCCESS = cllc.Or(
     DIST_STREET_NO_RESULT_TYPE,
     cll.LiteralMatchLevel("address_type", "NO_SUCCESS", "string", "left"),
@@ -1084,6 +1097,120 @@ DIST_COMP_NEW = cl.CustomComparison(
         ).configure(label_for_charts="approximate+quad null", is_null_level=True),
         cll.ElseLevel()
     ]
+)
+
+DIST_COMP_NYT = cl.CustomComparison(
+    output_column_name="location",
+    comparison_levels=[
+        cll.NullLevel(
+            ColumnExpression("geo_address_norm").nullif("UNKNOWN").nullif("")
+        ),
+        cllc.Or(
+            cllc.And(
+                cll.DistanceInKMLevel("lat", "lon", 0.0005),
+                cllc.Or(
+                    cll.LiteralMatchLevel("address_type", "ADDRESS", "string"),
+                    cll.LiteralMatchLevel("address_type", "INTERSECTION", "string"),
+                    cll.LiteralMatchLevel("address_type", "BLOCK", "string"),
+                    cll.LiteralMatchLevel("geo_score", "100", "float"),
+                    cll.ExactMatchLevel("geo_address_norm"),
+                ),
+            ),
+            cllc.And(
+                cllc.Or(
+                    cll.LiteralMatchLevel("address_type", "NAMED_PLACE", "string"),
+                    DIST_STREET_NO_RESULT_PRECISE,
+                ),
+                cll.ExactMatchLevel("geo_address_norm"),
+            ),
+        ).configure(label_for_charts="exact location match"),
+        cllc.Or(
+            cll.DistanceInKMLevel("lat", "lon", 0.15),
+            cllc.And(
+                DIST_STREET_TYPE,
+                cll.JaroWinklerLevel("geo_address_short", 0.90),
+                cllc.Or(
+                    cll.DistanceInKMLevel("lat", "lon", 0.5),
+                    DIST_STREET_NO_RESULT_TYPE,
+                    cll.ExactMatchLevel("geo_address_short"),
+                ),
+            ),
+            cllc.And(
+                DIST_STREET_ONLY_TYPE,
+                cll.JaroWinklerLevel("geo_address_short", 0.90),
+            ),
+            cllc.And(
+                cllc.Or(
+                    cll.LiteralMatchLevel("address_type", "INTERSECTION", "string", "right"),
+                    cll.LiteralMatchLevel("address_type", "NO_SUCCESS_INTERSECTION", "string", "right"),
+                    cll.LiteralMatchLevel("address_type", "NO_RESULT_INTERSECTION", "string", "right"),
+                ),
+                cll.CustomLevel(
+                    'jaro_winkler_similarity("geo_address_short_l", "geo_address_short_2_r") >= 0.90',
+                    label_for_charts="short vs short2 jw >= 0.90 (right intersection)",
+                ),
+                cllc.Or(
+                    DIST_STREET_NO_RESULT_TYPE,
+                    cll.DistanceInKMLevel("lat", "lon", 0.5),
+                ),
+            ),
+            cllc.And(
+                cllc.Or(
+                    cll.LiteralMatchLevel("address_type", "INTERSECTION", "string", "left"),
+                    cll.LiteralMatchLevel("address_type", "NO_SUCCESS_INTERSECTION", "string", "left"),
+                    cll.LiteralMatchLevel("address_type", "NO_RESULT_INTERSECTION", "string", "left"),
+                ),
+                cll.CustomLevel(
+                    'jaro_winkler_similarity("geo_address_short_2_l", "geo_address_short_r") >= 0.90',
+                    label_for_charts="short2 vs short jw >= 0.90 (left intersection)",
+                ),
+                cllc.Or(
+                    DIST_STREET_NO_RESULT_TYPE,
+                    cll.DistanceInKMLevel("lat", "lon", 0.5),
+                ),
+            ),
+            cllc.And(
+                cllc.Or(
+                    cll.LiteralMatchLevel("address_type", "INTERSECTION", "string", "left"),
+                    cll.LiteralMatchLevel("address_type", "NO_SUCCESS_INTERSECTION", "string", "left"),
+                    cll.LiteralMatchLevel("address_type", "NO_RESULT_INTERSECTION", "string", "left"),
+                ),
+                cllc.Or(
+                    cll.LiteralMatchLevel("address_type", "INTERSECTION", "string", "right"),
+                    cll.LiteralMatchLevel("address_type", "NO_SUCCESS_INTERSECTION", "string", "right"),
+                    cll.LiteralMatchLevel("address_type", "NO_RESULT_INTERSECTION", "string", "right"),
+                ),
+                cll.CustomLevel(
+                    'jaro_winkler_similarity("geo_address_short_2_l", "geo_address_short_2_r") >= 0.90',
+                    label_for_charts="short2 vs short2 jw >= 0.90 (both intersection)",
+                ),
+                cllc.Or(
+                    DIST_STREET_NO_RESULT_TYPE,
+                    cll.DistanceInKMLevel("lat", "lon", 0.5),
+                ),
+            ),
+            cllc.And(
+                DIST_PLACE_TYPE_NYT,
+                cll.DistanceInKMLevel("lat", "lon", 0.5),
+            ),
+        ).configure(label_for_charts="within 0.15 km or similar address"),
+        cllc.Or(
+            cll.DistanceInKMLevel("lat", "lon", 0.5),
+            cllc.And(
+                DIST_STREET_ONLY_TYPE,
+                cll.DistanceInKMLevel("lat", "lon", 1.0),
+            ),
+            cllc.And(
+                cll.DistanceInKMLevel("lat", "lon", 1.5),
+                DIST_PLACE_TYPE_NYT,
+            ),
+        ).configure(label_for_charts="within 0.5km / 1.0km st only / 1.5 km place"),
+        DIST_NO_SUCCESS.configure(
+            label_for_charts="no successful geocoding null",
+            is_null_level=True,
+        ),
+        cll.ElseLevel(),
+    ],
 )
 
 MULTI_OFFENDER_NULL_LEVEL = cll.Not(
@@ -1408,6 +1535,23 @@ INCIDENT_COMPARISONS = [
     AGE_COMP,
     VICTIM_COUNT_COMP,
     DIST_COMP_NEW,
+    VICTIM_SEX_COMP,
+    OFFENDER_COMP,
+    OFFENDER_AGE_COMP,
+    OFFENDER_SEX_COMP,
+    RELATIONSHIP_COMP,
+    TF_WEAPON_COMP,
+    CIRC_COMP,
+    SUMMARY_COMP,
+    cl.ExactMatch("victim_race").configure(term_frequency_adjustments=True),
+]
+
+INCIDENT_COMPARISONS_NYT = [
+    NAME_COMP,
+    DATE_COMP,
+    AGE_COMP,
+    VICTIM_COUNT_COMP,
+    DIST_COMP_NYT,
     VICTIM_SEX_COMP,
     OFFENDER_COMP,
     OFFENDER_AGE_COMP,

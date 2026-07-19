@@ -12,7 +12,9 @@ from blocking import (
 )
 from comparison import (
     INCIDENT_COMPARISONS,
+    INCIDENT_COMPARISONS_NYT,
 )
+from publication_profiles import PublicationProfile
 from menuprompts import NextStep
 from splink_types import SplinkType
 from cluster_compare import ClusterCompareRequest, compare_cluster_tables
@@ -34,6 +36,7 @@ from pymonad import (
     sql_import,
     unit,
     with_duckdb,
+    ask,
     file_exists,
     rename_file,
 )
@@ -69,29 +72,31 @@ def _dedupe_named_victims(_: Unit) -> Run[Unit]:
     """
     Run initial pass of Splink deduplication on the victims_named table.
     """
-    return splink_dedupe_job(
-        input_table=PredictionInputTableName("victims_named"),
-        settings=_settings_for_victim_dedupe(),
-        predict_threshold=0.6,
-        cluster_threshold=0.75,
-        pairs_out=PairsTableName("victim_pairs"),
-        clusters_out=ClustersTableName("victim_clusters"),
-        train_first=True,
-        training_blocking_rules=NAMED_VICTIM_BLOCKS_FOR_TRAINING,
-        training_block_level_map=DEDUPE_TRAINING_BLOCK_LEVEL_MAP,
-        deterministic_rules=NAMED_VICTIM_DETERMINISTIC_BLOCKS,
-        deterministic_recall=0.6,
-        em_max_runs=1,
-        visualize=False,
-        splink_key=SplinkType.DEDUP,
-        do_not_link_table=DoNotLinkTableName("victim_cluster_exclusion"),
-        blocked_pairs_out=BlockedPairsTableName("victim_cluster_blocked_edges"),
-        u_estimation_max_pairs=1_000_000,
-    ) >> (
-        lambda result: put_line(
-            f"[D] Wrote {result.pairs_table} and {result.clusters_table} in DuckDB."
-        )
-    ) ^ pure(unit)
+    return ask() >> (
+        lambda env: splink_dedupe_job(
+            input_table=PredictionInputTableName("victims_named"),
+            settings=_settings_for_victim_dedupe(env["publication_profile"]),
+            predict_threshold=0.6,
+            cluster_threshold=0.75,
+            pairs_out=PairsTableName("victim_pairs"),
+            clusters_out=ClustersTableName("victim_clusters"),
+            train_first=True,
+            training_blocking_rules=NAMED_VICTIM_BLOCKS_FOR_TRAINING,
+            training_block_level_map=DEDUPE_TRAINING_BLOCK_LEVEL_MAP,
+            deterministic_rules=NAMED_VICTIM_DETERMINISTIC_BLOCKS,
+            deterministic_recall=0.6,
+            em_max_runs=1,
+            visualize=False,
+            splink_key=SplinkType.DEDUP,
+            do_not_link_table=DoNotLinkTableName("victim_cluster_exclusion"),
+            blocked_pairs_out=BlockedPairsTableName("victim_cluster_blocked_edges"),
+            u_estimation_max_pairs=1_000_000,
+        ) >> (
+            lambda result: put_line(
+                f"[D] Wrote {result.pairs_table} and {result.clusters_table} in DuckDB."
+            )
+        ) ^ pure(unit)
+    )
 
 
 def _create_cluster_tables() -> Run[Unit]:
@@ -930,12 +935,17 @@ def _cluster_blocks(rows):
     return sorted_blocks
 
 
-def _settings_for_victim_dedupe() -> dict:
+def _settings_for_victim_dedupe(profile: PublicationProfile) -> dict:
+    comparisons = (
+        INCIDENT_COMPARISONS_NYT
+        if str(profile.policies.splink_profile) == "nyt_nyc"
+        else INCIDENT_COMPARISONS
+    )
     return {
         "link_type": "dedupe_only",
         "unique_id_column_name": "victim_row_id",
         "blocking_rules_to_generate_predictions": NAMED_VICTIM_BLOCKS,
-        "comparisons": INCIDENT_COMPARISONS,
+        "comparisons": comparisons,
     }
 
 
