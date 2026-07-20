@@ -556,7 +556,7 @@ def _insert_geocode_result(env: Environment, addr_key: str, g) -> Run[Unit]:
         )
     return (
         sql_exec(
-            INSERT_CACHE_SQL,
+            _provider_sql(env, INSERT_CACHE_SQL),
             SQLParams(
                 (
                     String(addr_key),

@@ -294,7 +294,9 @@ def display_article(total: int,
                     current: int,
                     row: Mapping,
                     types: Rows,
-                    limit_lines=0) -> tuple[str, tuple[str, ...]]:
+                    limit_lines=0,
+                    article_text: str | None = None
+                    ) -> tuple[str, tuple[str, ...]]:
     """
     Full text to display contents and metadata of one article
     """
@@ -309,7 +311,8 @@ def display_article(total: int,
     # lines = wrap_lines(
     #     color_text_matches(color_mass_locations(row['FullText']))
     # )
-    lines = tuple(rich_text(row['FullText'], row['Publication']).splitlines())
+    text = row['FullText'] if article_text is None else article_text
+    lines = tuple(rich_text(text, row['Publication']).splitlines())
     limit = limit_lines - 12
     art_types = article_types(types)
     return ("\n".join(counter

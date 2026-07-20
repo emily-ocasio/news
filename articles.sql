@@ -9,6 +9,11 @@ CREATE TABLE articles (
     FullText TEXT,
     Abstract TEXT 
 , Status TEXT, Dataset TEXT, AutoClass TEXT, ManualClass TEXT, Notes TEXT, AssignStatus TEXT, LastUpdated TEXT, gptClass TEXT, gptVictimJson TEXT, Guid TEXT);
+CREATE TABLE article_clarifications (
+    article_id INTEGER PRIMARY KEY,
+    clarification TEXT NOT NULL,
+    FOREIGN KEY(article_id) REFERENCES articles(RecordId)
+);
 CREATE TABLE authors (
     OrigForm TEXT NOT NULL,
     RecordId INTEGER NOT NULL,

@@ -64,6 +64,9 @@ def article_type_join_sql(index: str = "", extract: bool = False) -> str:
     return f"""
         SELECT 
             a.*, 
+            (SELECT clarification
+             FROM article_clarifications ac
+             WHERE ac.article_id = a.RecordId) AS clarification,
             SUM(IIF(t.TypeID IN (7,8,9,10,12,13,19,21), 0, 1)) AS GoodTypes,
             SUM(1 << t.TypeId) as BinaryTypes
             {extract_sql}

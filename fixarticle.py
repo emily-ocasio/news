@@ -2,6 +2,7 @@
 Monadic controller for reviewing and making changes to a single article
 """
 import json
+from dataclasses import replace
 from enum import Enum
 from typing import Any
 
@@ -59,6 +60,8 @@ from publication_profiles import Availability
 
 FIX_PROMPTS: dict[str, str | tuple[str,]] = {
     "record_id": "Please enter the record ID of the article you want to fix: ",
+    "clarification": "Enter the additional clarification: ",
+    "delete_clarification": "Delete this clarification? (y/n): ",
     "delete_cache_entry_index": (
         "Select orphan cache entry number to delete, type 'all', or 0 to go back: "
     ),
@@ -78,6 +81,7 @@ class FixAction(Enum):
     FORCE_ORPHAN_ADJ_CACHE_REFRESH = MenuChoice('K')
     FORCE_ORPHAN_ADJ_CACHE_REFRESH_X = MenuChoice('X')
     DELETE_ORPHAN_CACHE = MenuChoice('D')
+    CLARIFICATION = MenuChoice('C')
     CONTINUE = MenuChoice('F')
     MAIN_MENU = MenuChoice('M')
     QUIT = MenuChoice('Q')
@@ -91,6 +95,7 @@ def _article_prompt(
     options = [
         "Apply [S]econd filter via GPT",
         "Extract incident via [G]PT",
+        "Manage article [C]larification",
     ]
     if include_force_adjudication:
         options.append("Force orphan adjudication cache refresh via [K]")
@@ -173,6 +178,59 @@ def _display_article(article: Article) -> Run[Article]:
     return \
         put_line(f"Retrieved article:\n {article}") ^ \
         pure(article)
+
+def _save_clarification(article: Article, clarification: str) -> Run[Article]:
+    return sql_exec(
+        SQL("""
+            INSERT INTO article_clarifications (article_id, clarification)
+            VALUES (?, ?)
+        """),
+        SQLParams((article.record_id or 0, String(clarification))),
+    ) ^ put_line("[F] Article clarification saved.") ^ pure(
+        replace(
+            article,
+            clarification=clarification,
+            full_text=article.full_text,
+        )
+    )
+
+def _delete_clarification(article: Article) -> Run[Article]:
+    return sql_exec(
+        SQL("DELETE FROM article_clarifications WHERE article_id = ?"),
+        SQLParams((article.record_id or 0,)),
+    ) ^ put_line("[F] Article clarification deleted.") ^ pure(
+        replace(
+            article,
+            clarification="",
+            full_text=(article.full_text or '').split(
+                "\nADDITIONAL CLARIFICATION:", 1
+            )[0],
+        )
+    )
+
+def _confirm_delete_clarification(article: Article) -> Run[Article]:
+    def decide(value: String) -> Run[Article]:
+        if str(value).strip().lower() in ('y', 'yes'):
+            return _delete_clarification(article)
+        return put_line("[F] Clarification retained.") ^ pure(article)
+    return input_with_prompt(PromptKey("delete_clarification")) >> decide
+
+def _manage_clarification(article: Article) -> Run[Article]:
+    clarification = (article.clarification or '').strip()
+    if clarification:
+        return (
+            put_line(f"Current clarification:\n{clarification}")
+            ^ _confirm_delete_clarification(article)
+        )
+
+    def add(value: String) -> Run[Article]:
+        text = str(value).strip()
+        return (
+            put_line("[F] Clarification cannot be blank.")
+            ^ _manage_clarification(article)
+            if not text else _save_clarification(article, text)
+        )
+    return input_with_prompt(PromptKey("clarification")) >> add
 
 def _display_latest_gpt_response(article: Article) -> Run[Article]:
     """
@@ -576,6 +634,10 @@ def _apply_action(
                 _choose_cache_entries(cache_rows)
                 >> (lambda selected: _delete_cache_entries(article, selected))
                 >> (lambda _: _select_apply_action(article, allow_cache_delete))
+            )
+        case FixAction.CLARIFICATION:
+            result = _manage_clarification(article) >> (
+                lambda updated: _select_apply_action(updated, allow_cache_delete)
             )
         case FixAction.FORCE_ORPHAN_ADJ_CACHE_REFRESH:
             result = _run_forced_article_adjudication_refresh()

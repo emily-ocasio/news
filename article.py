@@ -41,9 +41,16 @@ class Article:  # pylint: disable=too-many-instance-attributes
     auto_class: str | None = None
     title: str | None = None
     full_text: str | None = None
+    clarification: str | None = None
 
     def __str__(self) -> str:
-        display, _ = display_article(self.total, self.current, self.row, ())
+        display, _ = display_article(
+            self.total,
+            self.current,
+            self.row,
+            (),
+            article_text=self.full_text,
+        )
         return display
 
     def __post_init__(self):
@@ -54,6 +61,17 @@ class Article:  # pylint: disable=too-many-instance-attributes
                 # only overwrite when the field is currently None
                 if current_val is None:
                     object.__setattr__(self, snake, self.row[col])
+        if self.full_text is None:
+            object.__setattr__(self, 'full_text', self.row['FullText'])
+        clarification = (self.clarification or '').strip()
+        if clarification and not str(self.full_text or '').endswith(
+            f"ADDITIONAL CLARIFICATION: {clarification}"
+        ):
+            object.__setattr__(
+                self,
+                'full_text',
+                f"{self.full_text or ''}\nADDITIONAL CLARIFICATION: {clarification}",
+            )
 
     @property
     def full_date(self) -> str:
