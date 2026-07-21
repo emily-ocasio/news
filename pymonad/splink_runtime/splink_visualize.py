@@ -306,8 +306,8 @@ def _vectors_to_similarity(left: str, right: str) -> tuple[str, str]:
 
 def _locations_to_distance(left: str, right: str) -> tuple[str, str]:
     """Convert location-like strings to distance display values when possible."""
-    min_lat, max_lat = 38.7, 39.0
-    min_lon, max_lon = -77.2, -76.9
+    min_lat, max_lat = 24.4, 47.5
+    min_lon, max_lon = -82.0, -66.9
 
     def extract_lat_lon(parts: list[str]) -> tuple[float, float] | None:
         if len(parts) < 4:

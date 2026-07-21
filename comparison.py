@@ -942,7 +942,7 @@ DIST_COMP_NEW = cl.CustomComparison(
             ),
             cllc.And(
                 DIST_STREET_ONLY_TYPE,
-                cll.JaroWinklerLevel( "geo_address_short", 0.90)
+                cll.JaroWinklerLevel( "geo_address_short", 0.90),
             ),
             cllc.And(
                 cllc.Or(
@@ -1140,6 +1140,7 @@ DIST_COMP_NYT = cl.CustomComparison(
             ),
             cllc.And(
                 DIST_STREET_ONLY_TYPE,
+                cll.DistanceInKMLevel("lat", "lon", 2.0),
                 cll.JaroWinklerLevel("geo_address_short", 0.90),
             ),
             cllc.And(
