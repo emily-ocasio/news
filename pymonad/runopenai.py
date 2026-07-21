@@ -76,6 +76,23 @@ class OAChat:
     stream: bool = False
 
 
+class GPTResponseError(Exception):
+    """Structured GPT response parsing failure with the raw API response."""
+
+    def __init__(self, raw_response: str, original: Exception):
+        self.raw_response = raw_response
+        self.original = original
+        super().__init__(str(original))
+
+    def __str__(self) -> str:
+        return (
+            f"{self.original.__class__.__name__}: {self.original}\n"
+            "--- Raw GPT response --------------------------------\n"
+            f"{self.raw_response}\n"
+            "------------------------------------------------"
+        )
+
+
 @dataclass(frozen=True)
 class OAEmbedding:
     """OpenAI Embeddings API call intent."""
@@ -233,17 +250,26 @@ def run_openai(
                             ### - DO NOT USE THIS - ###
                             ## API does not properly parse the object at the end ###
                             return _stream_response(client, model, prompt, effort)
-                        return _with_elapsed_timer(lambda: client.responses.parse(
-                            model=model.value,
-                            prompt=prompt.to_gpt,
-                            text_format=text_format,
-                            reasoning={
-                                "effort": effort,
-                                "summary": "auto"
-                            },
-                            text={"verbosity": verbosity},
-                            timeout=300.0
-                        ))
+                        def parse_response() -> ParsedResponse[BaseModel]:
+                            raw_response = client.responses.with_raw_response.parse(
+                                model=model.value,
+                                prompt=prompt.to_gpt,
+                                text_format=text_format,
+                                reasoning={
+                                    "effort": effort,
+                                    "summary": "auto"
+                                },
+                                text={"verbosity": verbosity},
+                                timeout=300.0
+                            )
+                            try:
+                                return raw_response.parse()
+                            except Exception as ex:  # noqa: BLE001
+                                raise GPTResponseError(
+                                    raw_response.text, ex
+                                ) from ex
+
+                        return _with_elapsed_timer(parse_response)
                     return client.responses.create(
                         model=model,
                         prompt=prompt.to_gpt,
