@@ -110,9 +110,12 @@ NYT_NEW_YORK_STREET_RE = re.compile(
 NYT_QUEENS_LOCALITY_RE = re.compile(r"\b(QUEENS|JAMAICA)\b", re.IGNORECASE)
 NYT_STATION_RE = re.compile(r"\bSTATION\b", re.IGNORECASE)
 NYT_STATION_SUBWAY_BMT_RE = re.compile(
-    r"\b(?:SUBWAY|BMT|IRT)\s+(?=STATION\b)", re.IGNORECASE
+    r"\b(?:SUBWAY|BMT|IRT|IND)\s+(?=STATION\b)", re.IGNORECASE
 )
 NYT_STATION_DIRECTION_RE = re.compile(r"^(?:EAST|WEST)\s+", re.IGNORECASE)
+NYT_STATION_TRAILING_DETAIL_RE = re.compile(
+    r"(?<=\bSTATION\b)[^,]*(?=,)", re.IGNORECASE
+)
 
 
 def _add_ordinal_suffix(m: re.Match[str]) -> str:
@@ -168,7 +171,8 @@ def normalize_for_nominatim(a: str) -> str:
     normalized = normalize_for_arcgis(a)
     while NYT_STATION_SUBWAY_BMT_RE.search(normalized):
         normalized = NYT_STATION_SUBWAY_BMT_RE.sub("", normalized)
-    return NYT_STATION_DIRECTION_RE.sub("", normalized)
+    normalized = NYT_STATION_DIRECTION_RE.sub("", normalized)
+    return NYT_STATION_TRAILING_DETAIL_RE.sub("", normalized)
 
 CREATE_CACHE_SQL = SQL(
     """--sql
