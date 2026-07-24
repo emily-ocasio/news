@@ -1208,7 +1208,18 @@ DIST_COMP_NYT = cl.CustomComparison(
                 cll.DistanceInKMLevel("lat", "lon", 1.5),
                 DIST_PLACE_TYPE_NYT,
             ),
-        ).configure(label_for_charts="within 0.5km / 1.0km st only / 1.5 km place"),
+        ).configure(label_for_charts="within 0.5 km / 1.0 km st only / 1.5 km place"),
+        cllc.Or(
+            cll.DistanceInKMLevel("lat", "lon", 1.0),
+            cllc.And(
+                DIST_STREET_ONLY_TYPE,
+                cll.DistanceInKMLevel("lat", "lon", 2.0),
+            ),
+            cllc.And(
+                cll.DistanceInKMLevel("lat", "lon", 3.0),
+                DIST_PLACE_TYPE_NYT,
+            ),
+        ).configure(label_for_charts="within 1.0 km / 2.0km st only / 3.0 km place"),
         DIST_NO_SUCCESS.configure(
             label_for_charts="no successful geocoding null",
             is_null_level=True,
