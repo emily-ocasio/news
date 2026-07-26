@@ -2,6 +2,7 @@
 Geocode incident addresses using MAR.
 """
 
+from dataclasses import dataclass
 from typing import cast
 import json
 import re
@@ -18,6 +19,8 @@ from pymonad import (
     geocode_address,
     geocode_arcgis_address,
     geocode_nominatim_address,
+    adjudicate_borough,
+    array_traverse_run,
     GeocodeResult,
     String,
     process_items,
@@ -33,6 +36,7 @@ from pymonad import (
     is_nominatim_result,
     nominatim_result_type_with_input,
     nominatim_result_score,
+    BoroughAdjudicationResult,
     FailureType,
     throw,
     ErrorPayload,
@@ -47,6 +51,15 @@ from incidents_setup import CREATE_VICTIMS_CACHED_ENH_SQL
 from menuprompts import NextStep
 
 ADDRESS_NORMALIZATION_VERSION = "v2"
+
+
+@dataclass(frozen=True)
+class BoroughAdjudicationOutcome:
+    """Outcome for one borough-cache lookup or adjudication."""
+
+    cache_hit: bool
+    borough: str | None
+    status: str
 
 GENERAL_STREET_TYPES: dict[str, str] = {
     "AVE": "AVENUE",
@@ -245,6 +258,29 @@ INSERT OR REPLACE INTO mar_addr_map (addr_raw, addr_key) VALUES (?, ?)
 """
 )
 
+CREATE_BOROUGH_CACHE_SQL = SQL(
+    """--sql
+CREATE TABLE IF NOT EXISTS nyc_borough_cache (
+  input_address TEXT PRIMARY KEY,
+  x_lon DOUBLE,
+  y_lat DOUBLE,
+  borough TEXT,
+  status TEXT NOT NULL,
+  geometry_version TEXT NOT NULL
+);
+"""
+)
+
+BOROUGH_CACHE_GET_SQL = SQL(
+    "SELECT * FROM nyc_borough_cache WHERE input_address = ?;"
+)
+
+BOROUGH_CACHE_INSERT_SQL = SQL(
+    """INSERT OR REPLACE INTO nyc_borough_cache
+       (input_address, x_lon, y_lat, borough, status, geometry_version)
+       VALUES (?, ?, ?, ?, ?, ?);"""
+)
+
 # Materialize into a stable table for joins downstream
 CREATE_GEOCODED_VIEW_SQL = SQL(
     r"""
@@ -258,6 +294,8 @@ SELECT
   COALESCE(mc.address_type, 'NO_SUCCESS') AS address_type,
   mc.geo_score AS geo_score,
   CAST(NULL AS TEXT) AS geo_address_review,
+  CAST(NULL AS TEXT) AS borough,
+  CAST(NULL AS TEXT) AS borough_status,
   CASE
     WHEN COALESCE(mc.address_type, 'NO_SUCCESS') IN ('INTERSECTION','NO_SUCCESS_INTERSECTION','NO_RESULT_INTERSECTION') THEN
       list_extract(
@@ -323,6 +361,8 @@ WITH source AS (
     COALESCE(mc.address_type, 'NO_SUCCESS') AS address_type,
     mc.geo_score AS geo_score,
     NULLIF(mc.review_code, '') AS geo_address_review,
+    bc.borough AS borough,
+    bc.status AS borough_status,
     COALESCE(NULLIF(mc.matched_address, ''), mc.input_address,
       trim(coalesce(i.location_raw, ''))) AS geo_source_address
   FROM stg_article_incidents i
@@ -330,6 +370,8 @@ WITH source AS (
     ON trim(coalesce(i.location_raw, '')) = m.addr_raw
   LEFT JOIN arcgis_cache mc
     ON mc.input_address = m.addr_key
+  LEFT JOIN nyc_borough_cache bc
+    ON bc.input_address = mc.input_address
 ), components AS (
   SELECT
     source.*,
@@ -1157,6 +1199,92 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
             )
         )
 
+    def _adjudicate_boroughs() -> Run[None]:
+        """Populate the independent NYC borough cache from ArcGIS points."""
+        if provider != "stanford_arcgis":
+            return pure(None)
+
+        def process_rows(rows: Array[dict]) -> Run[None]:
+            def process_row(row: dict) -> Run[BoroughAdjudicationOutcome]:
+                input_address = String(str(row["input_address"]))
+
+                def use_cache(cached: Array[dict]) -> Run[BoroughAdjudicationOutcome]:
+                    if len(cached) > 0:
+                        cached_row = cached[0]
+                        return pure(
+                            BoroughAdjudicationOutcome(
+                                True,
+                                cached_row.get("borough"),
+                                str(cached_row["status"]),
+                            )
+                        )
+                    x_lon = row.get("x_lon")
+                    y_lat = row.get("y_lat")
+                    result = adjudicate_borough(
+                        float(x_lon) if x_lon is not None else 0,
+                        float(y_lat) if y_lat is not None else 0,
+                    )
+
+                    def save_result(
+                        result_value: BoroughAdjudicationResult,
+                    ) -> Run[BoroughAdjudicationOutcome]:
+                        return (
+                            sql_exec(
+                                BOROUGH_CACHE_INSERT_SQL,
+                                SQLParams(
+                                    (
+                                        input_address,
+                                        x_lon,
+                                        y_lat,
+                                        String(result_value.borough)
+                                        if result_value.borough is not None
+                                        else None,
+                                        String(result_value.status),
+                                        String("26B"),
+                                    )
+                                ),
+                            )
+                            ^ pure(
+                                BoroughAdjudicationOutcome(
+                                    False,
+                                    result_value.borough,
+                                    result_value.status,
+                                )
+                            )
+                        )
+
+                    return result >> save_result
+
+                return sql_query(
+                    BOROUGH_CACHE_GET_SQL,
+                    SQLParams((input_address,)),
+                ) >> use_cache
+
+            def summarize(
+                outcomes: Array[BoroughAdjudicationOutcome],
+            ) -> Run[None]:
+                cache_hits = sum(1 for outcome in outcomes if outcome.cache_hit)
+                new_adjudications = len(outcomes) - cache_hits
+                return put_line(
+                    "[GEO] NYC borough adjudication: "
+                    f"cache_hits={cache_hits} new={new_adjudications}"
+                ) ^ pure(None)
+
+            if rows.length == 0:
+                return pure(None)
+            return array_traverse_run(rows, process_row) >> summarize
+
+        return (
+            sql_exec(CREATE_BOROUGH_CACHE_SQL)
+            ^ sql_query(
+                SQL(
+                    "SELECT input_address, x_lon, y_lat "
+                    "FROM arcgis_cache;"
+                )
+            )
+            >> process_rows
+        )
+
     return (
         sql_script(SQL(r"""
             LOAD splink_udfs;
@@ -1172,6 +1300,7 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
             lambda rows: put_line(f"[GEO] Found {len(rows)} distinct raw addresses.")
             ^ _process_rows(Array(tuple(rows)))
         )
+        ^ _adjudicate_boroughs()
         ^ sql_exec(create_view_sql)
         ^ put_line("[GEO] Built view stg_article_incidents_geo.")
         ^ sql_exec(
@@ -1240,6 +1369,14 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
         ^ sql_exec(
             SQL(
                 r"""
+            ALTER TABLE victims_cached ADD COLUMN IF NOT EXISTS borough TEXT;
+            ALTER TABLE victims_cached ADD COLUMN IF NOT EXISTS borough_status TEXT;
+        """
+            )
+        )
+        ^ sql_exec(
+            SQL(
+                r"""
             UPDATE victims_cached vc
             SET geo_address_norm = g.geo_address_norm,
                 lon = CASE WHEN g.lon = 0 THEN NULL ELSE g.lon END,
@@ -1249,7 +1386,9 @@ def geocode_all_incident_addresses(env: Environment) -> Run[NextStep]:
                 geo_address_short = g.geo_address_short,
                 geo_address_short_2 = g.geo_address_short_2,
                 geo_address_locality = g.geo_address_locality,
-                geo_address_review = g.geo_address_review
+                geo_address_review = g.geo_address_review,
+                borough = g.borough,
+                borough_status = g.borough_status
             FROM stg_article_incidents_geo g
             WHERE vc.article_id = g.article_id
               AND vc.incident_idx = g.incident_idx;

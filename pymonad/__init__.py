@@ -19,6 +19,8 @@ from .environment import (
 from .functor import Functor, map  # pylint: disable=redefined-builtin
 from .geocode import (
     GeocodeResult,
+    BoroughAdjudication,
+    BoroughAdjudicationResult,
     AddressResultType,
     addr_key_type,
     addr_key_type_without_comma_suffix,
@@ -74,9 +76,11 @@ from .run import (
     geocode_address,
     geocode_arcgis_address,
     geocode_nominatim_address,
+    adjudicate_borough,
     monotonic_now,
     file_exists,
     rename_file,
+    fold_run,
 )
 from .openai import (
     EmbeddingModel,
@@ -133,7 +137,7 @@ from .runsplink import (
     SplinkDedupeResult,
 )
 from .string import Char, String, from_char_array, from_string
-from .traverse import array_sequence, array_traverse
+from .traverse import array_sequence, array_traverse, array_traverse_run
 from .tuple import Tuple, Threeple
 from .validation import V, Valid, Invalid
 from .validate_run import (

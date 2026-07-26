@@ -36,5 +36,6 @@ splink_models/
 .dmypy.*
 pyrightconfig.*
 out/*
+data/geo/nyc_borough_boundary_26b.geojson
 docs/publication_generalization_refactoring_plan.md
 .codex/skills

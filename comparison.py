@@ -584,22 +584,22 @@ VICTIM_COUNT_COMP = cl.CustomComparison(
             label_for_charts="victim counts NULL or zero",
             is_null_level=True,
         ),
-        NullComparisonLevel(
-            "victim counts NULL",
-            _null_comp_builder("victim_count")
-        ).to_dict(),
+        # NullComparisonLevel(
+        #     "victim counts NULL",
+        #     _null_comp_builder("victim_count")
+        # ).to_dict(),
         TFComparisonLevel(
             "exact match victim count",
             _exact_comp_builder("victim_count"),
             "victim_count"
         ).to_dict(),
-        ComparisonLevel(
-            "victim counts within 1 (counts > 3)",
-            (
-                '"victim_count_l" > 3 AND "victim_count_r" > 3 '
-                'AND abs("victim_count_l" - "victim_count_r") <= 1'
-            )
-        ).to_dict(),
+        # ComparisonLevel(
+        #     "victim counts within 1 (counts > 3)",
+        #     (
+        #         '"victim_count_l" > 3 AND "victim_count_r" > 3 '
+        #         'AND abs("victim_count_l" - "victim_count_r") <= 1'
+        #     )
+        # ).to_dict(),
         cll.ElseLevel()
     ]
 )
@@ -1220,6 +1220,13 @@ DIST_COMP_NYT = cl.CustomComparison(
                 DIST_PLACE_TYPE_NYT,
             ),
         ).configure(label_for_charts="within 1.0 km / 2.0km st only / 3.0 km place"),
+        cllc.And(
+            cll.ExactMatchLevel("borough"),
+            cllc.Or(
+                DIST_STREET_ONLY_TYPE,
+                DIST_PLACE_TYPE_NYT,
+            )
+        ).configure(label_for_charts="borough exact match with street or place type"),
         DIST_NO_SUCCESS.configure(
             label_for_charts="no successful geocoding null",
             is_null_level=True,

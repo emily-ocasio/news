@@ -13,7 +13,7 @@ from typing import cast, Any, Generic, TypeVar
 
 from .applicative import Applicative
 from .array import Array
-from .dispatch import GetLine, PutLine, InputPrompt, MarGeocode, StanfordArcGISGeocode, NominatimGeocode, Sleep, \
+from .dispatch import GetLine, PutLine, InputPrompt, MarGeocode, StanfordArcGISGeocode, NominatimGeocode, BoroughAdjudication, Sleep, \
     GeocodeResult, FileExists, RenameFile, MonotonicNow
 from .either import Either, Left, Right
 from .environment import Environment, Namespace, PromptKey, AllPrompts, \
@@ -317,6 +317,16 @@ def geocode_nominatim_address(address: str) -> Run[GeocodeResult]:
     return Run(
         lambda self: self._perform(NominatimGeocode(address), self), \
                _unhandled)
+
+
+def adjudicate_borough(x_lon: float, y_lat: float) -> Run[Any]:
+    """Create a Run action to assign an NYC borough from coordinates."""
+    return Run(
+        lambda self: self._perform(
+            BoroughAdjudication(x_lon, y_lat), self
+        ),
+        _unhandled,
+    )
 
 def sleep_ms(ms: int) -> Run[None]:
     """Sleep for rate limiting or courtesy."""

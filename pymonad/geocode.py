@@ -4,11 +4,15 @@ MAR geocoding intent types and handler.
 
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
+from typing import Any
 from urllib.parse import quote
 import json
 import re
 import time
 import requests
+from shapely.geometry import Point  # type: ignore[import-untyped]
+import geopandas as gpd  # type: ignore[import-untyped]
 
 
 @dataclass(frozen=True)
@@ -93,6 +97,56 @@ class NominatimGeocode:
     """Effect: Geocode a location through the Nominatim search API."""
 
     address: str
+
+
+@dataclass(frozen=True)
+class BoroughAdjudication:
+    """Effect: assign an NYC borough from geocoded coordinates."""
+
+    x_lon: float
+    y_lat: float
+
+
+@dataclass(frozen=True)
+class BoroughAdjudicationResult:
+    """Result of assigning a point to an NYC borough polygon."""
+
+    borough: str | None
+    status: str
+
+
+_BOROUGH_GEOMETRY: Any = None
+_BOROUGH_GEOMETRY_PATH = (
+    Path(__file__).resolve().parent.parent
+    / "data/geo/nyc_borough_boundary_26b.geojson"
+)
+
+
+def borough_adjudication_handler(
+    x: BoroughAdjudication,
+) -> BoroughAdjudicationResult:
+    """Return the NYC borough containing the supplied longitude/latitude."""
+    global _BOROUGH_GEOMETRY  # pylint: disable=global-statement
+    if x.x_lon == 0 or x.y_lat == 0:
+        return BoroughAdjudicationResult(None, "missing_coordinates")
+    if _BOROUGH_GEOMETRY is None:
+        _BOROUGH_GEOMETRY = gpd.read_file(_BOROUGH_GEOMETRY_PATH).to_crs(
+            "EPSG:4326"
+        )
+    point = Point(x.x_lon, x.y_lat)
+    matches = _BOROUGH_GEOMETRY[_BOROUGH_GEOMETRY.geometry.contains(point)]
+    if len(matches) == 1:
+        return BoroughAdjudicationResult(
+            str(matches.iloc[0]["BoroName"]), "matched"
+        )
+    if len(matches) > 1:
+        return BoroughAdjudicationResult(None, "boundary")
+    boundary_matches = _BOROUGH_GEOMETRY[
+        _BOROUGH_GEOMETRY.geometry.intersects(point)
+    ]
+    if len(boundary_matches) > 0:
+        return BoroughAdjudicationResult(None, "boundary")
+    return BoroughAdjudicationResult(None, "outside_nyc")
 
 
 def mar_result_type(j: dict) -> AddressResultType:
