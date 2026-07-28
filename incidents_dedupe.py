@@ -286,6 +286,9 @@ def _build_representative_victims() -> Run[Unit]:
                     ve.canonical_sex,
                     ve.canonical_race,
                     ve.canonical_ethnicity,
+                    mode(m.borough) FILTER (
+                      WHERE m.borough IS NOT NULL AND trim(m.borough) <> ''
+                    ) AS canonical_borough,
                     -- canonical offender attributes
                     -- counts by precision
                     count_if(m.date_precision = 'day')   AS n_day,
@@ -634,6 +637,7 @@ def _build_representative_victims() -> Run[Unit]:
                   a.canonical_sex,
                   a.canonical_race,
                   a.canonical_ethnicity,
+                  a.canonical_borough,
                   rc.canonical_relationship,
 
                   -- canonical offender attributes

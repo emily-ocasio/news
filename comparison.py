@@ -788,6 +788,12 @@ DIST_PLACE_TYPE_NYT = cllc.Or(
     cll.LiteralMatchLevel("address_type", "APPROXIMATE_PLACE", "string", "right"),
 )
 
+DIST_EXACT_APPROXIMATE_PLACE_NYT = cllc.And(
+    cll.LiteralMatchLevel("address_type", "APPROXIMATE_PLACE", "string", "left"),
+    cll.LiteralMatchLevel("address_type", "APPROXIMATE_PLACE", "string", "right"),
+    cll.ExactMatchLevel("geo_address_norm"),
+)
+
 DIST_NO_SUCCESS = cllc.Or(
     DIST_STREET_NO_RESULT_TYPE,
     cll.LiteralMatchLevel("address_type", "NO_SUCCESS", "string", "left"),
@@ -1108,7 +1114,9 @@ DIST_COMP_NYT = cl.CustomComparison(
         cll.NullLevel(
             ColumnExpression("geo_address_norm").nullif("UNKNOWN").nullif("")
         ),
-        cllc.Or(
+        cllc.And(
+            cllc.Not(DIST_EXACT_APPROXIMATE_PLACE_NYT),
+            cllc.Or(
             cllc.And(
                 cll.DistanceInKMLevel("lat", "lon", 0.0005),
                 cllc.Or(
@@ -1126,8 +1134,11 @@ DIST_COMP_NYT = cl.CustomComparison(
                 ),
                 cll.ExactMatchLevel("geo_address_norm"),
             ),
+            ),
         ).configure(label_for_charts="exact location match"),
-        cllc.Or(
+        cllc.And(
+            cllc.Not(DIST_EXACT_APPROXIMATE_PLACE_NYT),
+            cllc.Or(
             cll.DistanceInKMLevel("lat", "lon", 0.15),
             cllc.And(
                 DIST_STREET_TYPE,
@@ -1197,8 +1208,11 @@ DIST_COMP_NYT = cl.CustomComparison(
                 DIST_PLACE_TYPE_NYT,
                 cll.DistanceInKMLevel("lat", "lon", 0.5),
             ),
+            ),
         ).configure(label_for_charts="within 0.15 km or similar address"),
-        cllc.Or(
+        cllc.And(
+            cllc.Not(DIST_EXACT_APPROXIMATE_PLACE_NYT),
+            cllc.Or(
             cll.DistanceInKMLevel("lat", "lon", 0.5),
             cllc.And(
                 DIST_STREET_ONLY_TYPE,
@@ -1208,8 +1222,11 @@ DIST_COMP_NYT = cl.CustomComparison(
                 cll.DistanceInKMLevel("lat", "lon", 1.5),
                 DIST_PLACE_TYPE_NYT,
             ),
+            ),
         ).configure(label_for_charts="within 0.5 km / 1.0 km st only / 1.5 km place"),
-        cllc.Or(
+        cllc.And(
+            cllc.Not(DIST_EXACT_APPROXIMATE_PLACE_NYT),
+            cllc.Or(
             cll.DistanceInKMLevel("lat", "lon", 1.0),
             cllc.And(
                 DIST_STREET_ONLY_TYPE,
@@ -1219,6 +1236,7 @@ DIST_COMP_NYT = cl.CustomComparison(
                 cll.DistanceInKMLevel("lat", "lon", 3.0),
                 DIST_PLACE_TYPE_NYT,
             ),
+            ),
         ).configure(label_for_charts="within 1.0 km / 2.0km st only / 3.0 km place"),
         cllc.And(
             cll.ExactMatchLevel("borough"),
@@ -1226,7 +1244,7 @@ DIST_COMP_NYT = cl.CustomComparison(
                 DIST_STREET_ONLY_TYPE,
                 DIST_PLACE_TYPE_NYT,
             )
-        ).configure(label_for_charts="borough exact match with street or place type"),
+        ).configure(label_for_charts="borough or neighborhood match"),
         DIST_NO_SUCCESS.configure(
             label_for_charts="no successful geocoding null",
             is_null_level=True,

@@ -250,8 +250,10 @@ def arcgis_result_type_with_input(addr_key: str, j: dict) -> AddressResultType:
         return AddressResultType.STREET_ONLY
     if native_type in {"block", "addressrange", "streetaddressrange"}:
         return AddressResultType.BLOCK
-    if native_type in {"poi", "locality", "postal", "admin", "place"}:
+    if native_type in {"poi", "admin", "place"}:
         return AddressResultType.NAMED_PLACE
+    if native_type in {"locality", "postal"}:
+        return AddressResultType.APPROXIMATE_PLACE
 
     input_type = addr_key_type_without_comma_suffix(addr_key)
     if input_type in (
