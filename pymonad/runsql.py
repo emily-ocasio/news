@@ -11,8 +11,10 @@ import pandas as pd
 import duckdb
 from openpyxl import load_workbook
 from openpyxl.styles import PatternFill
+from openpyxl.styles import Alignment
 from openpyxl.formatting.rule import FormulaRule
 from openpyxl.cell import Cell
+from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from openpyxl.utils import get_column_letter
 
 from .array import Array
@@ -228,6 +230,13 @@ def _sql_export(
     df: pd.DataFrame, filename, sheet, band_by_group_col, band_wrap,
     color_index_col=None, color_palette_size=4,
 ):
+    df = df.copy()
+    for column in df.select_dtypes(include=["object"]).columns:
+        df[column] = df[column].map(
+            lambda value: ILLEGAL_CHARACTERS_RE.sub("", value)
+            if isinstance(value, str)
+            else value
+        )
     widths = _compute_column_widths(df)
     try:
         with pd.ExcelWriter(filename, engine="openpyxl") as writer:
@@ -238,6 +247,7 @@ def _sql_export(
                 filename, sheet or "Sheet1", color_index_col, color_palette_size
             )
             _auto_fit_columns_xlsx(filename, sheet or "Sheet1", widths)
+            _limit_summary_columns_xlsx(filename, sheet or "Sheet1")
         elif band_by_group_col:
             _apply_band_formatting_xlsx(
                 filename,
@@ -441,6 +451,10 @@ def _apply_color_index_formatting_xlsx(
         return
     idx = header.index(color_index_col) + 1
     idx_letter = cast(Cell, ws.cell(row=1, column=idx)).column_letter
+    for column, name in enumerate(header, start=1):
+        if isinstance(name, str) and name.startswith("__"):
+            column_letter = cast(Cell, ws.cell(row=1, column=column)).column_letter
+            ws.column_dimensions[column_letter].hidden = True
     fills = [
         PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid"),
         PatternFill(start_color="F4CCCC", end_color="F4CCCC", fill_type="solid"),
@@ -453,8 +467,33 @@ def _apply_color_index_formatting_xlsx(
             f"A2:{last_letter}{ws.max_row}",
             FormulaRule(formula=[f"${idx_letter}2 = {color_index}"], fill=fill),
         )
-    ws.column_dimensions[idx_letter].hidden = True
     ws.freeze_panes = "A2"
+    wb.save(filename)
+    wb.close()
+
+
+def _limit_summary_columns_xlsx(filename: str, sheet: str) -> None:
+    """Give summary fields a bounded, single-line display in Excel."""
+    try:
+        wb = load_workbook(filename)
+    except (KeyError, OSError) as exc:
+        print(f"[WARN] Cannot load {filename} for summary formatting: {exc}")
+        return
+    if sheet not in wb.sheetnames:
+        wb.close()
+        return
+    ws = wb[sheet]
+    header = [cell.value for cell in ws[1]]
+    for name in ("summary", "matched_summary"):
+        if name not in header:
+            continue
+        column = header.index(name) + 1
+        letter = cast(Cell, ws.cell(row=1, column=column)).column_letter
+        ws.column_dimensions[letter].width = 48
+        for row in range(2, ws.max_row + 1):
+            ws.cell(row=row, column=column).alignment = Alignment(
+                wrap_text=False, vertical="top"
+            )
     wb.save(filename)
     wb.close()
 

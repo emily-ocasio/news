@@ -1178,6 +1178,8 @@ def _export_orphan_matches_debug_excel() -> Run[Unit]:
         e.offender_sex,
         e.victim_count,
         e.offender_count,
+        CAST(NULL AS VARCHAR) AS summary,
+        CAST(NULL AS VARCHAR) AS matched_summary,
         CAST(NULL AS DOUBLE) AS match_probability
       FROM entity_with_match e
 
@@ -1213,10 +1215,18 @@ def _export_orphan_matches_debug_excel() -> Run[Unit]:
         o.offender_sex,
         o.victim_count,
         o.offender_count,
+        oi.summary AS summary,
+        ei.summary AS matched_summary,
         o.match_probability
       FROM orphan_choice o
       LEFT JOIN entity_link_input e
         ON e.unique_id = o.entity_uid
+      LEFT JOIN incidents_cached oi
+        ON oi.article_id = o.article_id
+       AND oi.incident_idx = TRY_CAST(split_part(o.unique_id, ':', 2) AS INTEGER)
+      LEFT JOIN incidents_cached ei
+        ON ei.article_id = TRY_CAST(split_part(o.entity_uid, ':', 1) AS BIGINT)
+       AND ei.incident_idx = TRY_CAST(split_part(o.entity_uid, ':', 2) AS INTEGER)
     )
     SELECT
       rec_type,
@@ -1241,6 +1251,8 @@ def _export_orphan_matches_debug_excel() -> Run[Unit]:
       offender_sex,
       victim_count,
       offender_count,
+      summary,
+      matched_summary,
       match_probability,
       article_ids_csv
     FROM combined
@@ -1319,16 +1331,20 @@ def _export_orphan_matches_debug_excel() -> Run[Unit]:
                         SQL(
                             """--sql
                     SELECT
+                      source,
+                      change,
+                      COUNT(*) OVER (PARTITION BY source, match_id) AS member_count,
                       * EXCLUDE (
+                        source,
+                        change,
+                        change_order,
+                        band_key,
                         family_canonical_surname,
                         family_victim_surname_norm,
-                        family_victim_forename_norm
+                        family_victim_forename_norm,
+                        __color_index
                       ),
-                      concat(
-                        cast(source AS varchar),
-                        '::',
-                        cast(match_id AS varchar)
-                      ) AS __band_group
+                      __color_index
                     FROM orphan_matches_final_diffs
                     ORDER BY
                       change_order,
@@ -1343,8 +1359,8 @@ def _export_orphan_matches_debug_excel() -> Run[Unit]:
                         ),
                         "orphan_matches_final_diffs.xlsx",
                         "MatchesDiffs",
-                        band_by_group_col="__band_group",
-                        band_wrap=2,
+                        color_index_col="__color_index",
+                        color_palette_size=4,
                     )
                     ^ put_line(
                         "[U] Wrote orphan_matches_final_diffs.xlsx "

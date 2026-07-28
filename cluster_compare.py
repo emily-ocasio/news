@@ -228,22 +228,34 @@ WITH
     SELECT
       lu.cluster_id,
       CASE
-        WHEN COALESCE(lrc.right_count, 0) > 1 THEN 'split'
+        WHEN COALESCE(lrc.right_count, 0) > 1 THEN CASE WHEN EXISTS (
+          SELECT 1
+          FROM left_right_intersection i
+          JOIN right_relation_counts rrc
+            ON rrc.right_cluster_id = i.right_cluster_id
+          WHERE i.left_cluster_id = lu.cluster_id
+            AND rrc.left_count > 1
+        ) THEN 'other' ELSE 'split' END
         WHEN EXISTS (
           SELECT 1
           FROM left_right_intersection i
-          JOIN right_sizes rs
-            ON rs.cluster_id = i.right_cluster_id
-          JOIN left_sizes ls
-            ON ls.cluster_id = lu.cluster_id
+          JOIN right_relation_counts rrc
+            ON rrc.right_cluster_id = i.right_cluster_id
           WHERE i.left_cluster_id = lu.cluster_id
-            AND i.inter_cnt = ls.size
-          AND EXISTS (
-            SELECT 1 FROM right_relation_counts rrc
-            WHERE rrc.right_cluster_id = i.right_cluster_id
-              AND rrc.left_count > 1
-          )
-        ) THEN 'merged'
+            AND rrc.left_count > 1
+        ) THEN CASE WHEN EXISTS (
+          SELECT 1
+          FROM left_right_intersection i
+          JOIN right_relation_counts rrc
+            ON rrc.right_cluster_id = i.right_cluster_id
+          JOIN left_right_intersection i2
+            ON i2.right_cluster_id = i.right_cluster_id
+          JOIN left_relation_counts lrc2
+            ON lrc2.left_cluster_id = i2.left_cluster_id
+          WHERE i.left_cluster_id = lu.cluster_id
+            AND rrc.left_count > 1
+            AND lrc2.right_count > 1
+        ) THEN 'other' ELSE 'merged' END
         WHEN EXISTS (
           SELECT 1
           FROM left_right_intersection i
@@ -274,22 +286,34 @@ WITH
           SELECT 1 FROM left_right_intersection i
           WHERE i.right_cluster_id = ru.cluster_id
         ) THEN 'new'
-        WHEN COALESCE(rrc.left_count, 0) > 1 THEN 'merged'
+        WHEN COALESCE(rrc.left_count, 0) > 1 THEN CASE WHEN EXISTS (
+          SELECT 1
+          FROM left_right_intersection i
+          JOIN left_relation_counts lrc2
+            ON lrc2.left_cluster_id = i.left_cluster_id
+          WHERE i.right_cluster_id = ru.cluster_id
+            AND lrc2.right_count > 1
+        ) THEN 'other' ELSE 'merged' END
         WHEN EXISTS (
           SELECT 1
           FROM left_right_intersection i
-          JOIN left_sizes ls
-            ON ls.cluster_id = i.left_cluster_id
-          JOIN right_sizes rs
-            ON rs.cluster_id = ru.cluster_id
+          JOIN left_relation_counts lrc2
+            ON lrc2.left_cluster_id = i.left_cluster_id
           WHERE i.right_cluster_id = ru.cluster_id
-            AND i.inter_cnt = rs.size
-            AND EXISTS (
-            SELECT 1 FROM left_relation_counts lrc2
-            WHERE lrc2.left_cluster_id = i.left_cluster_id
-              AND lrc2.right_count > 1
-            )
-        ) THEN 'split'
+            AND lrc2.right_count > 1
+        ) THEN CASE WHEN EXISTS (
+          SELECT 1
+          FROM left_right_intersection i
+          JOIN left_relation_counts lrc2
+            ON lrc2.left_cluster_id = i.left_cluster_id
+          JOIN left_right_intersection i2
+            ON i2.left_cluster_id = i.left_cluster_id
+          JOIN right_relation_counts rrc2
+            ON rrc2.right_cluster_id = i2.right_cluster_id
+          WHERE i.right_cluster_id = ru.cluster_id
+            AND lrc2.right_count > 1
+            AND rrc2.left_count > 1
+        ) THEN 'other' ELSE 'split' END
         WHEN EXISTS (
           SELECT 1
           FROM left_right_intersection i
@@ -321,18 +345,24 @@ WITH
       lc.change,
       CASE
         WHEN lc.change = 'split' THEN lu.cluster_id
-        WHEN lc.change = 'merged' THEN (
+        WHEN lc.change = 'merged' THEN COALESCE((
+          SELECT i2.left_cluster_id
+          FROM left_right_intersection i
+          JOIN left_right_intersection i2
+            ON i2.right_cluster_id = i.right_cluster_id
+          JOIN left_relation_counts lrc2
+            ON lrc2.left_cluster_id = i2.left_cluster_id
+          WHERE i.left_cluster_id = lu.cluster_id
+            AND lrc2.right_count > 1
+          ORDER BY i2.inter_cnt DESC, i2.left_cluster_id
+          LIMIT 1
+        ), (
           SELECT i.right_cluster_id
           FROM left_right_intersection i
-          JOIN left_sizes ls
-            ON ls.cluster_id = lu.cluster_id
-          JOIN right_sizes rs
-            ON rs.cluster_id = i.right_cluster_id
           WHERE i.left_cluster_id = lu.cluster_id
-            AND i.inter_cnt = ls.size
-          ORDER BY rs.size DESC, i.right_cluster_id
+          ORDER BY i.inter_cnt DESC, i.right_cluster_id
           LIMIT 1
-        )
+        ), lu.cluster_id)
         ELSE lu.cluster_id
       END AS family_id
     FROM left_unmatched lu
@@ -347,16 +377,24 @@ WITH
         WHEN rc.change = 'split' THEN (
           SELECT i.left_cluster_id
           FROM left_right_intersection i
-          JOIN right_sizes rs
-            ON rs.cluster_id = ru.cluster_id
           JOIN left_sizes ls
             ON ls.cluster_id = i.left_cluster_id
           WHERE i.right_cluster_id = ru.cluster_id
-            AND i.inter_cnt = rs.size
-          ORDER BY ls.size DESC, i.left_cluster_id
+          ORDER BY i.inter_cnt DESC, ls.size DESC, i.left_cluster_id
           LIMIT 1
         )
-        WHEN rc.change = 'merged' THEN ru.cluster_id
+        WHEN rc.change = 'merged' THEN COALESCE((
+          SELECT i2.left_cluster_id
+          FROM left_right_intersection i
+          JOIN left_right_intersection i2
+            ON i2.right_cluster_id = i.right_cluster_id
+          JOIN left_relation_counts lrc2
+            ON lrc2.left_cluster_id = i2.left_cluster_id
+          WHERE i.right_cluster_id = ru.cluster_id
+            AND lrc2.right_count > 1
+          ORDER BY i2.inter_cnt DESC, i2.left_cluster_id
+          LIMIT 1
+        ), ru.cluster_id)
         ELSE ru.cluster_id
       END AS family_id
     FROM right_unmatched ru
@@ -491,7 +529,7 @@ SELECT
       SELECT 1 FROM {left_table} l2
       WHERE l2.{member_col} = r.{member_col}
     ) THEN 2 ELSE 3 END
-    WHEN rfs.change = 'new' THEN 2 + ABS(hash(r.cluster_id)) % 2
+    WHEN rfs.change = 'new' THEN 2 + ABS(hash(r.{cluster_col})) % 2
     WHEN rfs.change = 'other' THEN CASE WHEN EXISTS (
       SELECT 1 FROM {left_table} l2
       WHERE l2.{member_col} = r.{member_col}
