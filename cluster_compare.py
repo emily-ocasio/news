@@ -216,10 +216,19 @@ WITH
       ON l.member_id = r.member_id
     GROUP BY 1, 2
   ),
+  left_relation_counts AS (
+    SELECT left_cluster_id, COUNT(*) AS right_count
+    FROM left_right_intersection GROUP BY left_cluster_id
+  ),
+  right_relation_counts AS (
+    SELECT right_cluster_id, COUNT(*) AS left_count
+    FROM left_right_intersection GROUP BY right_cluster_id
+  ),
   left_change AS (
     SELECT
       lu.cluster_id,
       CASE
+        WHEN COALESCE(lrc.right_count, 0) > 1 THEN 'split'
         WHEN EXISTS (
           SELECT 1
           FROM left_right_intersection i
@@ -229,6 +238,11 @@ WITH
             ON ls.cluster_id = lu.cluster_id
           WHERE i.left_cluster_id = lu.cluster_id
             AND i.inter_cnt = ls.size
+          AND EXISTS (
+            SELECT 1 FROM right_relation_counts rrc
+            WHERE rrc.right_cluster_id = i.right_cluster_id
+              AND rrc.left_count > 1
+          )
         ) THEN 'merged'
         WHEN EXISTS (
           SELECT 1
@@ -237,34 +251,69 @@ WITH
             ON rs.cluster_id = i.right_cluster_id
           WHERE i.left_cluster_id = lu.cluster_id
             AND i.inter_cnt = rs.size
-        ) THEN 'split'
+          AND rs.size < (SELECT size FROM left_sizes WHERE cluster_id = lu.cluster_id)
+          AND COALESCE(lrc.right_count, 0) = 1
+        ) THEN 'reduced'
+        WHEN EXISTS (
+          SELECT 1 FROM left_right_intersection i
+          JOIN right_sizes rs ON rs.cluster_id = i.right_cluster_id
+          JOIN left_sizes ls ON ls.cluster_id = lu.cluster_id
+          WHERE i.left_cluster_id = lu.cluster_id
+            AND i.inter_cnt = ls.size AND rs.size > ls.size
+        ) THEN 'extended'
         ELSE 'other'
       END AS change
     FROM left_unmatched lu
+    LEFT JOIN left_relation_counts lrc ON lrc.left_cluster_id = lu.cluster_id
   ),
   right_change AS (
     SELECT
       ru.cluster_id,
       CASE
+        WHEN NOT EXISTS (
+          SELECT 1 FROM left_right_intersection i
+          WHERE i.right_cluster_id = ru.cluster_id
+        ) THEN 'new'
+        WHEN COALESCE(rrc.left_count, 0) > 1 THEN 'merged'
         WHEN EXISTS (
           SELECT 1
           FROM left_right_intersection i
           JOIN left_sizes ls
             ON ls.cluster_id = i.left_cluster_id
-          WHERE i.right_cluster_id = ru.cluster_id
-            AND i.inter_cnt = ls.size
-        ) THEN 'merged'
-        WHEN EXISTS (
-          SELECT 1
-          FROM left_right_intersection i
           JOIN right_sizes rs
             ON rs.cluster_id = ru.cluster_id
           WHERE i.right_cluster_id = ru.cluster_id
             AND i.inter_cnt = rs.size
+            AND EXISTS (
+            SELECT 1 FROM left_relation_counts lrc2
+            WHERE lrc2.left_cluster_id = i.left_cluster_id
+              AND lrc2.right_count > 1
+            )
         ) THEN 'split'
+        WHEN EXISTS (
+          SELECT 1
+          FROM left_right_intersection i
+          JOIN left_sizes ls
+            ON ls.cluster_id = i.left_cluster_id
+          JOIN right_sizes rs
+            ON rs.cluster_id = ru.cluster_id
+          WHERE i.right_cluster_id = ru.cluster_id
+            AND i.inter_cnt = rs.size
+          AND ls.size > (SELECT size FROM right_sizes WHERE cluster_id = ru.cluster_id)
+          AND COALESCE(rrc.left_count, 0) = 1
+        ) THEN 'reduced'
+        WHEN EXISTS (
+          SELECT 1 FROM left_right_intersection i
+          JOIN left_sizes ls ON ls.cluster_id = i.left_cluster_id
+          JOIN right_sizes rs ON rs.cluster_id = ru.cluster_id
+          WHERE i.right_cluster_id = ru.cluster_id
+            AND i.inter_cnt = ls.size AND rs.size > ls.size
+        ) THEN 'extended'
         ELSE 'other'
       END AS change
     FROM right_unmatched ru
+    LEFT JOIN right_relation_counts rrc ON rrc.right_cluster_id = ru.cluster_id
+    LEFT JOIN left_relation_counts lrc ON lrc.left_cluster_id = ru.cluster_id
   ),
   left_family AS (
     SELECT
@@ -333,6 +382,9 @@ WITH
       lf.cluster_id,
       lf.change,
       lf.family_id,
+      row_number() OVER (
+        PARTITION BY lf.change, lf.family_id ORDER BY lf.cluster_id
+      ) AS family_rank,
       CASE
         WHEN lf.change = 'merged' THEN rs.canonical_surname
         ELSE ls.canonical_surname
@@ -356,6 +408,11 @@ WITH
       rf.cluster_id,
       rf.change,
       rf.family_id,
+      row_number() OVER (
+        PARTITION BY rf.change,
+          CASE WHEN rf.change = 'split' THEN CAST(rf.family_id AS VARCHAR) ELSE '0' END
+        ORDER BY rf.cluster_id
+      ) AS family_rank,
       CASE
         WHEN rf.change = 'split' THEN ls.canonical_surname
         ELSE rs.canonical_surname
@@ -380,13 +437,30 @@ SELECT
   CASE
     WHEN lfs.change = 'split' THEN 1
     WHEN lfs.change = 'merged' THEN 2
-    ELSE 3
+    WHEN lfs.change = 'reduced' THEN 3
+    WHEN lfs.change = 'extended' THEN 4
+    WHEN lfs.change = 'new' THEN 5
+    ELSE 6
   END AS change_order,
   lfs.family_id AS family_id,
   lfs.family_canonical_surname AS family_canonical_surname,
   lfs.family_victim_surname_norm AS family_victim_surname_norm,
   lfs.family_victim_forename_norm AS family_victim_forename_norm,
-  {left_select}
+  {left_select},
+  CASE
+    WHEN lfs.change = 'split' THEN 0
+    WHEN lfs.change = 'merged' THEN (lfs.family_rank - 1) % 2
+    WHEN lfs.change = 'reduced' THEN CASE WHEN EXISTS (
+      SELECT 1 FROM {right_table} r2
+      WHERE r2.{member_col} = l.{member_col}
+    ) THEN 0 ELSE 1 END
+    WHEN lfs.change = 'extended' THEN 0
+    WHEN lfs.change = 'other' THEN CASE WHEN EXISTS (
+      SELECT 1 FROM {right_table} r2
+      WHERE r2.{member_col} = l.{member_col}
+    ) THEN 0 ELSE 1 END
+    ELSE 1
+  END AS __color_index
 FROM {left_table} l
 JOIN left_unmatched u
   ON l.{cluster_col} = u.cluster_id
@@ -399,13 +473,31 @@ SELECT
   CASE
     WHEN rfs.change = 'split' THEN 1
     WHEN rfs.change = 'merged' THEN 2
-    ELSE 3
+    WHEN rfs.change = 'reduced' THEN 3
+    WHEN rfs.change = 'extended' THEN 4
+    WHEN rfs.change = 'new' THEN 5
+    ELSE 6
   END AS change_order,
   rfs.family_id AS family_id,
   rfs.family_canonical_surname AS family_canonical_surname,
   rfs.family_victim_surname_norm AS family_victim_surname_norm,
   rfs.family_victim_forename_norm AS family_victim_forename_norm,
-  {right_select}
+  {right_select},
+  CASE
+    WHEN rfs.change IN ('split', 'new') THEN 2 + (rfs.family_rank - 1) % 2
+    WHEN rfs.change = 'merged' THEN 2
+    WHEN rfs.change = 'reduced' THEN 2
+    WHEN rfs.change = 'extended' THEN CASE WHEN EXISTS (
+      SELECT 1 FROM {left_table} l2
+      WHERE l2.{member_col} = r.{member_col}
+    ) THEN 2 ELSE 3 END
+    WHEN rfs.change = 'new' THEN 2 + ABS(hash(r.cluster_id)) % 2
+    WHEN rfs.change = 'other' THEN CASE WHEN EXISTS (
+      SELECT 1 FROM {left_table} l2
+      WHERE l2.{member_col} = r.{member_col}
+    ) THEN 2 ELSE 3 END
+    ELSE 3
+  END AS __color_index
 FROM {right_table} r
 JOIN right_unmatched u
   ON r.{cluster_col} = u.cluster_id

@@ -17,6 +17,8 @@ def publication_sql_export(
     sheet: str | None = None,
     band_by_group_col: str | None = None,
     band_wrap: int = 2,
+    color_index_col: str | None = None,
+    color_palette_size: int = 4,
 ) -> Run[None]:
     """Export a query under the active publication's output namespace."""
     def export_for_environment(env: Environment) -> Run[None]:
@@ -26,6 +28,8 @@ def publication_sql_export(
             sheet,
             band_by_group_col,
             band_wrap,
+            color_index_col,
+            color_palette_size,
         )
 
     return ask() >> export_for_environment

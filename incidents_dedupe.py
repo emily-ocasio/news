@@ -848,8 +848,9 @@ def _export_final_clusters_excel() -> Run[Unit]:
 	                      address,
 	                      offender,
 	                      weapon,
-	                      circumstance,
-	                      concat(cast(source AS varchar), '::', cast(cluster_id AS varchar)) AS __band_group
+                      circumstance,
+                      __color_index,
+                      concat(cast(source AS varchar), '::', cast(cluster_id AS varchar)) AS __band_group
 	                    FROM cluster_diffs
                     ORDER BY
                       change_order,
@@ -870,6 +871,8 @@ def _export_final_clusters_excel() -> Run[Unit]:
                         "ClusterDiffs",
                         band_by_group_col="__band_group",
                         band_wrap=2,
+                        color_index_col="__color_index",
+                        color_palette_size=4,
                     )
                     ^ put_line(
                         f"[D] Wrote cluster_diffs.xlsx ({rows[0]['n']} rows)."

@@ -125,6 +125,8 @@ class SqlExport:
     sheet: str | None = None
     band_by_group_col: str | None = None
     band_wrap: int = 2  # how many alternating bands/colors
+    color_index_col: str | None = None
+    color_palette_size: int = 4
 
 
 @dataclass(frozen=True)
@@ -181,13 +183,18 @@ def sql_export(
     sheet: str | None = None,
     band_by_group_col: str | None = None,
     band_wrap: int = 2,
+    color_index_col: str | None = None,
+    color_palette_size: int = 4,
 ) -> Run[None]:
     """
     Smart constructor for exporting SQL query results to a spreadsheet (or CSV).
     """
     return Run(
         lambda self: self._perform(
-            SqlExport(sql, filename, sheet, band_by_group_col, band_wrap),
+            SqlExport(
+                sql, filename, sheet, band_by_group_col, band_wrap,
+                color_index_col, color_palette_size,
+            ),
             self,
         ),
         _unhandled,
@@ -217,13 +224,21 @@ def sql_register(name: str, df: pd.DataFrame) -> Run[None]:
 
 A = TypeVar("A")
 
-def _sql_export(df: pd.DataFrame, filename, sheet, band_by_group_col, band_wrap):
+def _sql_export(
+    df: pd.DataFrame, filename, sheet, band_by_group_col, band_wrap,
+    color_index_col=None, color_palette_size=4,
+):
     widths = _compute_column_widths(df)
     try:
         with pd.ExcelWriter(filename, engine="openpyxl") as writer:
             df.to_excel(writer, sheet_name=sheet or "Sheet1", index=False)
         # Apply formatting immediately after successful Excel write
-        if band_by_group_col:
+        if color_index_col:
+            _apply_color_index_formatting_xlsx(
+                filename, sheet or "Sheet1", color_index_col, color_palette_size
+            )
+            _auto_fit_columns_xlsx(filename, sheet or "Sheet1", widths)
+        elif band_by_group_col:
             _apply_band_formatting_xlsx(
                 filename,
                 sheet or "Sheet1",
@@ -407,6 +422,43 @@ def _apply_band_formatting_xlsx(
     wb.close()
 
 
+def _apply_color_index_formatting_xlsx(
+    filename: str, sheet: str, color_index_col: str, palette_size: int
+) -> None:
+    """Apply the handler-owned four-color palette from a hidden index column."""
+    try:
+        wb = load_workbook(filename)
+    except (KeyError, OSError) as exc:
+        print(f"[WARN] Cannot load {filename} for color formatting: {exc}")
+        return
+    if sheet not in wb.sheetnames:
+        wb.close()
+        return
+    ws = wb[sheet]
+    header = [cell.value for cell in ws[1]]
+    if color_index_col not in header or palette_size != 4:
+        wb.close()
+        return
+    idx = header.index(color_index_col) + 1
+    idx_letter = cast(Cell, ws.cell(row=1, column=idx)).column_letter
+    fills = [
+        PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid"),
+        PatternFill(start_color="F4CCCC", end_color="F4CCCC", fill_type="solid"),
+        PatternFill(start_color="D9EAD3", end_color="D9EAD3", fill_type="solid"),
+        PatternFill(start_color="CFE2F3", end_color="CFE2F3", fill_type="solid"),
+    ]
+    last_letter = cast(Cell, ws.cell(row=1, column=ws.max_column)).column_letter
+    for color_index, fill in enumerate(fills):
+        ws.conditional_formatting.add(
+            f"A2:{last_letter}{ws.max_row}",
+            FormulaRule(formula=[f"${idx_letter}2 = {color_index}"], fill=fill),
+        )
+    ws.column_dimensions[idx_letter].hidden = True
+    ws.freeze_panes = "A2"
+    wb.save(filename)
+    wb.close()
+
+
 def _estimate_text_width(value: Any) -> float:
     if value is None:
         return 0.0
@@ -564,7 +616,10 @@ def run_sql(prog: Run[A]) -> Run[A]:
                     except Exception as ex:  # noqa: BLE001
                         raise SQLExecutionError(str(sql), None, ex) from ex
 
-                case SqlExport(sql, filename, sheet, band_by_group_col, band_wrap):
+                case SqlExport(
+                    sql, filename, sheet, band_by_group_col, band_wrap,
+                    color_index_col, color_palette_size,
+                ):
                     backend, con = _get_backend_and_conn_run()._step(current)
                     try:
                         if backend == DbBackend.SQLITE:
@@ -573,7 +628,10 @@ def run_sql(prog: Run[A]) -> Run[A]:
                             df = con.execute(str(sql)).df()
                     except Exception as ex:
                         raise SQLExecutionError(str(sql), None, ex) from ex
-                    _sql_export(df, filename, sheet, band_by_group_col, band_wrap)
+                    _sql_export(
+                        df, filename, sheet, band_by_group_col, band_wrap,
+                        color_index_col, color_palette_size,
+                    )
                     return None
                 case SqlImport(filename, table_name, sheet):
                     backend, con = _get_backend_and_conn_run()._step(current)
