@@ -1331,10 +1331,17 @@ def _export_orphan_matches_debug_excel() -> Run[Unit]:
                         SQL(
                             """--sql
                     SELECT
-                      source,
-                      change,
-                      COUNT(*) OVER (PARTITION BY source, match_id) AS member_count,
-                      * EXCLUDE (
+                      d.source,
+                      d.change,
+                      COUNT(*) OVER (PARTITION BY d.source, d.match_id) AS member_count,
+                      COALESCE(d.summary, s.summary) AS summary,
+                      CASE
+                        WHEN d.rec_type = 'orphan'
+                          AND d.match_id LIKE 'match_%'
+                          THEN COALESCE(d.matched_summary, ms.summary)
+                        ELSE d.matched_summary
+                      END AS matched_summary,
+                      d.* EXCLUDE (
                         source,
                         change,
                         change_order,
@@ -1342,19 +1349,33 @@ def _export_orphan_matches_debug_excel() -> Run[Unit]:
                         family_canonical_surname,
                         family_victim_surname_norm,
                         family_victim_forename_norm,
+                        summary,
+                        matched_summary,
                         __color_index
                       ),
-                      __color_index
-                    FROM orphan_matches_final_diffs
+                      d.__color_index
+                    FROM orphan_matches_final_diffs d
+                    LEFT JOIN incidents_cached s
+                      ON s.article_id = TRY_CAST(split_part(d.uid, ':', 1) AS BIGINT)
+                     AND s.incident_idx = TRY_CAST(split_part(d.uid, ':', 2) AS INTEGER)
+                    LEFT JOIN incidents_cached ms
+                      ON ms.article_id = TRY_CAST(
+                        split_part(regexp_replace(d.match_id, '^match_', ''), ':', 1)
+                        AS BIGINT
+                      )
+                     AND ms.incident_idx = TRY_CAST(
+                        split_part(regexp_replace(d.match_id, '^match_', ''), ':', 2)
+                        AS INTEGER
+                      )
                     ORDER BY
-                      change_order,
-                      family_id,
-                      source,
-                      midpoint_day NULLS LAST,
-                      incident_date NULLS LAST,
-                      match_id,
-                      CASE rec_type WHEN 'entity' THEN 0 ELSE 1 END,
-                      uid
+                      d.change_order,
+                      d.family_id,
+                      d.source,
+                      d.match_id,
+                      d.midpoint_day NULLS LAST,
+                      d.incident_date NULLS LAST,
+                      CASE d.rec_type WHEN 'entity' THEN 0 ELSE 1 END,
+                      d.uid
                     """
                         ),
                         "orphan_matches_final_diffs.xlsx",

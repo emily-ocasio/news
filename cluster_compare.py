@@ -51,12 +51,12 @@ def _table_columns(table_name: str) -> Run[list[str]]:
 
 def _order_by_columns(cols: list[str], member_id_col: str) -> list[str]:
     order = []
-    if "canonical_surname" in cols:
-        order.append("canonical_surname")
     if "cluster_id" in cols:
         order.append("cluster_id")
     if "match_id" in cols and "cluster_id" not in order:
         order.append("match_id")
+    if "canonical_surname" in cols:
+        order.append("canonical_surname")
     if "victim_surname_norm" in cols:
         order.append("victim_surname_norm")
     if "victim_forename_norm" in cols:
@@ -383,6 +383,13 @@ WITH
           ORDER BY i.inter_cnt DESC, ls.size DESC, i.left_cluster_id
           LIMIT 1
         )
+        WHEN rc.change IN ('reduced', 'extended') THEN COALESCE((
+          SELECT i.left_cluster_id
+          FROM left_right_intersection i
+          WHERE i.right_cluster_id = ru.cluster_id
+          ORDER BY i.inter_cnt DESC, i.left_cluster_id
+          LIMIT 1
+        ), ru.cluster_id)
         WHEN rc.change = 'merged' THEN COALESCE((
           SELECT i2.left_cluster_id
           FROM left_right_intersection i
