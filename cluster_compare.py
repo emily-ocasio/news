@@ -93,6 +93,8 @@ def _build_compare_sql(
     left_cols: set[str],
     right_cols: set[str],
 ) -> SQL:
+    # The generated comparison SQL requires several independent query fragments.
+    # pylint: disable=too-many-locals
     left_table = _qtable(req.left_table)
     right_table = _qtable(req.right_table)
     out_table = _qtable(req.output_table)
@@ -137,7 +139,7 @@ def _build_compare_sql(
     return SQL(
         f"""--sql
 CREATE OR REPLACE TABLE {out_table} AS
-WITH
+WITH RECURSIVE
   left_members AS (
     SELECT
       {cluster_col} AS cluster_id,
@@ -273,6 +275,19 @@ WITH
           WHERE i.left_cluster_id = lu.cluster_id
             AND i.inter_cnt = ls.size AND rs.size > ls.size
         ) THEN 'extended'
+        WHEN EXISTS (
+          SELECT 1
+          FROM left_right_intersection i
+          JOIN left_sizes ls ON ls.cluster_id = i.left_cluster_id
+          JOIN right_sizes rs ON rs.cluster_id = i.right_cluster_id
+          JOIN right_relation_counts rrc
+            ON rrc.right_cluster_id = i.right_cluster_id
+          WHERE i.left_cluster_id = lu.cluster_id
+            AND COALESCE(lrc.right_count, 0) = 1
+            AND rrc.left_count = 1
+            AND i.inter_cnt < ls.size
+            AND i.inter_cnt < rs.size
+        ) THEN 'reduce/extend'
         ELSE 'other'
       END AS change
     FROM left_unmatched lu
@@ -333,6 +348,19 @@ WITH
           WHERE i.right_cluster_id = ru.cluster_id
             AND i.inter_cnt = ls.size AND rs.size > ls.size
         ) THEN 'extended'
+        WHEN EXISTS (
+          SELECT 1
+          FROM left_right_intersection i
+          JOIN left_sizes ls ON ls.cluster_id = i.left_cluster_id
+          JOIN right_sizes rs ON rs.cluster_id = i.right_cluster_id
+          JOIN left_relation_counts lrc
+            ON lrc.left_cluster_id = i.left_cluster_id
+          WHERE i.right_cluster_id = ru.cluster_id
+            AND lrc.right_count = 1
+            AND COALESCE(rrc.left_count, 0) = 1
+            AND i.inter_cnt < ls.size
+            AND i.inter_cnt < rs.size
+        ) THEN 'reduce/extend'
         ELSE 'other'
       END AS change
     FROM right_unmatched ru
@@ -408,6 +436,48 @@ WITH
     JOIN right_change rc
       ON rc.cluster_id = ru.cluster_id
   ),
+  comparison_edges AS (
+    SELECT
+      concat('l:', CAST(left_cluster_id AS VARCHAR)) AS node_a,
+      concat('r:', CAST(right_cluster_id AS VARCHAR)) AS node_b
+    FROM left_right_intersection
+    UNION ALL
+    SELECT
+      concat('r:', CAST(right_cluster_id AS VARCHAR)) AS node_a,
+      concat('l:', CAST(left_cluster_id AS VARCHAR)) AS node_b
+    FROM left_right_intersection
+  ),
+  comparison_nodes AS (
+    SELECT concat('l:', CAST(cluster_id AS VARCHAR)) AS node
+    FROM left_unmatched
+    UNION
+    SELECT concat('r:', CAST(cluster_id AS VARCHAR)) AS node
+    FROM right_unmatched
+  ),
+  family_reach(node, member) AS (
+    SELECT node, node FROM comparison_nodes
+    UNION
+    SELECT fr.node, e.node_b
+    FROM family_reach fr
+    JOIN comparison_edges e ON e.node_a = fr.member
+  ),
+  family_components AS (
+    SELECT node, MIN(member) AS family_id
+    FROM family_reach
+    GROUP BY node
+  ),
+  left_family_component AS (
+    SELECT lf.cluster_id, lf.change, fc.family_id
+    FROM left_family lf
+    JOIN family_components fc
+      ON fc.node = concat('l:', CAST(lf.cluster_id AS VARCHAR))
+  ),
+  right_family_component AS (
+    SELECT rf.cluster_id, rf.change, fc.family_id
+    FROM right_family rf
+    JOIN family_components fc
+      ON fc.node = concat('r:', CAST(rf.cluster_id AS VARCHAR))
+  ),
   left_sort AS (
     SELECT
       l.{cluster_col} AS cluster_id,
@@ -422,59 +492,55 @@ WITH
     FROM {right_table} r
     GROUP BY r.{cluster_col}
   ),
+  family_sort AS (
+    SELECT
+      family_id,
+      MIN(canonical_surname) AS family_canonical_surname,
+      MIN(victim_surname_norm) AS family_victim_surname_norm,
+      MIN(victim_forename_norm) AS family_victim_forename_norm
+    FROM (
+      SELECT lfc.family_id, ls.canonical_surname,
+             ls.victim_surname_norm, ls.victim_forename_norm
+      FROM left_family_component lfc
+      JOIN left_sort ls ON ls.cluster_id = lfc.cluster_id
+      UNION ALL
+      SELECT rfc.family_id, rs.canonical_surname,
+             rs.victim_surname_norm, rs.victim_forename_norm
+      FROM right_family_component rfc
+      JOIN right_sort rs ON rs.cluster_id = rfc.cluster_id
+    ) family_names
+    GROUP BY family_id
+  ),
   left_family_sort AS (
     SELECT
       lf.cluster_id,
       lf.change,
-      lf.family_id,
+      lfc.family_id,
       row_number() OVER (
-        PARTITION BY lf.change, lf.family_id ORDER BY lf.cluster_id
+        PARTITION BY lf.change, lfc.family_id ORDER BY lf.cluster_id
       ) AS family_rank,
-      CASE
-        WHEN lf.change = 'merged' THEN rs.canonical_surname
-        ELSE ls.canonical_surname
-      END AS family_canonical_surname,
-      CASE
-        WHEN lf.change = 'merged' THEN rs.victim_surname_norm
-        ELSE ls.victim_surname_norm
-      END AS family_victim_surname_norm,
-      CASE
-        WHEN lf.change = 'merged' THEN rs.victim_forename_norm
-        ELSE ls.victim_forename_norm
-      END AS family_victim_forename_norm
-    FROM left_family lf
-    LEFT JOIN left_sort ls
-      ON ls.cluster_id = lf.family_id
-    LEFT JOIN right_sort rs
-      ON rs.cluster_id = lf.family_id
+      fs.family_canonical_surname,
+      fs.family_victim_surname_norm,
+      fs.family_victim_forename_norm
+    FROM left_family_component lfc
+    JOIN left_family lf ON lf.cluster_id = lfc.cluster_id
+    LEFT JOIN family_sort fs ON fs.family_id = lfc.family_id
   ),
   right_family_sort AS (
     SELECT
       rf.cluster_id,
       rf.change,
-      rf.family_id,
+      rfc.family_id,
       row_number() OVER (
-        PARTITION BY rf.change,
-          CASE WHEN rf.change = 'split' THEN CAST(rf.family_id AS VARCHAR) ELSE '0' END
+        PARTITION BY rf.change, rfc.family_id
         ORDER BY rf.cluster_id
       ) AS family_rank,
-      CASE
-        WHEN rf.change = 'split' THEN ls.canonical_surname
-        ELSE rs.canonical_surname
-      END AS family_canonical_surname,
-      CASE
-        WHEN rf.change = 'split' THEN ls.victim_surname_norm
-        ELSE rs.victim_surname_norm
-      END AS family_victim_surname_norm,
-      CASE
-        WHEN rf.change = 'split' THEN ls.victim_forename_norm
-        ELSE rs.victim_forename_norm
-      END AS family_victim_forename_norm
-    FROM right_family rf
-    LEFT JOIN left_sort ls
-      ON ls.cluster_id = rf.family_id
-    LEFT JOIN right_sort rs
-      ON rs.cluster_id = rf.family_id
+      fs.family_canonical_surname,
+      fs.family_victim_surname_norm,
+      fs.family_victim_forename_norm
+    FROM right_family_component rfc
+    JOIN right_family rf ON rf.cluster_id = rfc.cluster_id
+    LEFT JOIN family_sort fs ON fs.family_id = rfc.family_id
   )
 SELECT
   1 AS source,
@@ -484,8 +550,9 @@ SELECT
     WHEN lfs.change = 'merged' THEN 2
     WHEN lfs.change = 'reduced' THEN 3
     WHEN lfs.change = 'extended' THEN 4
-    WHEN lfs.change = 'new' THEN 5
-    ELSE 6
+    WHEN lfs.change = 'reduce/extend' THEN 5
+    WHEN lfs.change = 'new' THEN 6
+    ELSE 7
   END AS change_order,
   lfs.family_id AS family_id,
   lfs.family_canonical_surname AS family_canonical_surname,
@@ -500,6 +567,10 @@ SELECT
       WHERE r2.{member_col} = l.{member_col}
     ) THEN 0 ELSE 1 END
     WHEN lfs.change = 'extended' THEN 0
+    WHEN lfs.change = 'reduce/extend' THEN CASE WHEN EXISTS (
+      SELECT 1 FROM {right_table} r2
+      WHERE r2.{member_col} = l.{member_col}
+    ) THEN 0 ELSE 1 END
     WHEN lfs.change = 'other' THEN CASE WHEN EXISTS (
       SELECT 1 FROM {right_table} r2
       WHERE r2.{member_col} = l.{member_col}
@@ -520,8 +591,9 @@ SELECT
     WHEN rfs.change = 'merged' THEN 2
     WHEN rfs.change = 'reduced' THEN 3
     WHEN rfs.change = 'extended' THEN 4
-    WHEN rfs.change = 'new' THEN 5
-    ELSE 6
+    WHEN rfs.change = 'reduce/extend' THEN 5
+    WHEN rfs.change = 'new' THEN 6
+    ELSE 7
   END AS change_order,
   rfs.family_id AS family_id,
   rfs.family_canonical_surname AS family_canonical_surname,
@@ -533,6 +605,10 @@ SELECT
     WHEN rfs.change = 'merged' THEN 2
     WHEN rfs.change = 'reduced' THEN 2
     WHEN rfs.change = 'extended' THEN CASE WHEN EXISTS (
+      SELECT 1 FROM {left_table} l2
+      WHERE l2.{member_col} = r.{member_col}
+    ) THEN 2 ELSE 3 END
+    WHEN rfs.change = 'reduce/extend' THEN CASE WHEN EXISTS (
       SELECT 1 FROM {left_table} l2
       WHERE l2.{member_col} = r.{member_col}
     ) THEN 2 ELSE 3 END
