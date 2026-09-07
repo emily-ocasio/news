@@ -510,6 +510,7 @@ def _link_orphans_to_entities(
             deterministic_recall=0.1,
             train_first=train_first,
             skip_u_estimation=skip_u_estimation,
+            u_estimation_max_pairs=1_000_000,
             training_blocking_rules=(
                 ORPHAN_LINKAGE_TRAINING_BLOCKS if train_first else []
             ),

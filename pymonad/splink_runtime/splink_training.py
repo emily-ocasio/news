@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import math
+import time
 from typing import Any, cast
 
 from splink import DuckDBAPI, Linker, blocking_analysis
@@ -83,7 +84,13 @@ def _train_linker_setup(ctx: SplinkContext, linker: Linker, _: PredictPlan) -> R
                 list(ctx.deterministic_rules), recall=ctx.deterministic_recall
             )
         if not ctx.skip_u_estimation:
+            start_time = time.perf_counter()
             linker.training.estimate_u_using_random_sampling(ctx.u_estimation_max_pairs)
+            elapsed = time.perf_counter() - start_time
+            return put_line(
+                f"U estimation time: {elapsed:.2f} seconds "
+                f"(max_pairs={ctx.u_estimation_max_pairs})"
+            ) ^ pure(unit)
         return pure(unit)
 
     return _run()
