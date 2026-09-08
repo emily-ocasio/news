@@ -97,6 +97,7 @@ def _init_splink_dedupe_context(job: SplinkDedupeJob) -> Run[Unit]:
             inference_only=job.inference_only,
             do_not_link_left_col=job.do_not_link_left_col,
             do_not_link_right_col=job.do_not_link_right_col,
+            bridge_screening=job.bridge_screening,
         )
         return put_splink_context(ctx)
 

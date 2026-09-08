@@ -92,6 +92,7 @@ def _dedupe_named_victims(_: Unit) -> Run[Unit]:
             do_not_link_table=DoNotLinkTableName("victim_cluster_exclusion"),
             blocked_pairs_out=BlockedPairsTableName("victim_cluster_blocked_edges"),
             u_estimation_max_pairs=1_000_000,
+            bridge_screening=True,
         ) >> (
             lambda result: put_line(
                 f"[D] Wrote {result.pairs_table} and {result.clusters_table} in DuckDB."

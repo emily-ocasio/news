@@ -449,6 +449,11 @@ def _apply_color_index_formatting_xlsx(
     if color_index_col not in header or palette_size != 4:
         wb.close()
         return
+    if ws.max_row < 2:
+        ws.freeze_panes = "A2"
+        wb.save(filename)
+        wb.close()
+        return
     idx = header.index(color_index_col) + 1
     idx_letter = cast(Cell, ws.cell(row=1, column=idx)).column_letter
     for column, name in enumerate(header, start=1):

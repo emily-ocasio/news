@@ -65,6 +65,7 @@ def splink_dedupe_job(
     capture_blocked_edges: bool = True,
     u_estimation_max_pairs: int = 100_000_000,
     inference_only: bool = False,
+    bridge_screening: bool = False,
 ) -> Run[SplinkDedupeResult]:
     return Run(
         lambda self: self._perform(
@@ -96,6 +97,7 @@ def splink_dedupe_job(
                 capture_blocked_edges,
                 u_estimation_max_pairs,
                 inference_only,
+                bridge_screening,
             ),
             self,
         ),

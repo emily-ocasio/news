@@ -507,6 +507,7 @@ class SplinkContext:
     inference_only: bool = False
     do_not_link_left_col: BlockedIdLeftColumnName = BlockedIdLeftColumnName("id_l")
     do_not_link_right_col: BlockedIdRightColumnName = BlockedIdRightColumnName("id_r")
+    bridge_screening: bool = False
 
 
 @dataclass(frozen=True)
@@ -607,3 +608,4 @@ class SplinkDedupeJob:
     capture_blocked_edges: bool = True
     u_estimation_max_pairs: int = 100_000_000
     inference_only: bool = False
+    bridge_screening: bool = False

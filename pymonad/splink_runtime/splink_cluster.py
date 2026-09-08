@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections import deque
+from dataclasses import dataclass
 from typing import Any
 
 import networkx as nx
@@ -52,6 +53,103 @@ from .splink_types import (
     UniqueIdColumnName,
     UniquePairsTableName,
 )
+
+
+BRIDGE_SCREEN_THRESHOLD = 0.97
+
+
+@dataclass(frozen=True)
+class BridgeExclusion:
+    """Run-scoped pair exclusion created by bridge screening."""
+
+    left_id: str
+    right_id: str
+
+
+def _canonical_pair(left_id: str, right_id: str) -> tuple[str, str]:
+    return (left_id, right_id) if left_id <= right_id else (right_id, left_id)
+
+
+def _screen_bridge_exclusions(
+    *,
+    clusters: DataFrame,
+    provenance: DataFrame,
+    pair_edges: list[tuple[str, str, float]],
+) -> set[BridgeExclusion]:
+    """Find likely weak bridges using the completed cluster graph."""
+    cluster_members: dict[str, set[str]] = {}
+    for row in clusters.to_dict("records"):
+        cluster_members.setdefault(str(row["cluster_id"]), set()).add(
+            str(row["victim_row_id"])
+        )
+
+    edge_probabilities = {
+        _canonical_pair(str(left), str(right)): float(prob)
+        for left, right, prob in pair_edges
+    }
+    provenance_rows = provenance.to_dict("records")
+    direct_children: dict[tuple[str, str], int] = {}
+    low_members: set[tuple[str, str]] = set()
+    for row in provenance_rows:
+        linked_from = row.get("linked_from")
+        linked_prob = row.get("linked_prob")
+        if linked_from is None or linked_prob is None:
+            continue
+        cluster_id = str(row["cluster_id"])
+        member_id = str(row["member_id"])
+        if float(linked_prob) < BRIDGE_SCREEN_THRESHOLD:
+            low_members.add((cluster_id, member_id))
+        direct_children[(cluster_id, str(linked_from))] = (
+            direct_children.get((cluster_id, str(linked_from)), 0) + 1
+        )
+
+    exclusions: set[BridgeExclusion] = set()
+    for cluster_id, suspicious_member in sorted(low_members):
+        if direct_children.get((cluster_id, suspicious_member), 0) == 0:
+            continue
+        members = cluster_members.get(cluster_id, set()) - {suspicious_member}
+        strong: set[str] = set()
+        weak: set[str] = set()
+        for member_id in members:
+            probability = edge_probabilities.get(
+                _canonical_pair(suspicious_member, member_id)
+            )
+            if probability is not None and probability >= BRIDGE_SCREEN_THRESHOLD:
+                strong.add(member_id)
+            else:
+                weak.add(member_id)
+        if not strong or not weak:
+            continue
+
+        # A likely bridge has no strong support between its provisional groups.
+        cross_group_probabilities = [
+            edge_probabilities.get(_canonical_pair(strong_id, weak_id), 0.0)
+            for strong_id in strong
+            for weak_id in weak
+        ]
+        if any(probability >= BRIDGE_SCREEN_THRESHOLD for probability in cross_group_probabilities):
+            continue
+        exclusions.update(
+            BridgeExclusion(*_canonical_pair(suspicious_member, weak_id))
+            for weak_id in weak
+        )
+        exclusions.update(
+            BridgeExclusion(*_canonical_pair(strong_id, weak_id))
+            for strong_id in strong
+            for weak_id in weak
+        )
+    return exclusions
+
+
+def _apply_bridge_exclusions(
+    edges: list[tuple[str, str, float]],
+    exclusions: set[BridgeExclusion],
+) -> list[tuple[str, str, float]]:
+    excluded_pairs = {(exclusion.left_id, exclusion.right_id) for exclusion in exclusions}
+    return [
+        edge for edge in edges
+        if _canonical_pair(edge[0], edge[1]) not in excluded_pairs
+    ]
 
 
 def _set_cluster_pairs_table_from_pairs(ctx: SplinkContext) -> Run[Unit]:
@@ -345,6 +443,65 @@ def _set_cluster_result(ctx: SplinkContext) -> Run[Unit]:
     )
 
 
+def _adjust_clusters_for_bridge_errors(ctx: SplinkContext) -> Run[Unit]:
+    """Recluster the current scored graph after run-scoped bridge screening."""
+    match ctx.cluster_result:
+        case Just(result):
+            pairs_table = ctx.cluster_pairs_table
+            match ctx.pair_id_cols:
+                case Just(cols):
+                    left_id_col = cols.fst
+                    right_id_col = cols.snd
+                case _:
+                    return throw(ErrorPayload("Pair id columns are not initialized."))
+
+            def _with_pairs(rows: Array) -> Run[Unit]:
+                match result.provenance:
+                    case Just(provenance_rows):
+                        provenance_df = provenance_rows.df
+                    case _:
+                        return throw(ErrorPayload("Cluster provenance is not initialized."))
+                pair_edges = [
+                    (str(row["uid_l"]), str(row["uid_r"]), float(row["match_probability"]))
+                    for row in rows
+                ]
+                exclusions = _screen_bridge_exclusions(
+                    clusters=result.clusters.df,
+                    provenance=provenance_df,
+                    pair_edges=pair_edges,
+                )
+                if not exclusions:
+                    return pure(unit)
+                nodes = [(str(node.fst), str(node.snd)) for node in ctx.cluster_nodes]
+                adjusted_edges = _apply_bridge_exclusions(pair_edges, exclusions)
+                clusters_df, _, provenance_df = _constrained_greedy_clusters(
+                    nodes=nodes,
+                    edges=adjusted_edges,
+                    unique_id_column_name=str(ctx.unique_id_col),
+                )
+                print(
+                    "Bridge screening adjusted clusters: "
+                    f"exclusions={len(exclusions)}"
+                )
+                return context_replace(
+                    cluster_result=Just(
+                        ClusterResult(
+                            ClusteredRows(clusters_df),
+                            result.blocked,
+                            Just(ClusterProvenanceRows(provenance_df)),
+                        )
+                    )
+                )
+
+            return sql_query(SQL(f"""
+                SELECT CAST({left_id_col} AS VARCHAR) AS uid_l,
+                       CAST({right_id_col} AS VARCHAR) AS uid_r,
+                       match_probability
+                FROM {pairs_table}
+                WHERE match_probability >= {ctx.cluster_threshold}
+            """)) >> _with_pairs
+        case _:
+            return throw(ErrorPayload("Cluster result is not initialized."))
 def _result_pairs_table_from_ctx(ctx: SplinkContext) -> ResultPairsTableName:
     pairs_out = ctx.tables.get_required(PairsTableName)
     if ctx.unique_matching:
@@ -641,6 +798,11 @@ def run_unique_matching_and_cluster_from_ctx(ctx: SplinkContext) -> Run[Unit]:
         ^ with_splink_context(_set_cluster_nodes)
         ^ with_splink_context(_set_cluster_edges)
         ^ with_splink_context(_set_cluster_result)
+        ^ (
+            with_splink_context(_adjust_clusters_for_bridge_errors)
+            if ctx.bridge_screening
+            else pure(unit)
+        )
         ^ with_splink_context(_persist_final_clusters)
     )
 
