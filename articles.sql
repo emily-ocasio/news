@@ -322,3 +322,51 @@ SELECT a.RecordId, a.Title, a.FullText
 FROM articles AS a
 WHERE a.Dataset = 'CLASS_WP'
   AND a.gptClass = 'M';
+
+-- New York Times subset-scoped full-text index.
+CREATE VIRTUAL TABLE IF NOT EXISTS articles_nyt_m_fts USING fts5(
+    Title,
+    FullText,
+    content='articles',
+    content_rowid='RecordId',
+    tokenize='unicode61'
+);
+
+DROP TRIGGER IF EXISTS articles_nyt_m_fts_ai;
+CREATE TRIGGER articles_nyt_m_fts_ai
+AFTER INSERT ON articles
+WHEN NEW.Dataset = 'CLASS_NYT' AND NEW.gptClass = 'M'
+BEGIN
+    INSERT INTO articles_nyt_m_fts(rowid, Title, FullText)
+    VALUES (NEW.RecordId, NEW.Title, NEW.FullText);
+END;
+
+DROP TRIGGER IF EXISTS articles_nyt_m_fts_ad;
+CREATE TRIGGER articles_nyt_m_fts_ad
+AFTER DELETE ON articles
+WHEN OLD.Dataset = 'CLASS_NYT' AND OLD.gptClass = 'M'
+BEGIN
+    INSERT INTO articles_nyt_m_fts(articles_nyt_m_fts, rowid, Title, FullText)
+    VALUES ('delete', OLD.RecordId, OLD.Title, OLD.FullText);
+END;
+
+DROP TRIGGER IF EXISTS articles_nyt_m_fts_au;
+CREATE TRIGGER articles_nyt_m_fts_au
+AFTER UPDATE OF Title, FullText, Dataset, gptClass ON articles
+BEGIN
+    INSERT INTO articles_nyt_m_fts(articles_nyt_m_fts, rowid, Title, FullText)
+    SELECT 'delete', OLD.RecordId, OLD.Title, OLD.FullText
+    WHERE OLD.Dataset = 'CLASS_NYT' AND OLD.gptClass = 'M';
+
+    INSERT INTO articles_nyt_m_fts(rowid, Title, FullText)
+    SELECT NEW.RecordId, NEW.Title, NEW.FullText
+    WHERE NEW.Dataset = 'CLASS_NYT' AND NEW.gptClass = 'M';
+END;
+
+-- One-time (and safely repeatable) backfill for existing NYT rows.
+INSERT INTO articles_nyt_m_fts(articles_nyt_m_fts) VALUES ('delete-all');
+INSERT INTO articles_nyt_m_fts(rowid, Title, FullText)
+SELECT a.RecordId, a.Title, a.FullText
+FROM articles AS a
+WHERE a.Dataset = 'CLASS_NYT'
+  AND a.gptClass = 'M';

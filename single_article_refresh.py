@@ -782,6 +782,14 @@ def _invalidate_adjudications_for_article(
 
     def _run_core() -> Run[Unit]:
         return (
+            sql_exec(
+                SQL(
+                    "CREATE OR REPLACE TEMP TABLE _active_publication_scope "
+                    "AS SELECT ? AS publication_key;"
+                ),
+                SQLParams((env["publication_profile"].key,)),
+            )
+            ^
             put_line(f"[F] cache invalidation step: collect cache keys ({record_id})")
             ^ sql_exec(
                 SQL(
@@ -793,7 +801,10 @@ def _invalidate_adjudications_for_article(
                       'fixarticle_G_reextract_orphan_anchor' AS invalidate_reason
                     FROM llm_cache
                     WHERE stage = ?
-                      AND idempotency_key LIKE ?;
+                      AND idempotency_key LIKE ?
+                      AND publication_key = (
+                        SELECT publication_key FROM _active_publication_scope
+                      );
                     """
                 ),
                 SQLParams(
@@ -822,6 +833,9 @@ def _invalidate_adjudications_for_article(
                                 """
                                 DELETE FROM llm_cache
                                 WHERE stage = ?
+                                  AND publication_key = (
+                                    SELECT publication_key FROM _active_publication_scope
+                                  )
                                   AND idempotency_key IN (
                                     SELECT DISTINCT cache_key
                                     FROM _invalidate_fixg_cache

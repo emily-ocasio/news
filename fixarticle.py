@@ -55,6 +55,7 @@ from orphan_adjudication_controller import (
     force_article_adjudication_cache_refresh,
     force_article_adjudication_cache_refresh_strategy_x,
 )
+from orphan_adjudication_apply import apply_orphan_adjudications
 from publication_profiles import RecordIdBase
 from publication_profiles import Availability
 
@@ -293,7 +294,7 @@ def _cache_rows_for_article(article: Article) -> Run[tuple[dict, ...]]:
     if record_id <= 0:
         return pure(tuple())
 
-    return with_duckdb(
+    return ask() >> (lambda env: with_duckdb(
         sql_query(
             SQL(
                 """
@@ -307,12 +308,17 @@ def _cache_rows_for_article(article: Article) -> Run[tuple[dict, ...]]:
                 FROM llm_cache lc
                 WHERE lc.stage = ?
                   AND lc.idempotency_key LIKE ?
+                  AND lc.publication_key = ?
                 ORDER BY lc.idempotency_key;
                 """
             ),
-            SQLParams((String(E2E_CACHE_STAGE), String(f"{record_id}:%"))),
+            SQLParams((
+                String(E2E_CACHE_STAGE),
+                String(f"{record_id}:%"),
+                env["publication_profile"].key,
+            )),
         )
-    ) >> (lambda rows: pure(tuple(dict(r) for r in rows)))
+    )) >> (lambda rows: pure(tuple(dict(r) for r in rows)))
 
 
 def _adjudication_rows_for_article(article: Article) -> Run[tuple[dict, ...]]:
@@ -433,23 +439,28 @@ def _delete_cache_entry(_article: Article, row: dict) -> Run[None]:
     orphan_id = str(row.get("orphan_id") or "")
     cache_key = str(row.get("cache_key") or "")
 
-    return with_duckdb(
+    return ask() >> (lambda env: with_duckdb(
         sql_exec(
             SQL(
                 """
                 DELETE FROM llm_cache
                 WHERE stage = ?
-                  AND idempotency_key = ?;
+                  AND idempotency_key = ?
+                  AND publication_key = ?;
                 """
             ),
-            SQLParams((String(E2E_CACHE_STAGE), String(cache_key))),
+            SQLParams((
+                String(E2E_CACHE_STAGE),
+                String(cache_key),
+                env["publication_profile"].key,
+            )),
         )
         ^ put_line(
             "[F] Removed orphan adjudication cache entry "
             f"(orphan_id={orphan_id}, cache_key={cache_key})."
         )
         ^ pure(None)
-    )
+    ))
 
 def _delete_cache_entries(article: Article, rows: tuple[dict, ...]) -> Run[None]:
     """
@@ -460,6 +471,103 @@ def _delete_cache_entries(article: Article, rows: tuple[dict, ...]) -> Run[None]
     return _delete_cache_entry(article, rows[0]) >> (
         lambda _: _delete_cache_entries(article, rows[1:])
     )
+
+
+def _reset_article_adjudication(article: Article) -> Run[None]:
+    """Remove current article adjudication state before rebuilding [J]."""
+    record_id = article.record_id or 0
+
+    def _reset_for_environment(env: Environment) -> Run[None]:
+        profile_key = env["publication_profile"].key
+        return with_duckdb(
+            sql_exec(
+                SQL(
+                    "CREATE OR REPLACE TEMP TABLE _active_publication_scope "
+                    "AS SELECT ? AS publication_key;"
+                ),
+                SQLParams((profile_key,)),
+            )
+            ^ sql_query(
+                SQL(
+                    """
+                    SELECT
+                      (SELECT COUNT(*) FROM llm_cache
+                       WHERE stage = ? AND idempotency_key LIKE ?
+                         AND publication_key = ?) AS cache_count,
+                      (SELECT COUNT(*) FROM orphan_adjudication_overrides o
+                       JOIN orphan_link_input li ON li.unique_id = o.orphan_id
+                       WHERE li.article_id = ? AND o.publication_key = ?) AS override_count;
+                    """
+                ),
+                SQLParams((
+                    String(E2E_CACHE_STAGE), String(f"{record_id}:%"),
+                    profile_key, record_id, profile_key,
+                )),
+            )
+            >> (
+                lambda rows: put_line(
+                    "[F] [D] Reset preflight: "
+                    f"cache_rows={rows[0]['cache_count']}, "
+                    f"override_rows={rows[0]['override_count']}, "
+                    f"publication={profile_key}"
+                )
+                ^ sql_exec(
+                    SQL(
+                        """
+                        INSERT INTO orphan_adjudication_history (
+                          history_id, run_id, orphan_id,
+                          prior_resolution_label, prior_resolved_entity_id,
+                          prior_confidence, new_resolution_label,
+                          new_resolved_entity_id, new_confidence, reason_summary,
+                          evidence_json, analyst_mode, changed_at, publication_key
+                        )
+                        SELECT
+                          NULL, 'fix_reset_' || CAST(NOW() AS VARCHAR),
+                          o.orphan_id, o.resolution_label, o.resolved_entity_id,
+                          o.confidence, 'invalidated', NULL, NULL,
+                          'manual_fix_reset', o.evidence_json,
+                          'fixarticle_D', NOW(), o.publication_key
+                        FROM orphan_adjudication_overrides o
+                        JOIN orphan_link_input li ON li.unique_id = o.orphan_id
+                        WHERE li.article_id = ?
+                          AND o.publication_key = ?;
+                        """
+                    ),
+                    SQLParams((record_id, profile_key)),
+                )
+                ^ sql_exec(
+                    SQL(
+                        """
+                        DELETE FROM orphan_adjudication_overrides
+                        WHERE publication_key = ?
+                          AND orphan_id IN (
+                            SELECT unique_id FROM orphan_link_input WHERE article_id = ?
+                          );
+                        """
+                    ),
+                    SQLParams((profile_key, record_id)),
+                )
+                ^ sql_exec(
+                    SQL(
+                        """
+                        DELETE FROM llm_cache
+                        WHERE stage = ? AND idempotency_key LIKE ?
+                          AND publication_key = ?;
+                        """
+                    ),
+                    SQLParams((
+                        String(E2E_CACHE_STAGE), String(f"{record_id}:%"),
+                        profile_key,
+                    )),
+                )
+                ^ put_line(
+                    f"[F] [D] Removed current adjudication state for article {record_id}."
+                )
+                ^ pure(None)
+            )
+        )
+
+    return ask() >> _reset_for_environment
 
 def _select_apply_action(
     article: Article, allow_cache_delete: bool = True
@@ -473,7 +581,10 @@ def _select_apply_action(
         return (
             _display_cache_rows(cache_rows)
             ^ input_desired_action(
-                include_delete_cache=allow_cache_delete and len(cache_rows) > 0,
+                include_delete_cache=(
+                    allow_cache_delete
+                    and (len(cache_rows) > 0 or len(adjudication_rows) > 0)
+                ),
                 include_force_adjudication=len(adjudication_rows) > 0,
             )
             >> (
@@ -631,8 +742,8 @@ def _apply_action(
             )
         case FixAction.DELETE_ORPHAN_CACHE:
             result = (
-                _choose_cache_entries(cache_rows)
-                >> (lambda selected: _delete_cache_entries(article, selected))
+                _reset_article_adjudication(article)
+                ^ apply_orphan_adjudications()
                 >> (lambda _: _select_apply_action(article, allow_cache_delete))
             )
         case FixAction.CLARIFICATION:

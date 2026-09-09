@@ -501,7 +501,7 @@ def _link_orphans_to_entities(
                 ("entity_link_input", "orphan_link_input")
             ),
             settings=settings,
-            predict_threshold=0.45,
+            predict_threshold=0.8,
             cluster_threshold=0.0,
             pairs_out=PairsTableName("orphan_entity_pairs"),
             deterministic_rules=with_orphan_article_exclusions(

@@ -666,20 +666,30 @@ def _normalize_fts_variant_token(token: str) -> str:
     cleaned = re.sub(r"\s+", " ", _safe_text(token)).strip()
     if cleaned == "":
         return ""
-    return cleaned.replace('"', '""')
+    # FTS5 tokenizes punctuation, apostrophes, and hyphens independently of
+    # the source phrase.  Normalize those separators before quoting the
+    # phrase so variants such as "St. Patrick's Day" become "St Patrick Day"
+    # and remain valid/retrievable FTS phrases.
+    cleaned = re.sub(r"['’‘`´]s\b", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"['’‘`´]", "", cleaned)
+    cleaned = re.sub(r"[^\w\s]", " ", cleaned, flags=re.UNICODE)
+    return re.sub(r"\s+", " ", cleaned).strip()
 
 
 def _build_fts_or_query_from_variants(variants: tuple[str, ...]) -> str:
-    tokens = [
+    phrases = [
         normalized
         for normalized in (
             _normalize_fts_variant_token(token) for token in variants
         )
         if normalized != ""
     ]
-    if len(tokens) == 0:
+    if len(phrases) == 0:
         return ""
-    return " OR ".join(f'"{token}"' for token in tokens)
+    return " OR ".join(
+        " AND ".join(f'"{word}"' for word in phrase.split())
+        for phrase in phrases
+    )
 
 
 def _query_specs_from_validated_anchors(
@@ -2029,6 +2039,33 @@ def _ensure_tables_run_v2() -> Run[Any]:
             );
             """
             ),
+            SQL("ALTER TABLE orphan_adj_run ADD COLUMN IF NOT EXISTS publication_key VARCHAR;"),
+            SQL("ALTER TABLE orphan_adj_case_state ADD COLUMN IF NOT EXISTS publication_key VARCHAR;"),
+            SQL("ALTER TABLE orphan_adj_queue_run ADD COLUMN IF NOT EXISTS publication_key VARCHAR;"),
+            SQL("ALTER TABLE orphan_adj_cache_readiness ADD COLUMN IF NOT EXISTS publication_key VARCHAR;"),
+            SQL("ALTER TABLE orphan_adj_candidates_bc ADD COLUMN IF NOT EXISTS publication_key VARCHAR;"),
+            SQL("ALTER TABLE orphan_adj_candidates_c2 ADD COLUMN IF NOT EXISTS publication_key VARCHAR;"),
+            SQL("ALTER TABLE orphan_adj_candidates_merged ADD COLUMN IF NOT EXISTS publication_key VARCHAR;"),
+            SQL("ALTER TABLE orphan_adj_stage_metrics ADD COLUMN IF NOT EXISTS publication_key VARCHAR;"),
+            SQL("ALTER TABLE llm_cache ADD COLUMN IF NOT EXISTS publication_key VARCHAR;"),
+            SQL("ALTER TABLE orphan_adjudication_history ADD COLUMN IF NOT EXISTS publication_key VARCHAR;"),
+            SQL(
+                """
+                CREATE TABLE IF NOT EXISTS orphan_adjudication_overrides (
+                  orphan_id VARCHAR,
+                  resolution_label VARCHAR,
+                  resolved_entity_id VARCHAR,
+                  confidence DOUBLE,
+                  reason_summary VARCHAR,
+                  evidence_json JSON,
+                  analyst_mode VARCHAR,
+                  created_at TIMESTAMP,
+                  updated_at TIMESTAMP,
+                  publication_key VARCHAR
+                );
+                """
+            ),
+            SQL("ALTER TABLE orphan_adjudication_overrides ADD COLUMN IF NOT EXISTS publication_key VARCHAR;"),
         )
     )
     return (
@@ -2162,7 +2199,8 @@ def _load_orphan_dossier_run_v2(orphan_id: str) -> Run[Dossier]:
                     SELECT Title, FullText, PubDate
                     FROM articles
                     WHERE RecordId = ?
-                      AND Dataset = 'CLASS_WP'
+                      AND Publication = (SELECT publication_id FROM _active_publication_scope)
+                      AND Dataset = (SELECT classified_dataset FROM _active_publication_scope)
                       AND gptClass = 'M'
                     LIMIT 1;
                     """,
@@ -2277,6 +2315,7 @@ def _llm_cache_get_run_v2(
         FROM llm_cache
         WHERE stage = ?
           AND idempotency_key = ?
+          AND publication_key = (SELECT publication_key FROM _active_publication_scope)
         LIMIT 1;
         """,
             _sql_params((stage, idempotency_key)),
@@ -2299,13 +2338,15 @@ def _llm_cache_put_run_v2(
             """
             INSERT INTO llm_cache (
               stage, idempotency_key, model, prompt_version, input_json,
-              response_json, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?::JSON, ?::JSON, NOW(), NOW())
+              response_json, created_at, updated_at, publication_key
+            ) VALUES (?, ?, ?, ?, ?::JSON, ?::JSON, NOW(), NOW(),
+              (SELECT publication_key FROM _active_publication_scope))
             ON CONFLICT(stage, idempotency_key) DO UPDATE SET
               model = EXCLUDED.model,
               prompt_version = EXCLUDED.prompt_version,
               input_json = EXCLUDED.input_json,
               response_json = EXCLUDED.response_json,
+              publication_key = EXCLUDED.publication_key,
               updated_at = NOW();
             """
         ),
@@ -2328,7 +2369,8 @@ def _llm_cache_delete_run_v2(stage: str, idempotency_key: str) -> Run[Any]:
             """
             DELETE FROM llm_cache
             WHERE stage = ?
-              AND idempotency_key = ?;
+              AND idempotency_key = ?
+              AND publication_key = (SELECT publication_key FROM _active_publication_scope);
             """
         ),
         _sql_params((stage, idempotency_key)),
@@ -2604,6 +2646,26 @@ def _log_stage_metric_run_v2(
     )
 
 
+def _tag_k_run_rows_run_v2(run_id: str) -> Run[Any]:
+    """Attach the immutable session publication to all rows from a K run."""
+    tables = (
+        "orphan_adj_run", "orphan_adj_case_state", "orphan_adj_queue_run",
+        "orphan_adj_cache_readiness", "orphan_adj_candidates_bc",
+        "orphan_adj_candidates_c2", "orphan_adj_candidates_merged",
+        "orphan_adj_stage_metrics",
+    )
+    statements = Array.make(tuple(
+        sql_exec(SQL(
+            f"UPDATE {table} SET publication_key = "
+            "(SELECT publication_key FROM _active_publication_scope) "
+            "WHERE run_id = ?;"
+        ), _sql_params((run_id,))) for table in tables
+    ))
+    return array_traverse_run(statements, lambda statement: statement) >> (
+        lambda _: pure(None)
+    )
+
+
 def _display_article_run_v2(dossier: Dossier) -> Run[Any]:
     article_text_display = (
         dossier.article_text if dossier.article_text != "" else "[empty]"
@@ -2679,7 +2741,8 @@ def _display_article_by_id_run_v2(
           Notes
         FROM articles
         WHERE RecordId = ?
-          AND Dataset = 'CLASS_WP'
+          AND Publication = (SELECT publication_id FROM _active_publication_scope)
+          AND Dataset = (SELECT classified_dataset FROM _active_publication_scope)
           AND gptClass = 'M'
         LIMIT 1;
         """,
@@ -2836,7 +2899,8 @@ def _anchor_doc_frequency_run_v2(anchor_text: str) -> Run[int]:
             """
         SELECT COUNT(*) AS n
         FROM articles
-        WHERE Dataset='CLASS_WP'
+        WHERE Publication = (SELECT publication_id FROM _active_publication_scope)
+          AND Dataset = (SELECT classified_dataset FROM _active_publication_scope)
           AND gptClass='M'
           AND FullText LIKE ?;
         """,
@@ -2853,7 +2917,8 @@ def _anchor_doc_threshold_run_v2() -> Run[int]:
             """
         SELECT COUNT(*) AS n
         FROM articles
-        WHERE Dataset='CLASS_WP'
+        WHERE Publication = (SELECT publication_id FROM _active_publication_scope)
+          AND Dataset = (SELECT classified_dataset FROM _active_publication_scope)
           AND gptClass='M';
         """,
             sqlite=True,
@@ -2976,17 +3041,28 @@ def _validate_anchors_run_v2(
 
 
 def _fts_article_hits_query_run_v2(match_q: str, limit_n: int) -> Run[Array[int]]:
+    return ask() >> (lambda env: _fts_article_hits_from_table_run_v2(
+        str(env["publication_profile"].resources.article_fts_table),
+        match_q, limit_n,
+    ))
+
+
+def _fts_article_hits_from_table_run_v2(
+    table: str, match_q: str, limit_n: int
+) -> Run[Array[int]]:
+    """Search the FTS table selected by the active publication profile."""
     return (
         _query_rows_run_v2(
-            """
+            f"""
         SELECT a.RecordId
-        FROM articles_wp_m_fts f
+        FROM {table} f
         JOIN articles a
           ON a.RecordId = f.rowid
-        WHERE a.Dataset='CLASS_WP'
+        WHERE a.Publication = (SELECT publication_id FROM _active_publication_scope)
+          AND a.Dataset = (SELECT classified_dataset FROM _active_publication_scope)
           AND a.gptClass='M'
-          AND articles_wp_m_fts MATCH ?
-        ORDER BY bm25(articles_wp_m_fts)
+          AND {table} MATCH ?
+        ORDER BY bm25({table})
         LIMIT ?;
         """,
             _sql_params((match_q, limit_n)),
@@ -3074,7 +3150,8 @@ def _matched_variants_for_articles_run_v2(
         FROM hits h
         JOIN articles a
           ON a.RecordId = h.article_id
-        WHERE a.Dataset = 'CLASS_WP'
+        WHERE a.Publication = (SELECT publication_id FROM _active_publication_scope)
+          AND a.Dataset = (SELECT classified_dataset FROM _active_publication_scope)
           AND a.gptClass = 'M';
         """,
         _sql_params(article_ids.a),
@@ -4448,7 +4525,8 @@ def _candidate_article_context_run_v2(article_id: int | None) -> Run[dict[str, A
         SELECT RecordId, Title, FullText, PubDate
         FROM articles
         WHERE RecordId = ?
-          AND Dataset = 'CLASS_WP'
+          AND Publication = (SELECT publication_id FROM _active_publication_scope)
+          AND Dataset = (SELECT classified_dataset FROM _active_publication_scope)
           AND gptClass = 'M'
         LIMIT 1;
         """,
@@ -5099,11 +5177,13 @@ def _rebuild_overrides_table_run_v2(
                           reason_summary,
                           evidence_json,
                           analyst_mode,
-                          changed_at
+                          changed_at,
+                          publication_key
                         ) VALUES (
                           NULL,
                           ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::JSON,
-                          'interactive_agent_k', NOW()
+                          'interactive_agent_k', NOW(),
+                          (SELECT publication_key FROM _active_publication_scope)
                         );
                         """
                     ),
@@ -5133,13 +5213,15 @@ def _rebuild_overrides_table_run_v2(
                       resolved_entity_id,
                       confidence,
                       reason_summary,
-                      evidence_json,
-                      analyst_mode,
-                      created_at,
-                      updated_at
+                          evidence_json,
+                          analyst_mode,
+                          created_at,
+                          updated_at,
+                          publication_key
                     ) VALUES (
                       ?, ?, ?, ?, ?, ?::JSON,
-                      'interactive_agent_k', NOW(), NOW()
+                      'interactive_agent_k', NOW(), NOW(),
+                      (SELECT publication_key FROM _active_publication_scope)
                     );
                     """
                 ),
@@ -5211,7 +5293,10 @@ def _rebuild_overrides_table_run_v2(
           confidence,
           reason_summary,
           evidence_json
-        FROM orphan_adjudication_overrides;
+        FROM orphan_adjudication_overrides
+        WHERE publication_key = (
+          SELECT publication_key FROM _active_publication_scope
+        );
         """
         )
         >> _stage_next_override_rows
@@ -6625,7 +6710,10 @@ def _run_pipeline_run(
 
                 return _rebuild_overrides_table_run_v2(
                     run_id, all_decisions, dry_run=params.dry_run
-                ) >> _persist_run_summary
+                ) >> (
+                    lambda result: _tag_k_run_rows_run_v2(run_id)
+                    ^ _persist_run_summary(result)
+                )
 
             return _cached_decisions_from_readiness_run_v2(
                 readiness_rows, selected_ids
@@ -6908,11 +6996,44 @@ def _force_article_adjudication_cache_refresh_run_v2(
     ) >> _build_groups_for_article
 
 
+def _initialize_publication_scopes(env: Any) -> Run[Any]:
+    """Initialize publication scope tables for DuckDB and SQLite effects."""
+    profile = env["publication_profile"]
+    return (
+        sql_exec(
+            SQL(
+                "CREATE OR REPLACE TEMP TABLE _active_publication_scope "
+                "AS SELECT ? AS publication_key;"
+            ),
+            SQLParams((profile.key,)),
+        )
+        ^ _with_sqlite(
+            sql_exec(
+                SQL(
+                    "CREATE TEMP TABLE IF NOT EXISTS _active_publication_scope "
+                    "(publication_id INTEGER, classified_dataset VARCHAR);"
+                )
+            )
+            ^ sql_exec(SQL("DELETE FROM _active_publication_scope;"))
+            ^ sql_exec(
+                SQL("INSERT INTO _active_publication_scope VALUES (?, ?);"),
+                SQLParams(
+                    (
+                        profile.identity.database_id.value,
+                        profile.policies.workflow_datasets.classified,
+                    )
+                ),
+            )
+        )
+    )
+
+
 def force_article_adjudication_cache_refresh(
     article_id: int,
 ) -> Run[ArticleCacheRefreshSummary]:
     """Public [K] cache refresh entrypoint for the fix-article controller."""
-    prog = _force_article_adjudication_cache_refresh_run_v2(article_id)
+    prog = ask() >> (lambda env: _initialize_publication_scopes(env) ^
+        _force_article_adjudication_cache_refresh_run_v2(article_id))
     return with_namespace(
         Namespace("orphan_adj_k_refresh"),
         to_prompts(ORPHAN_ADJ_PROMPTS),
@@ -6930,10 +7051,11 @@ def force_article_adjudication_cache_refresh_strategy_x(
     article_id: int,
 ) -> Run[ArticleCacheRefreshSummary]:
     """Refresh article-scoped adjudication cache using the [X] top-score strategy."""
-    prog = _force_article_adjudication_cache_refresh_run_v2(
-        article_id,
-        candidate_strategy="top_score_union",
-    )
+    prog = ask() >> (lambda env: _initialize_publication_scopes(env) ^
+        _force_article_adjudication_cache_refresh_run_v2(
+            article_id,
+            candidate_strategy="top_score_union",
+        ))
     return with_namespace(
         Namespace("orphan_adj_k_refresh_x"),
         to_prompts(ORPHAN_ADJ_PROMPTS),
@@ -6950,7 +7072,9 @@ def force_article_adjudication_cache_refresh_strategy_x(
 def adjudicate_orphans_controller() -> Run[NextStep]:
     """Run controller [K] under the application's standard Run stack."""
 
-    prog = _prepare_cache_readiness() >> (
+    prog = ask() >> (lambda env: put_line(
+        f"[K] Active publication: {env['publication_profile'].session_label}"
+    ) ^ _initialize_publication_scopes(env) ^ _prepare_cache_readiness()) >> (
         lambda prep: _prompt_and_execute_k(prep[0], prep[1])
     )
     return with_namespace(

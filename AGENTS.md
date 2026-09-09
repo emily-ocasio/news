@@ -6,6 +6,10 @@
 - Orphan adjudication policy lives in `docs/orphan_adjudication_playbook.md`.
 
 ## Global Rules
+- Publication-generalized database architecture:
+  - After publication generalization, the authoritative DuckDB database is publication-specific under `derived/<publication>/news.duckdb` (for example, `derived/nyt/news.duckdb` or `derived/wp/news.duckdb`).
+  - The root-level `news.duckdb` is a legacy pre-generalization copy. Do not use it or reference it for new agent requests, diagnostics, code changes, or database operations.
+  - Always identify the requested publication first and inspect/use its corresponding database under `derived/<publication>/`.
 - Runtime environment:
   - The application runs under the Conda environment `news`.
   - For Python compilation, type checking, and troubleshooting commands, prefer binaries from `/Users/wendell/miniforge3/envs/news/bin/` (or run after `conda activate news`).
@@ -15,7 +19,8 @@
     - `/Users/wendell/miniforge3/envs/news/bin/python -m mypy.dmypy --status-file .dmypy.json status`
   - Run Pyright with the CLI-specific config:
     - `/Users/wendell/miniforge3/envs/news/bin/pyright --project pyrightconfig.cli.json`
-  - Treat non-zero exits or reported type errors from either checker as failures before finalizing.
+- Treat non-zero exits or reported type errors from either checker as failures before finalizing.
+- Destructive database activities (including DELETE, UPDATE, replacement, cache invalidation, or table rebuild operations) must always be scoped to an explicit publication. Before execution, verify the active publication, identify the exact target rows, and report preflight counts and the intended retained/deleted populations. If publication scope is unavailable or ambiguous, stop rather than execute; require explicit caution/confirmation before proceeding with irreversible or difficult-to-recover changes.
 - If DuckDB is locked or unavailable during orphan adjudication:
   - Identify likely lock owner process first.
   - If lock owner is a `python` process:

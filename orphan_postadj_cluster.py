@@ -739,6 +739,9 @@ def _export_postadj_orphan_clusters_excel() -> Run[Unit]:
             orphan_id,
             reason_summary
           FROM orphan_adjudication_overrides
+          WHERE publication_key = (
+            SELECT publication_key FROM _active_publication_scope
+          )
         ),
         named_entities AS (
           SELECT

@@ -11,6 +11,8 @@ from publication_outputs import publication_sql_export
 from pymonad import (
     Run,
     SQL,
+    SQLParams,
+    ask,
     Unit,
     pure,
     put_line,
@@ -39,6 +41,9 @@ def _build_adjudication_candidates() -> Run[Unit]:
                   updated_at
                 FROM orphan_adjudication_overrides
                 WHERE resolution_label = 'matched'
+                  AND publication_key = (
+                    SELECT publication_key FROM _active_publication_scope
+                  )
                   AND resolved_entity_id IS NOT NULL;
                 """
             )
@@ -256,7 +261,10 @@ def _prune_stale_override_rows(run_id: str) -> Run[Unit]:
                               NOW() AS changed_at
                             FROM orphan_adjudication_overrides o
                             JOIN _stale_override_rows s
-                              ON s.orphan_id = o.orphan_id;
+                              ON s.orphan_id = o.orphan_id
+                            WHERE o.publication_key = (
+                              SELECT publication_key FROM _active_publication_scope
+                            );
                             """
                         )
                     )
@@ -264,7 +272,10 @@ def _prune_stale_override_rows(run_id: str) -> Run[Unit]:
                         SQL(
                             """--sql
                             DELETE FROM orphan_adjudication_overrides
-                            WHERE orphan_id IN (SELECT orphan_id FROM _stale_override_rows);
+                            WHERE publication_key = (
+                              SELECT publication_key FROM _active_publication_scope
+                            )
+                              AND orphan_id IN (SELECT orphan_id FROM _stale_override_rows);
                             """
                         )
                     )
@@ -714,6 +725,9 @@ def _build_orphan_matches_postadj_current() -> Run[Unit]:
             confidence,
             reason_summary
           FROM orphan_adjudication_overrides
+          WHERE publication_key = (
+            SELECT publication_key FROM _active_publication_scope
+          )
         ),
         orphan_choice_display AS (
           SELECT
@@ -737,8 +751,17 @@ def _build_orphan_matches_postadj_current() -> Run[Unit]:
         entity_with_match AS (
           SELECT
             e.* REPLACE (
-              COALESCE(vep.article_ids_csv, e.article_ids_csv) AS article_ids_csv
+              e.article_ids_csv AS article_ids_csv
             ),
+            (
+              SELECT ic.summary
+              FROM incidents_cached ic
+              WHERE ic.summary IS NOT NULL
+                AND TRIM(ic.summary) <> ''
+                AND ic.article_id = TRY_CAST(split_part(e.unique_id, ':', 1) AS BIGINT)
+                AND ic.incident_idx = TRY_CAST(split_part(e.unique_id, ':', 2) AS INTEGER)
+              LIMIT 1
+            ) AS entity_summary,
             CASE WHEN e.unique_id IN (
               SELECT entity_uid
               FROM display_matched_entities
@@ -759,14 +782,7 @@ def _build_orphan_matches_postadj_current() -> Run[Unit]:
             )
               THEN 2
               ELSE 0
-            END AS display_band_key,
-            CASE WHEN e.unique_id IN (
-              SELECT entity_uid
-              FROM display_matched_entities
-            )
-              THEN 'adjudication_applied'
-              ELSE 'none'
-            END AS adjudication_flag
+            END AS display_band_key
           FROM entity_link_input e
           LEFT JOIN victim_entity_reps_postadj vep
             ON vep.victim_entity_id = e.unique_id
@@ -805,11 +821,11 @@ def _build_orphan_matches_postadj_current() -> Run[Unit]:
             e.victim_count,
             e.offender_count,
             CAST(NULL AS DOUBLE) AS confidence,
+            e.entity_summary AS summary,
+            CAST(NULL AS VARCHAR) AS matched_summary,
             e.display_category,
             e.display_band_key,
-            CAST(NULL AS VARCHAR) AS adjudication_label,
-            e.adjudication_flag,
-            CAST(NULL AS VARCHAR) AS reason_summary
+            CAST(NULL AS VARCHAR) AS adjudication_label
           FROM entity_with_match e
 
           UNION ALL
@@ -850,6 +866,8 @@ def _build_orphan_matches_postadj_current() -> Run[Unit]:
             o.victim_count,
             o.offender_count,
             o.adjudication_confidence AS confidence,
+            oi.summary AS summary,
+            ei.summary AS matched_summary,
             CASE
               WHEN o.entity_uid IS NOT NULL THEN 'adjudication_matched_orphan'
               WHEN o.adjudication_label = 'not_same_person' THEN 'left_behind_not_same'
@@ -862,17 +880,16 @@ def _build_orphan_matches_postadj_current() -> Run[Unit]:
               WHEN o.adjudication_label = 'insufficient_information' THEN 4
               ELSE 1
             END AS display_band_key,
-            o.adjudication_label,
-            CASE
-              WHEN o.entity_uid IS NOT NULL THEN 'adjudication_applied'
-              WHEN o.adjudication_label = 'not_same_person' THEN 'adjudication_not_same'
-              WHEN o.adjudication_label = 'insufficient_information' THEN 'adjudication_insufficient'
-              ELSE 'none'
-            END AS adjudication_flag,
-            o.adjudication_reason_summary AS reason_summary
+            o.adjudication_label
           FROM orphan_choice_display o
           LEFT JOIN entity_link_input e
             ON e.unique_id = o.entity_uid
+          LEFT JOIN incidents_cached oi
+            ON oi.article_id = o.article_id
+           AND oi.incident_idx = TRY_CAST(split_part(o.unique_id, ':', 2) AS INTEGER)
+          LEFT JOIN incidents_cached ei
+            ON ei.article_id = TRY_CAST(split_part(o.entity_uid, ':', 1) AS BIGINT)
+           AND ei.incident_idx = TRY_CAST(split_part(o.entity_uid, ':', 2) AS INTEGER)
         )
         SELECT
           rec_type,
@@ -906,12 +923,12 @@ def _build_orphan_matches_postadj_current() -> Run[Unit]:
           victim_count,
           offender_count,
           confidence,
+          summary,
+          matched_summary,
           article_ids_csv,
           display_category,
           display_band_key,
-          adjudication_label,
-          adjudication_flag,
-          reason_summary
+          adjudication_label
         FROM combined
         ORDER BY
           group_midpoint_day NULLS LAST,
@@ -1059,9 +1076,40 @@ def _append_apply_history(run_id: str) -> Run[Unit]:
                   skip_entity_not_found BIGINT,
                   skip_already_machine_matched BIGINT,
                   skip_duplicate_adjudication_orphan BIGINT,
-                  skip_conflict_entity_mismatch BIGINT
+                  skip_conflict_entity_mismatch BIGINT,
+                  publication_key VARCHAR
                 );
                 """
+            )
+        )
+        ^ sql_exec(
+            SQL(
+                """
+                CREATE TABLE IF NOT EXISTS orphan_adjudication_overrides (
+                  orphan_id VARCHAR,
+                  resolution_label VARCHAR,
+                  resolved_entity_id VARCHAR,
+                  confidence DOUBLE,
+                  reason_summary VARCHAR,
+                  evidence_json JSON,
+                  analyst_mode VARCHAR,
+                  created_at TIMESTAMP,
+                  updated_at TIMESTAMP,
+                  publication_key VARCHAR
+                );
+                """
+            )
+        )
+        ^ sql_exec(
+            SQL(
+                "ALTER TABLE orphan_adjudication_history "
+                "ADD COLUMN IF NOT EXISTS publication_key VARCHAR;"
+            )
+        )
+        ^ sql_exec(
+            SQL(
+                "ALTER TABLE orphan_adjudication_apply_history "
+                "ADD COLUMN IF NOT EXISTS publication_key VARCHAR;"
             )
         )
         ^ sql_exec(
@@ -1077,7 +1125,8 @@ def _append_apply_history(run_id: str) -> Run[Unit]:
                   COUNT(*) FILTER (WHERE apply_status = 'skip_entity_not_found') AS skip_entity_not_found,
                   COUNT(*) FILTER (WHERE apply_status = 'skip_already_machine_matched') AS skip_already_machine_matched,
                   COUNT(*) FILTER (WHERE apply_status = 'skip_duplicate_adjudication_orphan') AS skip_duplicate_adjudication_orphan,
-                  COUNT(*) FILTER (WHERE apply_status = 'skip_conflict_entity_mismatch') AS skip_conflict_entity_mismatch
+                  COUNT(*) FILTER (WHERE apply_status = 'skip_conflict_entity_mismatch') AS skip_conflict_entity_mismatch,
+                  (SELECT publication_key FROM _active_publication_scope) AS publication_key
                 FROM adjudicated_orphan_apply_report;
                 """
             )
@@ -1132,4 +1181,20 @@ def apply_orphan_adjudications() -> Run[NextStep]:
     """
     Entry point for post-adjudication orphan integration.
     """
-    return with_duckdb(_run_apply())
+    return with_duckdb(
+        ask() >> (lambda env: put_line(
+            f"[J] Active publication: {env['publication_profile'].session_label}"
+        ) ^ sql_exec(
+            SQL("CREATE OR REPLACE TEMP TABLE _active_publication_scope AS SELECT ? AS publication_key;"),
+            SQLParams((env["publication_profile"].key,)),
+        ) ^ sql_exec(
+            SQL(
+                "CREATE TABLE IF NOT EXISTS orphan_adjudication_overrides ("
+                "orphan_id VARCHAR, resolution_label VARCHAR, "
+                "resolved_entity_id VARCHAR, confidence DOUBLE, "
+                "reason_summary VARCHAR, evidence_json JSON, "
+                "analyst_mode VARCHAR, created_at TIMESTAMP, "
+                "updated_at TIMESTAMP, publication_key VARCHAR);"
+            )
+        ) ^ _run_apply())
+    )

@@ -135,6 +135,27 @@ def _build_compare_sql(
             for c in sort_cols
         ]
     )
+    switch_having = (
+        """
+    HAVING COUNT(DISTINCT CASE WHEN l.rec_type = 'entity'
+                               THEN l.{cluster_col} END) = 2
+       AND COUNT(DISTINCT CASE WHEN r.rec_type = 'entity'
+                               THEN r.{cluster_col} END) = 2
+       AND COUNT(DISTINCT CASE
+             WHEN l.rec_type = 'orphan'
+              AND r.rec_type = 'orphan'
+              AND l.{cluster_col} <> r.{cluster_col}
+             THEN l.{member_col} END) > 0
+""".format(cluster_col=cluster_col, member_col=member_col)
+        if "rec_type" in left_cols and "rec_type" in right_cols
+        else ""
+    )
+    switch_left_orphan = (
+        "l.rec_type = 'orphan'" if "rec_type" in left_cols else "FALSE"
+    )
+    switch_right_orphan = (
+        "r.rec_type = 'orphan'" if "rec_type" in right_cols else "FALSE"
+    )
 
     return SQL(
         f"""--sql
@@ -478,6 +499,20 @@ WITH RECURSIVE
     JOIN family_components fc
       ON fc.node = concat('r:', CAST(rf.cluster_id AS VARCHAR))
   ),
+  switch_families AS (
+    SELECT
+      lfc.family_id
+    FROM left_family_component lfc
+    JOIN right_family_component rfc
+      ON rfc.family_id = lfc.family_id
+    JOIN {left_table} l
+      ON l.{cluster_col} = lfc.cluster_id
+    JOIN {right_table} r
+      ON r.{cluster_col} = rfc.cluster_id
+     AND r.{member_col} = l.{member_col}
+    GROUP BY lfc.family_id
+    {switch_having}
+  ),
   left_sort AS (
     SELECT
       l.{cluster_col} AS cluster_id,
@@ -514,10 +549,13 @@ WITH RECURSIVE
   left_family_sort AS (
     SELECT
       lf.cluster_id,
-      lf.change,
+      CASE WHEN sf.family_id IS NOT NULL THEN 'switch' ELSE lf.change END AS change,
       lfc.family_id,
       row_number() OVER (
-        PARTITION BY lf.change, lfc.family_id ORDER BY lf.cluster_id
+        PARTITION BY CASE WHEN sf.family_id IS NOT NULL
+                          THEN 'switch' ELSE lf.change END,
+                     lfc.family_id
+        ORDER BY lf.cluster_id
       ) AS family_rank,
       fs.family_canonical_surname,
       fs.family_victim_surname_norm,
@@ -525,14 +563,17 @@ WITH RECURSIVE
     FROM left_family_component lfc
     JOIN left_family lf ON lf.cluster_id = lfc.cluster_id
     LEFT JOIN family_sort fs ON fs.family_id = lfc.family_id
+    LEFT JOIN switch_families sf ON sf.family_id = lfc.family_id
   ),
   right_family_sort AS (
     SELECT
       rf.cluster_id,
-      rf.change,
+      CASE WHEN sf.family_id IS NOT NULL THEN 'switch' ELSE rf.change END AS change,
       rfc.family_id,
       row_number() OVER (
-        PARTITION BY rf.change, rfc.family_id
+        PARTITION BY CASE WHEN sf.family_id IS NOT NULL
+                          THEN 'switch' ELSE rf.change END,
+                     rfc.family_id
         ORDER BY rf.cluster_id
       ) AS family_rank,
       fs.family_canonical_surname,
@@ -541,6 +582,7 @@ WITH RECURSIVE
     FROM right_family_component rfc
     JOIN right_family rf ON rf.cluster_id = rfc.cluster_id
     LEFT JOIN family_sort fs ON fs.family_id = rfc.family_id
+    LEFT JOIN switch_families sf ON sf.family_id = rfc.family_id
   )
 SELECT
   1 AS source,
@@ -551,6 +593,7 @@ SELECT
     WHEN lfs.change = 'reduced' THEN 3
     WHEN lfs.change = 'extended' THEN 4
     WHEN lfs.change = 'reduce/extend' THEN 5
+    WHEN lfs.change = 'switch' THEN 6
     WHEN lfs.change = 'new' THEN 6
     ELSE 7
   END AS change_order,
@@ -575,6 +618,11 @@ SELECT
       SELECT 1 FROM {right_table} r2
       WHERE r2.{member_col} = l.{member_col}
     ) THEN 0 ELSE 1 END
+    WHEN lfs.change = 'switch' THEN CASE WHEN EXISTS (
+      SELECT 1 FROM {right_table} r2
+      WHERE r2.{member_col} = l.{member_col}
+        AND r2.{cluster_col} <> l.{cluster_col}
+    ) AND {switch_left_orphan} THEN 1 ELSE 0 END
     ELSE 1
   END AS __color_index
 FROM {left_table} l
@@ -592,6 +640,7 @@ SELECT
     WHEN rfs.change = 'reduced' THEN 3
     WHEN rfs.change = 'extended' THEN 4
     WHEN rfs.change = 'reduce/extend' THEN 5
+    WHEN rfs.change = 'switch' THEN 6
     WHEN rfs.change = 'new' THEN 6
     ELSE 7
   END AS change_order,
@@ -617,6 +666,11 @@ SELECT
       SELECT 1 FROM {left_table} l2
       WHERE l2.{member_col} = r.{member_col}
     ) THEN 2 ELSE 3 END
+    WHEN rfs.change = 'switch' THEN CASE WHEN EXISTS (
+      SELECT 1 FROM {left_table} l2
+      WHERE l2.{member_col} = r.{member_col}
+        AND l2.{cluster_col} <> r.{cluster_col}
+    ) AND {switch_right_orphan} THEN 3 ELSE 2 END
     ELSE 3
   END AS __color_index
 FROM {right_table} r
