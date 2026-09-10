@@ -7,6 +7,7 @@ from pymonad import (
     ErrorPayload,
     Run,
     SQL,
+    ask,
     put_line,
     pure,
     PredictionInputTableNames,
@@ -809,7 +810,22 @@ def _export_shr_debug_matches_excel() -> Run[Unit]:
     )
 
 
-def match_article_to_shr_victims() -> Run[NextStep]:
+def _shr_scope_sql(profile, column_prefix: str = "") -> str:
+    """Render the active profile's SHR source geography and year scope."""
+    prefix = f"{column_prefix}." if column_prefix else ""
+    counties = ", ".join(
+        f"'{county.replace(chr(39), chr(39) + chr(39))}'"
+        for county in profile.policies.shr_scope.counties
+    )
+    return (
+        f"{prefix}State = '{profile.policies.shr_scope.state}' "
+        f"AND {prefix}CNTYFIPS IN ({counties}) "
+        f"AND {prefix}Year >= {profile.policies.shr_scope.start_year} "
+        f"AND {prefix}Year <= {profile.policies.shr_scope.end_year}"
+    )
+
+
+def _match_article_to_shr_victims(profile) -> Run[NextStep]:
     """
     Export SHR and article victim data to DuckDB, then run Splink linkage.
     """
@@ -817,8 +833,8 @@ def match_article_to_shr_victims() -> Run[NextStep]:
         _assert_postadj_orphancluster_canonical_exists() ^
         _assert_postadj_orphancluster_months_available() ^
         sql_exec(
-            SQL(
-                """
+                SQL(
+                f"""
                 CREATE OR REPLACE TABLE shr_linkage_months AS
                 WITH entity_months AS (
                     SELECT DISTINCT
@@ -831,11 +847,11 @@ def match_article_to_shr_victims() -> Run[NextStep]:
                     AND date_trunc(
                         'month',
                         DATE '1970-01-01' + to_days(entity_midpoint_day)
-                    ) >= DATE '1977-01-01'
+                    ) >= DATE '{profile.policies.shr_scope.start_year}-01-01'
                     AND date_trunc(
                         'month',
                         DATE '1970-01-01' + to_days(entity_midpoint_day)
-                    ) < DATE '1996-01-01'
+                    ) < DATE '{profile.policies.shr_scope.end_year + 1}-01-01'
                 ),
                 shr_months AS (
                     SELECT DISTINCT
@@ -845,9 +861,7 @@ def match_article_to_shr_victims() -> Run[NextStep]:
                             1
                         ) AS month_start
                     FROM sqldb.shr
-                    WHERE State = 'District of Columbia'
-                    AND Year >= 1977
-                    AND Year <= 1995
+                    WHERE {_shr_scope_sql(profile)}
                     AND YearMonth IS NOT NULL
                 )
                 SELECT em.month_start
@@ -861,7 +875,7 @@ def match_article_to_shr_victims() -> Run[NextStep]:
         put_line("Exporting SHR data to DuckDB...") ^
         sql_exec(
             SQL(
-                """
+                f"""
                 CREATE OR REPLACE TABLE shr_cached AS
                 WITH shr_source AS (
                     SELECT
@@ -871,9 +885,7 @@ def match_article_to_shr_victims() -> Run[NextStep]:
                             ORDER BY Incident
                         ) AS month_incident_rank
                     FROM sqldb.shr
-                    WHERE State = 'District of Columbia' -- Only DC for now
-                    AND Year >= 1977
-                    AND Year <= 1995
+                    WHERE {_shr_scope_sql(profile)}
                     AND YearMonth IS NOT NULL
                     AND EXISTS (
                         SELECT 1
@@ -1056,7 +1068,7 @@ def match_article_to_shr_victims() -> Run[NextStep]:
                         CAST(substring(YearMonth, 6, 2) AS INTEGER) AS month,
                         -- NULL AS lat,  -- SHR may not have precise coords
                         -- NULL AS lon,
-                        2 AS city_id  -- Corresponds to DC (PublicationID of Washi Post)
+                        {profile.target_location.stored_city_id.value} AS city_id
                     FROM shr_ranked
                 ) AS shr_rows
                 """
@@ -1065,7 +1077,7 @@ def match_article_to_shr_victims() -> Run[NextStep]:
         put_line("Exporting article victim entities to DuckDB...") ^
         sql_exec(
             SQL(
-                """
+                f"""
                 CREATE OR REPLACE TABLE article_victims AS
                 SELECT
                     *,
@@ -1074,7 +1086,7 @@ def match_article_to_shr_victims() -> Run[NextStep]:
                 FROM (
                     SELECT
                         victim_entity_id AS unique_id,
-                        city_id,
+                        {profile.target_location.stored_city_id.value} AS city_id,
                         entity_midpoint_day AS midpoint_day,
                         entity_date_precision AS date_precision,
                         -- lat_centroid AS lat,
@@ -1110,11 +1122,11 @@ def match_article_to_shr_victims() -> Run[NextStep]:
                     AND date_trunc(
                         'month',
                         DATE '1970-01-01' + to_days(entity_midpoint_day)
-                    ) >= DATE '1977-01-01'
+                    ) >= DATE '{profile.policies.shr_scope.start_year}-01-01'
                     AND date_trunc(
                         'month',
                         DATE '1970-01-01' + to_days(entity_midpoint_day)
-                    ) < DATE '1996-01-01'
+                    ) < DATE '{profile.policies.shr_scope.end_year + 1}-01-01'
                     AND EXISTS (
                         SELECT 1
                         FROM shr_linkage_months lm
@@ -1167,4 +1179,11 @@ def match_article_to_shr_victims() -> Run[NextStep]:
             ^ put_line("Exported SHR matches to shr_matches.xlsx.")
             ^ pure(NextStep.CONTINUE)
         )
+    )
+
+
+def match_article_to_shr_victims() -> Run[NextStep]:
+    """Run SHR linkage using the active publication's configured scope."""
+    return ask() >> (
+        lambda env: _match_article_to_shr_victims(env["publication_profile"])
     )

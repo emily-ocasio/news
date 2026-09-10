@@ -357,7 +357,7 @@ def _nyt_capabilities() -> PublicationCapabilities:
         orphan_linkage=Availability.AVAILABLE,
         orphan_adjudication=Availability.AVAILABLE,
         postadj_orphan_clustering=Availability.AVAILABLE,
-        shr_linkage=Availability.UNAVAILABLE,
+        shr_linkage=Availability.AVAILABLE,
         finalized_export=Availability.UNAVAILABLE,
     )
 
@@ -420,6 +420,12 @@ WP_PROFILE = PublicationProfile(
         geocoder_cache_tables=GeocoderCacheTables("mar_cache", "mar_addr_map"),
         external_homicide_scope=ExternalHomicideScope(
             "SHR records scoped to DC and the WP incident range"
+        ),
+        shr_scope=ShrScope(
+            state=String("District of Columbia"),
+            counties=(String("District of Columbia"),),
+            start_year=1977,
+            end_year=1995,
         ),
         splink_profile=SplinkProfileKey("wp_dc"),
     ),
@@ -497,8 +503,19 @@ NYT_PROFILE = PublicationProfile(
             "arcgis_cache", "arcgis_addr_map"
         ),
         external_homicide_scope=ExternalHomicideScope(
-            "SHR records scoped to NYC and the NYT incident range; exact record "
-            "selection remains unresolved until Step 17"
+            "SHR records scoped to NYC and the NYT incident range"
+        ),
+        shr_scope=ShrScope(
+            state=String("New York"),
+            counties=(
+                String("Bronx, NY"),
+                String("Kings, NY"),
+                String("New York, NY"),
+                String("Queens, NY"),
+                String("Richmond, NY"),
+            ),
+            start_year=1981,
+            end_year=2000,
         ),
         splink_profile=SplinkProfileKey("nyt_nyc"),
     ),
