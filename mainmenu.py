@@ -166,11 +166,12 @@ def _availability_for_choice(
         case MainChoice.UNNAMED:
             availability = capabilities.orphan_linkage
         case (
-            MainChoice.POSTADJ_ORPHAN_CLUSTER
-            | MainChoice.ADJUDICATION_APPLY
+            MainChoice.ADJUDICATION_APPLY
             | MainChoice.ADJUDICATION_CONTROLLER
         ):
             availability = capabilities.orphan_adjudication
+        case MainChoice.POSTADJ_ORPHAN_CLUSTER:
+            availability = capabilities.postadj_orphan_clustering
         case MainChoice.LINK | MainChoice.HUMANIZE:
             availability = capabilities.shr_linkage
         case _:

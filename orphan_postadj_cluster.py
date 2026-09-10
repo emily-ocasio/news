@@ -31,16 +31,25 @@ from pymonad import (
     unit,
     with_duckdb,
     file_exists,
+    ask,
 )
 
 
-def _dedupe_model_path() -> Path:
+def _dedupe_model_path(publication_key: str) -> Path:
     key_str = str(SplinkType.DEDUP).replace("/", "_")
-    return Path("splink_models") / f"splink_model_{key_str}.json"
+    return Path("splink_models") / publication_key / f"splink_model_{key_str}.json"
 
 
 def _load_dedupe_model_settings() -> Run[dict]:
-    model_path = _dedupe_model_path()
+    return ask() >> (
+        lambda env: _load_dedupe_model_settings_for_publication(
+            str(env["publication_profile"].key)
+        )
+    )
+
+
+def _load_dedupe_model_settings_for_publication(publication_key: str) -> Run[dict]:
+    model_path = _dedupe_model_path(publication_key)
 
     def _load(_: bool) -> Run[dict]:
         try:
@@ -53,7 +62,8 @@ def _load_dedupe_model_settings() -> Run[dict]:
         if not isinstance(settings, dict) or "comparisons" not in settings:
             return throw(
                 ErrorPayload(
-                    "Dedupe model settings missing comparisons. Re-run DEDUP first."
+                        "Dedupe model settings missing comparisons. Re-run DEDUP "
+                        f"for publication {publication_key} first."
                 )
             )
         return pure(settings)
@@ -63,7 +73,8 @@ def _load_dedupe_model_settings() -> Run[dict]:
         if exists
         else throw(
             ErrorPayload(
-                "Dedupe Splink model not found. Run DEDUP before post-adj orphan clustering."
+                "Dedupe Splink model not found for publication "
+                f"{publication_key}. Run DEDUP before post-adj orphan clustering."
             )
         )
     )
@@ -154,6 +165,7 @@ def _build_postadj_orphan_cluster_input() -> Run[Unit]:
                   vep.canonical_geo_address_norm AS geo_address_norm,
                   vep.canonical_geo_address_short AS geo_address_short,
                   vep.canonical_geo_address_short_2 AS geo_address_short_2,
+                  vep.canonical_borough AS borough,
                   vep.canonical_geo_score AS geo_score,
                   vep.canonical_address_type AS address_type,
                   vep.canonical_lat AS lat,
@@ -260,7 +272,16 @@ def _cluster_postadj_singletons() -> Run[Unit]:
         )
 
     def _run(settings: dict) -> Run[Unit]:
-        return splink_dedupe_job(
+        return sql_exec(
+            SQL(
+                """--sql
+                CREATE TABLE IF NOT EXISTS postadj_orphan_cluster_exclusion (
+                  id_l VARCHAR,
+                  id_r VARCHAR
+                );
+                """
+            )
+        ) ^ splink_dedupe_job(
             input_table=PredictionInputTableName("postadj_orphan_cluster_input"),
             settings=settings,
             predict_threshold=0.25,
@@ -739,9 +760,6 @@ def _export_postadj_orphan_clusters_excel() -> Run[Unit]:
             orphan_id,
             reason_summary
           FROM orphan_adjudication_overrides
-          WHERE publication_key = (
-            SELECT publication_key FROM _active_publication_scope
-          )
         ),
         named_entities AS (
           SELECT
@@ -978,7 +996,17 @@ def _append_postadj_orphan_cluster_history(run_id: str) -> Run[Unit]:
         ^ sql_exec(
             SQL(
                 f"""--sql
-                INSERT INTO postadj_orphan_cluster_history
+                INSERT INTO postadj_orphan_cluster_history (
+                  run_id,
+                  run_at,
+                  input_singleton_count,
+                  cluster_pair_count,
+                  multi_member_cluster_count,
+                  absorbed_singleton_count,
+                  new_cluster_entity_count,
+                  unchanged_singleton_count,
+                  final_entity_count
+                )
                 SELECT
                   '{run_id}' AS run_id,
                   NOW() AS run_at,

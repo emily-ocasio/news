@@ -115,6 +115,20 @@ class ExternalHomicideScope(String):
     """Human-readable external homicide reference-data scope."""
 
 
+@dataclass(frozen=True)
+class ShrScope:
+    """Source-data geography and year scope for SHR linkage."""
+
+    state: String
+    counties: tuple[String, ...]
+    start_year: int
+    end_year: int
+
+    def __post_init__(self) -> None:
+        if self.start_year > self.end_year:
+            raise ValueError("SHR start year must not exceed end year")
+
+
 class SplinkProfileKey(String):
     """Registered publication-specific Splink configuration key."""
 
@@ -239,7 +253,7 @@ class PublicationAnalyticalScope:
 
 
 @dataclass(frozen=True)
-class PublicationPolicies:
+class PublicationPolicies:  # pylint: disable=too-many-instance-attributes
     """Registered behavioral policies selected by a publication profile."""
 
     workflow_datasets: WorkflowDatasets
@@ -249,6 +263,7 @@ class PublicationPolicies:
     geocoder: Maybe[GeocoderProviderKey]
     geocoder_cache_tables: GeocoderCacheTables
     external_homicide_scope: ExternalHomicideScope
+    shr_scope: ShrScope
     splink_profile: SplinkProfileKey
 
 
@@ -265,6 +280,7 @@ class PublicationCapabilities:  # pylint: disable=too-many-instance-attributes
     named_victim_deduplication: Availability
     orphan_linkage: Availability
     orphan_adjudication: Availability
+    postadj_orphan_clustering: Availability
     shr_linkage: Availability
     finalized_export: Availability
 
@@ -322,6 +338,7 @@ def _capabilities(availability: Availability) -> PublicationCapabilities:
         named_victim_deduplication=availability,
         orphan_linkage=availability,
         orphan_adjudication=availability,
+        postadj_orphan_clustering=availability,
         shr_linkage=availability,
         finalized_export=availability,
     )
@@ -339,6 +356,7 @@ def _nyt_capabilities() -> PublicationCapabilities:
         named_victim_deduplication=Availability.AVAILABLE,
         orphan_linkage=Availability.AVAILABLE,
         orphan_adjudication=Availability.AVAILABLE,
+        postadj_orphan_clustering=Availability.AVAILABLE,
         shr_linkage=Availability.UNAVAILABLE,
         finalized_export=Availability.UNAVAILABLE,
     )

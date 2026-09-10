@@ -253,6 +253,11 @@ substitution of a state predicate is not an acceptable default.
 - Publication identity is enforced by the active profile, the profile-specific
   SQLite staging table, and the publication-specific DuckDB namespace. Derived
   tables do not require a separate per-row `publication_id` column.
+- Derived DuckDB controllers must not recreate publication isolation with
+  `_active_publication_scope`, `publication_key` predicates, or redundant
+  publication columns. Queries against shared SQLite `articles` data must
+  receive publication ID and dataset values explicitly from the active Reader
+  profile through typed parameters.
 - A future combined Stata export may read finalized canonical outputs from
   both namespaces, while preserving publication and target-location
   provenance. It must not combine or rerun intermediate processing.

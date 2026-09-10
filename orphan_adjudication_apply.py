@@ -41,9 +41,6 @@ def _build_adjudication_candidates() -> Run[Unit]:
                   updated_at
                 FROM orphan_adjudication_overrides
                 WHERE resolution_label = 'matched'
-                  AND publication_key = (
-                    SELECT publication_key FROM _active_publication_scope
-                  )
                   AND resolved_entity_id IS NOT NULL;
                 """
             )
@@ -262,9 +259,7 @@ def _prune_stale_override_rows(run_id: str) -> Run[Unit]:
                             FROM orphan_adjudication_overrides o
                             JOIN _stale_override_rows s
                               ON s.orphan_id = o.orphan_id
-                            WHERE o.publication_key = (
-                              SELECT publication_key FROM _active_publication_scope
-                            );
+                            ;
                             """
                         )
                     )
@@ -272,10 +267,7 @@ def _prune_stale_override_rows(run_id: str) -> Run[Unit]:
                         SQL(
                             """--sql
                             DELETE FROM orphan_adjudication_overrides
-                            WHERE publication_key = (
-                              SELECT publication_key FROM _active_publication_scope
-                            )
-                              AND orphan_id IN (SELECT orphan_id FROM _stale_override_rows);
+                            WHERE orphan_id IN (SELECT orphan_id FROM _stale_override_rows);
                             """
                         )
                     )
@@ -725,9 +717,6 @@ def _build_orphan_matches_postadj_current() -> Run[Unit]:
             confidence,
             reason_summary
           FROM orphan_adjudication_overrides
-          WHERE publication_key = (
-            SELECT publication_key FROM _active_publication_scope
-          )
         ),
         orphan_choice_display AS (
           SELECT
@@ -1126,7 +1115,7 @@ def _append_apply_history(run_id: str) -> Run[Unit]:
                   COUNT(*) FILTER (WHERE apply_status = 'skip_already_machine_matched') AS skip_already_machine_matched,
                   COUNT(*) FILTER (WHERE apply_status = 'skip_duplicate_adjudication_orphan') AS skip_duplicate_adjudication_orphan,
                   COUNT(*) FILTER (WHERE apply_status = 'skip_conflict_entity_mismatch') AS skip_conflict_entity_mismatch,
-                  (SELECT publication_key FROM _active_publication_scope) AS publication_key
+                  NULL AS publication_key
                 FROM adjudicated_orphan_apply_report;
                 """
             )
@@ -1184,9 +1173,6 @@ def apply_orphan_adjudications() -> Run[NextStep]:
     return with_duckdb(
         ask() >> (lambda env: put_line(
             f"[J] Active publication: {env['publication_profile'].session_label}"
-        ) ^ sql_exec(
-            SQL("CREATE OR REPLACE TEMP TABLE _active_publication_scope AS SELECT ? AS publication_key;"),
-            SQLParams((env["publication_profile"].key,)),
         ) ^ sql_exec(
             SQL(
                 "CREATE TABLE IF NOT EXISTS orphan_adjudication_overrides ("
