@@ -172,8 +172,10 @@ def _availability_for_choice(
             availability = capabilities.orphan_adjudication
         case MainChoice.POSTADJ_ORPHAN_CLUSTER:
             availability = capabilities.postadj_orphan_clustering
-        case MainChoice.LINK | MainChoice.HUMANIZE:
+        case MainChoice.LINK:
             availability = capabilities.shr_linkage
+        case MainChoice.HUMANIZE:
+            availability = capabilities.humanization
         case _:
             availability = capabilities.article_selection
     return availability

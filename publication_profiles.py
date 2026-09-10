@@ -282,6 +282,7 @@ class PublicationCapabilities:  # pylint: disable=too-many-instance-attributes
     orphan_adjudication: Availability
     postadj_orphan_clustering: Availability
     shr_linkage: Availability
+    humanization: Availability
     finalized_export: Availability
 
 
@@ -340,6 +341,7 @@ def _capabilities(availability: Availability) -> PublicationCapabilities:
         orphan_adjudication=availability,
         postadj_orphan_clustering=availability,
         shr_linkage=availability,
+        humanization=availability,
         finalized_export=availability,
     )
 
@@ -358,6 +360,7 @@ def _nyt_capabilities() -> PublicationCapabilities:
         orphan_adjudication=Availability.AVAILABLE,
         postadj_orphan_clustering=Availability.AVAILABLE,
         shr_linkage=Availability.AVAILABLE,
+        humanization=Availability.AVAILABLE,
         finalized_export=Availability.UNAVAILABLE,
     )
 
