@@ -334,6 +334,33 @@ def _create_linkage_input_tables() -> Run[Unit]:
     )
 
 
+def refresh_orphan_match_inputs_after_article_change() -> Run[Unit]:
+    """Refresh orphan inputs and remove stale rows from the current snapshot."""
+    return with_duckdb(
+        _create_orphans_view()
+        ^ _create_linkage_input_tables()
+        ^ sql_exec(
+            SQL(
+                """--sql
+                CREATE OR REPLACE TABLE orphan_matches_final_current AS
+                SELECT *
+                FROM orphan_matches_final_current current_rows
+                WHERE current_rows.rec_type = 'entity'
+                   OR EXISTS (
+                        SELECT 1
+                        FROM orphan_link_input input_rows
+                        WHERE input_rows.unique_id = current_rows.uid
+                   );
+                """
+            )
+        )
+        ^ put_line(
+            "[F] Refreshed orphan linkage inputs and current match snapshot."
+        )
+        ^ pure(unit)
+    )
+
+
 def _debug_preview_orphans() -> Run[Unit]:
     """
     Print a quick snapshot of 20 orphans with the key fields used in blocking,

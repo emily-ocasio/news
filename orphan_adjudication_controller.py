@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache
@@ -2800,15 +2801,33 @@ def _save_gptresults_entry_run_v2(
 ) -> Run[Any]:
     if article_id is None or article_id <= 0:
         return pure(None)
+    timing_start = time.perf_counter()
+    print(f"[K][{article_id}] timing save_gptresults: start", flush=True)
     usage = response_t.parsed.usage
     output_json = response_t.parsed.output.model_dump_json(indent=2)
+    print(
+        f"[K][{article_id}] timing save_gptresults: output serialization "
+        f"{time.perf_counter() - timing_start:.3f}s",
+        flush=True,
+    )
     variables_json = json.dumps(variables, default=str, indent=2)
+    print(
+        f"[K][{article_id}] timing save_gptresults: variables serialization "
+        f"{time.perf_counter() - timing_start:.3f}s",
+        flush=True,
+    )
     timestamp = String(datetime.now().isoformat())
     model = String(usage.model_used.value if usage.model_used is not None else "")
-    return view(user_name) >> (
+    return put_line(f"[K][{article_id}] timing save_gptresults: resolving user") ^ (
+        view(user_name)
+    ) >> (
         lambda user: ask() >> (
-            lambda env: resolve_prompt_template(env, PromptKey(prompt_key)) >> (
-                lambda prompt_template: _with_sqlite(
+            lambda env: put_line(
+                f"[K][{article_id}] timing save_gptresults: user/env resolved"
+            ) ^ resolve_prompt_template(env, PromptKey(prompt_key)) >> (
+                lambda prompt_template: put_line(
+                    f"[K][{article_id}] timing save_gptresults: prompt resolved"
+                ) ^ _with_sqlite(
                     sql_exec(
                         SQL(insert_gptresults_sql()),
                         SQLParams(
@@ -2835,6 +2854,8 @@ def _save_gptresults_entry_run_v2(
                                 usage.cost(),
                             )
                         )
+                    ) ^ put_line(
+                        f"[K][{article_id}] timing save_gptresults: sqlite operation returned"
                     )
                 )
             )
@@ -3178,16 +3199,16 @@ def _entities_for_articles_run_v2(
           WHERE unique_id = ?
         )
         SELECT DISTINCT
-          e.unique_id AS entity_uid,
+          CAST(e.victim_entity_id AS VARCHAR) AS entity_uid,
           h.article_id AS source_article_id,
-          e.midpoint_day AS midpoint_day,
-          ABS(COALESCE(CAST(e.midpoint_day AS DOUBLE), 0) - COALESCE(o.midpoint_day, 0)) AS day_gap,
-          CASE WHEN e.victim_sex = o.victim_sex THEN 1 ELSE 0 END AS sex_match,
-          CASE WHEN e.weapon = o.weapon THEN 1 ELSE 0 END AS weapon_match,
-          CASE WHEN e.circumstance = o.circumstance THEN 1 ELSE 0 END AS circumstance_match,
+          e.entity_midpoint_day AS midpoint_day,
+          ABS(COALESCE(CAST(e.entity_midpoint_day AS DOUBLE), 0) - COALESCE(o.midpoint_day, 0)) AS day_gap,
+          CASE WHEN e.canonical_sex = o.victim_sex THEN 1 ELSE 0 END AS sex_match,
+          CASE WHEN e.mode_weapon = o.weapon THEN 1 ELSE 0 END AS weapon_match,
+          CASE WHEN e.mode_circumstance = o.circumstance THEN 1 ELSE 0 END AS circumstance_match,
           array_cosine_similarity(e.summary_vec, o.summary_vec) AS summary_cosine
         FROM hits h
-        JOIN entity_link_input e
+        JOIN victim_entity_reps_new e
           ON list_contains(string_split(COALESCE(e.article_ids_csv, ''), ','), CAST(h.article_id AS VARCHAR))
         CROSS JOIN o
         WHERE NOT list_contains(
@@ -3255,9 +3276,14 @@ def _entities_for_articles_group_run_v2(
         params_values = article_ids.a
     else:
         exclusion_sql = (
-            "WHERE NOT list_contains("
-            "  string_split(COALESCE(e.article_ids_csv, ''), ','),"
-            "  CAST(? AS VARCHAR)"
+            "WHERE NOT EXISTS ("
+            "  SELECT 1 FROM victim_entity_reps_new u"
+            "  WHERE CAST(u.victim_entity_id AS VARCHAR) = "
+            "CAST(e.victim_entity_id AS VARCHAR)"
+            "    AND list_contains("
+            "      string_split(COALESCE(u.article_ids_csv, ''), ','),"
+            "      CAST(? AS VARCHAR)"
+            "    )"
             ")"
         )
         params_values = (*article_ids.a, target_article_id)
@@ -3300,10 +3326,10 @@ def _entities_for_articles_group_run_v2(
           ie.entity_uid,
           ie.source_article_id,
           ie.source_incident_idx,
-          e.midpoint_day AS midpoint_day
+          e.entity_midpoint_day AS midpoint_day
         FROM incident_entities ie
-        JOIN entity_link_input e
-          ON e.unique_id = ie.entity_uid
+        JOIN victim_entity_reps_new e
+          ON CAST(e.victim_entity_id AS VARCHAR) = ie.entity_uid
         {exclusion_sql};
         """,
             _sql_params(params_values),
@@ -3439,18 +3465,18 @@ def _score_group_candidates_for_orphan_run_v2(
           c.query_variant,
           c.midpoint_day,
           ABS(
-            COALESCE(CAST(e.midpoint_day AS DOUBLE), 0)
+            COALESCE(CAST(e.entity_midpoint_day AS DOUBLE), 0)
             - COALESCE(o.midpoint_day, 0)
           ) AS day_gap,
-          CASE WHEN e.victim_sex = o.victim_sex THEN 1 ELSE 0 END AS sex_match,
-          CASE WHEN e.weapon = o.weapon THEN 1 ELSE 0 END AS weapon_match,
+          CASE WHEN e.canonical_sex = o.victim_sex THEN 1 ELSE 0 END AS sex_match,
+          CASE WHEN e.mode_weapon = o.weapon THEN 1 ELSE 0 END AS weapon_match,
           CASE
-            WHEN e.circumstance = o.circumstance THEN 1 ELSE 0
+            WHEN e.mode_circumstance = o.circumstance THEN 1 ELSE 0
           END AS circumstance_match,
           array_cosine_similarity(e.summary_vec, o.summary_vec) AS summary_cosine
         FROM candidate_entities c
-        JOIN entity_link_input e
-          ON e.unique_id = c.entity_uid
+        JOIN victim_entity_reps_new e
+          ON CAST(e.victim_entity_id AS VARCHAR) = c.entity_uid
         CROSS JOIN o;
         """,
             _sql_params(tuple(params)),
@@ -4091,15 +4117,58 @@ def _score_c2_candidate_weights_run_v2(
     main = (
         sql_exec(
             SQL(
-                f"CREATE OR REPLACE TEMP TABLE {left_table} AS SELECT * FROM"
-                f" entity_link_input WHERE unique_id IN ({placeholders});"
+                f"""CREATE OR REPLACE TEMP TABLE {left_table} AS
+                SELECT
+                  CAST(victim_entity_id AS VARCHAR) AS unique_id,
+                  CAST(victim_entity_id AS VARCHAR) AS victim_row_id,
+                  city_id,
+                  entity_midpoint_day AS midpoint_day,
+                  incident_date,
+                  entity_date_precision AS date_precision,
+                  EXTRACT(YEAR FROM incident_date) AS year,
+                  EXTRACT(MONTH FROM incident_date) AS month,
+                  EXTRACT(DAY FROM incident_date) AS day,
+                  summary_vec,
+                  CAST(NULL AS VARCHAR) AS victim_forename_norm,
+                  CAST(NULL AS VARCHAR) AS victim_middle_norm,
+                  CAST(NULL AS VARCHAR) AS victim_surname_norm,
+                  canonical_fullname AS victim_fullname_concat,
+                  canonical_age AS victim_age,
+                  canonical_victim_count AS victim_count,
+                  canonical_sex AS victim_sex,
+                  canonical_race AS victim_race,
+                  canonical_ethnicity AS victim_ethnicity,
+                  canonical_relationship AS relationship,
+                  canonical_offender_age AS offender_age,
+                  canonical_offender_sex AS offender_sex,
+                  canonical_offender_race AS offender_race,
+                  canonical_offender_ethnicity AS offender_ethnicity,
+                  canonical_offender_count AS offender_count,
+                  offender_forename AS offender_forename_norm,
+                  offender_surname AS offender_surname_norm,
+                  offender_fullname AS offender_fullname_concat,
+                  mode_weapon AS weapon,
+                  mode_circumstance AS circumstance,
+                  canonical_geo_address_norm AS geo_address_norm,
+                  canonical_geo_address_short AS geo_address_short,
+                  canonical_geo_address_short_2 AS geo_address_short_2,
+                  canonical_borough AS borough,
+                  canonical_geo_score AS geo_score,
+                  canonical_address_type AS address_type,
+                  canonical_lat AS lat,
+                  canonical_lon AS lon
+                  ,CAST(NULL AS VARCHAR[]) AS exclusion_ids
+                FROM victim_entity_reps_new
+                WHERE victim_entity_id IN ({placeholders});"""
             ),
             _sql_params(candidate_ids),
         )
         ^ sql_exec(
             SQL(
-                f"CREATE OR REPLACE TEMP TABLE {right_table} AS SELECT * FROM"
-                " orphan_link_input WHERE unique_id = ?;"
+                f"""CREATE OR REPLACE TEMP TABLE {right_table} AS
+                SELECT *, unique_id AS victim_row_id
+                FROM orphan_link_input
+                WHERE unique_id = ?;"""
             ),
             _sql_params((orphan_id,)),
         )
@@ -4167,9 +4236,14 @@ def _top_score_union_candidates_for_orphan_run_v2(
     pairs_table = _sanitize_sql_identifier(f"adj_x_pairs_{suffix}", prefix="tmp")
     params: tuple[Any, ...] = (orphan_id,)
     exclusion_sql = (
-        "WHERE NOT list_contains("
-        "  string_split(COALESCE(e.article_ids_csv, ''), ','),"
-        "  CAST(? AS VARCHAR)"
+        "WHERE NOT EXISTS ("
+        "  SELECT 1 FROM victim_entity_reps_new u"
+        "  WHERE CAST(u.victim_entity_id AS VARCHAR) = "
+        "CAST(e.victim_entity_id AS VARCHAR)"
+        "    AND list_contains("
+        "      string_split(COALESCE(u.article_ids_csv, ''), ','),"
+        "      CAST(? AS VARCHAR)"
+        "    )"
         ")"
         if target_article_id is not None
         else ""
@@ -4180,8 +4254,48 @@ def _top_score_union_candidates_for_orphan_run_v2(
             SQL(
                 f"""
                 CREATE OR REPLACE TEMP TABLE {left_table} AS
-                SELECT *
-                FROM entity_link_input e
+                SELECT
+                  CAST(e.victim_entity_id AS VARCHAR) AS unique_id,
+                  CAST(e.victim_entity_id AS VARCHAR) AS victim_row_id,
+                  e.city_id,
+                  e.entity_midpoint_day AS midpoint_day,
+                  e.incident_date,
+                  e.entity_date_precision AS date_precision,
+                  EXTRACT(YEAR FROM e.incident_date) AS year,
+                  EXTRACT(MONTH FROM e.incident_date) AS month,
+                  EXTRACT(DAY FROM e.incident_date) AS day,
+                  e.summary_vec,
+                  e.article_ids_csv,
+                  CAST(NULL AS VARCHAR) AS victim_forename_norm,
+                  CAST(NULL AS VARCHAR) AS victim_middle_norm,
+                  CAST(NULL AS VARCHAR) AS victim_surname_norm,
+                  e.canonical_fullname AS victim_fullname_concat,
+                  e.canonical_age AS victim_age,
+                  e.canonical_victim_count AS victim_count,
+                  e.canonical_sex AS victim_sex,
+                  e.canonical_race AS victim_race,
+                  e.canonical_ethnicity AS victim_ethnicity,
+                  e.canonical_relationship AS relationship,
+                  e.canonical_offender_age AS offender_age,
+                  e.canonical_offender_sex AS offender_sex,
+                  e.canonical_offender_race AS offender_race,
+                  e.canonical_offender_ethnicity AS offender_ethnicity,
+                  e.canonical_offender_count AS offender_count,
+                  e.offender_forename AS offender_forename_norm,
+                  e.offender_surname AS offender_surname_norm,
+                  e.offender_fullname AS offender_fullname_concat,
+                  e.mode_weapon AS weapon,
+                  e.mode_circumstance AS circumstance,
+                  e.canonical_geo_address_norm AS geo_address_norm,
+                  e.canonical_geo_address_short AS geo_address_short,
+                  e.canonical_geo_address_short_2 AS geo_address_short_2,
+                  e.canonical_borough AS borough,
+                  e.canonical_geo_score AS geo_score,
+                  e.canonical_address_type AS address_type,
+                  e.canonical_lat AS lat,
+                  e.canonical_lon AS lon,
+                  CAST(NULL AS VARCHAR[]) AS exclusion_ids
+                FROM victim_entity_reps_new e
                 {exclusion_sql};
                 """
             ),
@@ -4193,8 +4307,10 @@ def _top_score_union_candidates_for_orphan_run_v2(
         )
         ^ sql_exec(
             SQL(
-                f"CREATE OR REPLACE TEMP TABLE {right_table} AS SELECT * FROM"
-                " orphan_link_input WHERE unique_id = ?;"
+                f"""CREATE OR REPLACE TEMP TABLE {right_table} AS
+                SELECT *, unique_id AS victim_row_id
+                FROM orphan_link_input
+                WHERE unique_id = ?;"""
             ),
             _sql_params((orphan_id,)),
         )
@@ -4567,8 +4683,8 @@ def _candidate_incident_context_run_v2(
                     """
                     SELECT i.summary
                     FROM incidents_cached i
-                    LEFT JOIN entity_link_input e
-                      ON e.unique_id = ?
+                    LEFT JOIN victim_entity_reps_new e
+                      ON e.victim_entity_id = ?
                     WHERE i.article_id = ?
                     ORDER BY
                       CASE
@@ -4619,16 +4735,16 @@ def _candidate_incident_context_run_v2(
         _query_rows_run_v2(
             """
         SELECT
-          unique_id,
+          victim_entity_id AS unique_id,
           incident_date,
           year,
           month,
-          geo_address_norm,
-          victim_count,
-          circumstance,
-          relationship
-        FROM entity_link_input
-        WHERE unique_id = ?
+          canonical_geo_address_norm AS geo_address_norm,
+          canonical_victim_count AS victim_count,
+          mode_circumstance AS circumstance,
+          canonical_relationship AS relationship
+        FROM victim_entity_reps_new
+        WHERE victim_entity_id = ?
         LIMIT 1;
         """,
             _sql_params((entity_uid,)),
