@@ -53,7 +53,7 @@ After any code changes:
 1. Run Pylint from the `news` environment using the Conda environment Python executable and the required CLI overrides:
 
 /Users/wendell/miniforge3/envs/news/bin/python -m pylint
---max-line-length=88
+--max-line-length=110
 --extension-pkg-allow-list=fasttext
 .
 

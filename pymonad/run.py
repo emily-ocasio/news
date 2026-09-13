@@ -13,8 +13,11 @@ from typing import cast, Any, Generic, TypeVar
 
 from .applicative import Applicative
 from .array import Array
-from .dispatch import GetLine, PutLine, InputPrompt, MarGeocode, StanfordArcGISGeocode, NominatimGeocode, BoroughAdjudication, Sleep, \
-    GeocodeResult, FileExists, RenameFile, MonotonicNow
+from .dispatch import (
+    GetLine, PutLine, InputPrompt, MarGeocode, StanfordArcGISGeocode,
+    NominatimGeocode, BoroughAdjudication, Sleep, GeocodeResult, FileExists,
+    RenameFile, MonotonicNow,
+)
 from .either import Either, Left, Right
 from .environment import Environment, Namespace, PromptKey, AllPrompts, \
     all_prompts
@@ -142,6 +145,7 @@ class StateRegistry(Generic[M]):
 
     @classmethod
     def from_state(cls, app_state: M) -> StateRegistry[M]:
+        """Create a registry with the supplied application state."""
         return cls(app_state=app_state, splink_state={})
 
 
@@ -387,26 +391,27 @@ def run_state(initial: StateRegistry[M] | M, prog: Run[A]) \
             nonlocal registry
             match intent:
                 case Get():
-                    return registry.app_state
+                    result = registry.app_state
                 case Put(s):
                     registry = replace(registry, app_state=s)
-                    return None
+                    result = None
                 case GetSplinkLinker(key):
-                    return registry.splink_state.get(key)
+                    result = registry.splink_state.get(key)
                 case PutSplinkLinker(key, linker):
                     updated_splink = dict(registry.splink_state)
                     updated_splink[key] = linker
                     registry = replace(registry, splink_state=updated_splink)
-                    return None
+                    result = None
                 case GetSplinkContext():
-                    return registry.splink_state.get(_SPLINK_CONTEXT_KEY)
+                    result = registry.splink_state.get(_SPLINK_CONTEXT_KEY)
                 case PutSplinkContext(ctx):
                     updated_splink = dict(registry.splink_state)
                     updated_splink[_SPLINK_CONTEXT_KEY] = ctx
                     registry = replace(registry, splink_state=updated_splink)
-                    return unit
+                    result = unit
                 case _:
-                    return parent(intent, current)
+                    result = parent(intent, current)
+            return result
         inner = Run(prog._step, perform)
         v = inner._step(inner)
         return Tuple(registry, v)

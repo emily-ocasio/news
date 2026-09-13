@@ -289,7 +289,7 @@ def run_openai(
                                 )
                             try:
                                 return raw_response.parse()
-                            except Exception as ex:  # noqa: BLE001
+                            except Exception as ex:  # pylint: disable=broad-exception-caught
                                 return GPTResponseError(
                                     GPTError.PARSE, raw_response.text, ex
                                 )
