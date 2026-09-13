@@ -285,7 +285,7 @@ def throw(e: Any) -> Run[Any]:
     return Run(lambda self: self._perform(Throw(e), self), _unhandled)
 
 
-def rethrow(res: Either) -> Run[Any]:
+def rethrow(res: Either[ErrorPayload[Any], A]) -> Run[A]:
     """Create a Run action to lift an Either into Except effect."""
     return Run(lambda self: self._perform(Rethrow(res), self), _unhandled)
 
@@ -448,6 +448,7 @@ def run_except(prog: Run[A]) -> Run[Either[ErrorPayload, A]]:
 
             #######
             # Traceback capture testing
+            print(f"EXCEPTION: {ex}\n")
             tb = ex.__traceback__
             print("TRACEBACK DEBUG INFO:\n")
             while tb is not None:

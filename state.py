@@ -5,7 +5,7 @@ Type Definitions, including:
 """
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import NamedTuple, Optional, Any, List
+from typing import Literal, NamedTuple, Optional, Any, List, Union
 from enum import Enum
 import json
 from sqlite3 import Row
@@ -462,6 +462,60 @@ class HumanizationExtractResponse(BaseModel):
         description=(
             "Verbatim excerpt containing only text relevant to the target incident."
         )
+    )
+
+
+class Replacement(BaseModel):
+    """One exact source-text replacement for excerpt construction."""
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["replace"] = Field(
+        description="Replace one occurrence of exact source text."
+    )
+    old: str = Field(
+        description=(
+            "Exact text copied from the original article that is to be replaced."
+        ),
+    )
+    new: str = Field(
+        description="Text that replaces the matched source text."
+    )
+
+
+class Deletion(BaseModel):
+    """One contiguous source-text deletion for excerpt construction."""
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["delete"] = Field(
+        description="Delete a contiguous range of source text."
+    )
+    begin: str = Field(
+        description=(
+            "Short exact text copied from the beginning of the passage to "
+            "delete. This text is included in the deletion."
+        ),
+    )
+    end: str = Field(
+        description=(
+            "Short exact text copied from the end of the passage to "
+            "delete. This text is included in the deletion."
+        ),
+    )
+
+
+Edit = Union[Replacement, Deletion]
+
+
+class ExcerptEdits(BaseModel):
+    """Ordered edits used to construct an excerpt from the original article."""
+    model_config = ConfigDict(extra="forbid")
+
+    edits: list[Edit] = Field(
+        ...,
+        description=(
+            "Ordered edits to apply to the original article. Edits appear "
+            "in the same order as their affected text occurs in the source."
+        ),
     )
 
 

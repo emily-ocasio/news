@@ -23,6 +23,8 @@ class GPTError(str, Enum):
     MODEL_NOT_FOUND = "GPT model not found"
     NO_USAGE_DATA = "GPT response has no usage data"
     NOT_PARSED = "GPT response is not parsed"
+    CONTENT_FILTER = "GPT response incomplete: content_filter"
+    PARSE = "GPT response parsing failed"
 
 class GPTTokenType(str, Enum):
     """OpenAI GPT token type enumeration"""
@@ -108,6 +110,38 @@ class GPTPrompt:
         if self.variables:
             param['variables'] = self.variables
         return param
+
+
+@dataclass(frozen=True)
+class IncompleteGPTResponse:
+    """Responses API response that cannot be parsed as structured output."""
+    reason: GPTError
+    raw_response: str
+
+
+class GPTResponseError(Exception):
+    """Structured GPT failure with its classification and raw response."""
+
+    def __init__(
+        self,
+        error: GPTError,
+        raw_response: str,
+        original: Exception,
+    ):
+        self.error = error
+        self.raw_response = raw_response
+        self.original = original
+        super().__init__(str(original))
+
+    def __str__(self) -> str:
+        return (
+            f"{self.error.value}: {self.original.__class__.__name__}: "
+            f"{self.original}\n"
+            "--- Raw GPT response --------------------------------\n"
+            f"{self.raw_response}\n"
+            "------------------------------------------------"
+        )
+
 
 class PlainText(BaseModel):
     """OpenAI GPT plain text response"""
@@ -251,7 +285,8 @@ class GPTResponseTuple(Tuple[GPTResponseParsed, Response]):
         """
         return self.snd
 
-type GPTFullResponse = Either[GPTError, GPTResponseTuple]
+type GPTFailure = GPTError | GPTResponseError
+type GPTFullResponse = Either[GPTFailure, GPTResponseTuple]
 
 def reasoning_summary(resp: Response) -> GPTReasoning:
     """
@@ -266,14 +301,32 @@ def reasoning_summary(resp: Response) -> GPTReasoning:
             summary_text += f"{summary.text}\n"
     return GPTReasoning(summary_text)
 
-def to_gpt_tuple(resp: Response) -> GPTFullResponse:
+def to_gpt_tuple(
+    resp: Response | ParsedResponse[BaseModel] | IncompleteGPTResponse | GPTResponseError,
+) -> GPTFullResponse:
     """
     Lift the GPT response into a full response Either[Tuple].
     """
+    if isinstance(resp, IncompleteGPTResponse):
+        return Left(GPTResponseError(
+            resp.reason,
+            resp.raw_response,
+            RuntimeError(resp.reason.value),
+        ))
+    if isinstance(resp, GPTResponseError):
+        return Left(resp)
     if (model:=GPTModel.from_string(resp.model)) is None:
-        return Left(GPTError.MODEL_NOT_FOUND)
+        return Left(GPTResponseError(
+            GPTError.MODEL_NOT_FOUND,
+            resp.model_dump_json(),
+            RuntimeError(GPTError.MODEL_NOT_FOUND.value),
+        ))
     if (usage:=resp.usage) is None:
-        return Left(GPTError.NO_USAGE_DATA)
+        return Left(GPTResponseError(
+            GPTError.NO_USAGE_DATA,
+            resp.model_dump_json(),
+            RuntimeError(GPTError.NO_USAGE_DATA.value),
+        ))
     gpt_usage = GPTUsage(
         input_tokens=usage.input_tokens,
         cached_tokens=usage.input_tokens_details.cached_tokens,
@@ -287,7 +340,11 @@ def to_gpt_tuple(resp: Response) -> GPTFullResponse:
             output = resp.output_parsed
             if output is None:
                 print(f"DEBUG: Raw GPT output_text: {resp.output_text}/nFull output: {resp.output}")
-                return Left(GPTError.NOT_PARSED)
+                return Left(GPTResponseError(
+                    GPTError.NOT_PARSED,
+                    resp.model_dump_json(),
+                    RuntimeError(GPTError.NOT_PARSED.value),
+                ))
         case Response():
             output = PlainText(output_text = resp.output_text)
     parsed = GPTResponseParsed(

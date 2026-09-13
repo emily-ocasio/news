@@ -13,7 +13,7 @@ from appstate import user_name, run_timer_name, run_timer_start_perf
 from pymonad import Run, with_namespace, to_prompts, Namespace, EnvKey, \
     PromptKey, pure, put_line, sql_query, SQL, SQLParams, Right, \
     Left, Either, StopRun, GPTModel, with_models, response_with_gpt_prompt, \
-    to_gpt_tuple, response_message, to_json, rethrow, from_either, sql_exec, \
+    to_gpt_tuple, response_message, to_json, rethrow_gpt, from_either, sql_exec, \
     GPTResponseTuple, GPTFullResponse, String, input_number, throw, \
     ErrorPayload, Tuple, resolve_prompt_template, GPTPromptTemplate, wal, ask, \
     view, bind_first, validate_all_pure, ValidationAcc, process_items, ProcessAcc, \
@@ -397,7 +397,7 @@ def filter_single_article(
     def _on_response(gpt_full: GPTFullResponse) -> Run[ClassResult]:
         match gpt_full:
             case Left():
-                return rethrow(gpt_full)
+                return rethrow_gpt(gpt_full)
             case Right(resp_t):
                 classification = config.classification_result(
                     resp_t.parsed.output

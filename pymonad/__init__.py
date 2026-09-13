@@ -89,6 +89,9 @@ from .openai import (
     GPTPromptTemplate,
     GPTModel,
     GPTResponseTuple,
+    GPTResponseError,
+    GPTError,
+    GPTFailure,
     to_gpt_tuple,
     GPTUsage,
     GPTReasoning,
@@ -107,6 +110,7 @@ from .runsql import (
 )
 from .runopenai import (
     run_openai,
+    rethrow_gpt,
     openai_embeddings,
     with_models,
     response_with_gpt_prompt,

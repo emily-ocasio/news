@@ -8,7 +8,7 @@ import json
 import math
 import threading
 import time
-from typing import Any, TypeVar, cast, Literal, Sequence
+from typing import Any, TypeVar, cast, Literal, Sequence, overload
 
 
 from jsonref import replace_refs
@@ -17,7 +17,7 @@ from openai.types.responses import Response, ParsedResponse
 from openai.types.responses.response_prompt_param import Variables
 from pydantic import BaseModel
 
-from .either import Left, Right
+from .either import Either, Left, Right
 from .environment import PromptKey, Environment, EnvKey, all_prompts
 from .openai import (
     EmbeddingModel,
@@ -26,12 +26,41 @@ from .openai import (
     GPTFullResponse,
     GPTResponseTuple,
     GPTPromptTemplate,
+    IncompleteGPTResponse,
+    GPTResponseError,
+    GPTError,
+    GPTFailure,
 )
 from .run import ErrorPayload, throw, Run, _unhandled, ask, local, pure, \
-    put_line, UserAbort
+    put_line, UserAbort, rethrow
 
 A = TypeVar('A')
 P = TypeVar('P', bound=BaseModel)
+
+
+@overload
+def rethrow_gpt(result: Either[GPTFailure, A]) -> Run[A]: ...
+@overload
+def rethrow_gpt(result: Either[ErrorPayload[Any], A]) -> Run[A]: ...
+def rethrow_gpt(
+    result: Either[Any, A],
+) -> Run[A]:
+    """Normalize GPT failures to ErrorPayload before rethrowing."""
+    match result:
+        case Right(value):
+            return pure(value)
+        case Left(ErrorPayload() as error):
+            return rethrow(Left(error))
+        case Left(GPTResponseError() as error):
+            return rethrow(Left(ErrorPayload(str(error), error)))
+        case Left(error) if isinstance(error, GPTError):
+            wrapped = GPTResponseError(
+                error,
+                "<raw GPT response unavailable>",
+                RuntimeError(error.value),
+            )
+            return rethrow(Left(ErrorPayload(str(wrapped), wrapped)))
+    raise AssertionError("Unreachable GPT result")
 
 def _with_elapsed_timer(fn: Callable[[], A]) -> A:
     """
@@ -74,23 +103,6 @@ class OAChat:
     effort: Literal['low', 'medium', 'high'] = "low"
     verbosity: Literal["low", "medium", "high"] = "low"
     stream: bool = False
-
-
-class GPTResponseError(Exception):
-    """Structured GPT response parsing failure with the raw API response."""
-
-    def __init__(self, raw_response: str, original: Exception):
-        self.raw_response = raw_response
-        self.original = original
-        super().__init__(str(original))
-
-    def __str__(self) -> str:
-        return (
-            f"{self.original.__class__.__name__}: {self.original}\n"
-            "--- Raw GPT response --------------------------------\n"
-            f"{self.raw_response}\n"
-            "------------------------------------------------"
-        )
 
 
 @dataclass(frozen=True)
@@ -250,7 +262,9 @@ def run_openai(
                             ### - DO NOT USE THIS - ###
                             ## API does not properly parse the object at the end ###
                             return _stream_response(client, model, prompt, effort)
-                        def parse_response() -> ParsedResponse[BaseModel]:
+                        def parse_response() -> (
+                            ParsedResponse[BaseModel] | IncompleteGPTResponse | GPTResponseError
+                        ):
                             raw_response = client.responses.with_raw_response.parse(
                                 model=model.value,
                                 prompt=prompt.to_gpt,
@@ -262,12 +276,23 @@ def run_openai(
                                 text={"verbosity": verbosity},
                                 timeout=300.0
                             )
+                            response_json = json.loads(raw_response.text)
+                            if (
+                                response_json.get("status") == "incomplete"
+                                and response_json.get("incomplete_details", {}).get(
+                                    "reason"
+                                )
+                                == "content_filter"
+                            ):
+                                return IncompleteGPTResponse(
+                                    GPTError.CONTENT_FILTER, raw_response.text
+                                )
                             try:
                                 return raw_response.parse()
                             except Exception as ex:  # noqa: BLE001
-                                raise GPTResponseError(
-                                    raw_response.text, ex
-                                ) from ex
+                                return GPTResponseError(
+                                    GPTError.PARSE, raw_response.text, ex
+                                )
 
                         return _with_elapsed_timer(parse_response)
                     return client.responses.create(

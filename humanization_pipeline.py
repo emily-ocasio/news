@@ -8,6 +8,7 @@ incident-attribute cache keys and idempotent reruns.
 from __future__ import annotations
 
 import json
+import html
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import cast, Any
@@ -52,7 +53,7 @@ from pymonad import (
     put_line,
     resolve_prompt_template,
     run_except,
-    rethrow,
+    rethrow_gpt,
     response_with_gpt_prompt,
     set_,
     sql_exec,
@@ -68,9 +69,10 @@ from pymonad import (
     with_namespace,
     local,
 )
-from pymonad.openai import GPTResponseTuple
+from pymonad.openai import GPTError, GPTFailure, GPTResponseError, GPTResponseParsed, GPTResponseTuple
 from pymonad.run import UserAbort
 from state import (
+    ExcerptEdits,
     HumanizationClass,
     HumanizationDecisionResponse,
     HumanizationDeidentifyResponse,
@@ -81,10 +83,14 @@ RUN_TIMER_NAME = String("shr_humanization")
 
 INPUT_LIMIT_KEY = "humanize_shr_number"
 STEP1_PROMPT_KEY = "humanize_extract_incident"
+STEP1A_PROMPT_KEY = "humanize_extract_incident_fallback"
+STEP2A_PROMPT_KEY = "humanize_deidentify_fallback"
 STEP2_PROMPT_KEY = "humanize_deidentify"
 STEP3_PROMPT_KEY = "humanize_classify"
 
 STEP1_PROMPT_ID = "pmpt_69a4fe02d28c8195b31b05bdf8ff1cf204db837cf4b4950c"
+STEP1A_PROMPT_ID = "pmpt_6aa4a5304e208197b351d0db234f87980e2cad2bd761992d"
+STEP2A_PROMPT_ID = "pmpt_6aa4b4f75d40819393938729ee710aa00d96f2d106b82efc"
 STEP2_PROMPT_ID = "pmpt_69a5dcbfa1ac8196b2ee6928895d3b7c00d990936808e636"
 STEP3_PROMPT_ID = "pmpt_69a5df5927a48196be40f44e292b7c5a03f6f6d7d2829b03"
 
@@ -103,6 +109,8 @@ STEP3_MODEL = GPTModel.GPT_5_MINI
 PROMPTS: dict[str, str | tuple[str, str] | tuple[str,]] = {
     INPUT_LIMIT_KEY: "Enter number of SHR rows to process for humanization: ",
     STEP1_PROMPT_KEY: (STEP1_PROMPT_ID,),
+    STEP1A_PROMPT_KEY: (STEP1A_PROMPT_ID,),
+    STEP2A_PROMPT_KEY: (STEP2A_PROMPT_ID,),
     STEP2_PROMPT_KEY: (STEP2_PROMPT_ID,),
     STEP3_PROMPT_KEY: (STEP3_PROMPT_ID,),
 }
@@ -329,8 +337,11 @@ def save_humanization_step_gpt_result(
 
 
 def _step1_variables(candidate_row) -> dict[str, str | None]:
+    article_text = html.unescape(
+        _prompt_token(_row_value(candidate_row, "article_text", None))
+    )
     return {
-        "article_text": _prompt_token(_row_value(candidate_row, "article_text", None)),
+        "article_text": article_text,
         "incident_year": _prompt_token(_row_value(candidate_row, "year", None)),
         "incident_month": _prompt_token(_row_value(candidate_row, "month", None)),
         "incident_day": _prompt_token(_row_value(candidate_row, "day", None)),
@@ -345,6 +356,12 @@ def _step1_variables(candidate_row) -> dict[str, str | None]:
 
 
 def _step2_variables(excerpt: str) -> dict[str, str | None]:
+    return {
+        "incident_excerpt": _prompt_token(excerpt),
+    }
+
+
+def _step2a_variables(excerpt: str) -> dict[str, str | None]:
     return {
         "incident_excerpt": _prompt_token(excerpt),
     }
@@ -1089,7 +1106,187 @@ def _lookup_cache(incident_cache_key: str) -> Run[Array]:
     )
 
 
-def _run_step1(variables: dict[str, str | None]) -> Run[GPTResponseTuple]:
+@dataclass(frozen=True)
+class Step1Result:
+    """Step 1 response together with fallback-path provenance."""
+    response: GPTResponseTuple
+    used_fallback: bool
+
+
+def _run_step1a_stub(
+    variables: dict[str, str | None],
+) -> Run[Either[GPTFailure, GPTResponseTuple]]:
+    """Run the alternate edit-based Step 1 prompt after content filtering."""
+    return put_line(
+        "Step 1 content_filter detected; invoking Step 1a fallback."
+    ) ^ (
+        to_gpt_tuple
+        & response_with_gpt_prompt(
+            PromptKey(STEP1A_PROMPT_KEY),
+            variables,
+            ExcerptEdits,
+            STEP1_MODEL_KEY,
+            effort="medium",
+            stream=False,
+        )
+    ) >> (
+        lambda result: _log_fallback_failure("Step 1a", result)
+        >> (lambda logged: _step1a_to_step1_result(variables, logged))
+    )
+
+
+def _log_fallback_failure(
+    stage: str,
+    result: Either[GPTFailure, Any],
+) -> Run[Either[GPTFailure, Any]]:
+    """Report a fallback content filter before terminal propagation."""
+    match result:
+        case Left(GPTResponseError(error=GPTError.CONTENT_FILTER)):
+            return put_line(
+                f"{stage} content_filter detected; no further fallback available."
+            ) ^ pure(cast(Either[GPTFailure, Any], result))
+        case _:
+            return pure(result)
+
+
+# pylint: disable=too-many-branches
+def reconstruct_excerpt(article: str, response: ExcerptEdits) -> str:
+    """Apply ordered replacements and deletions to an original article."""
+    operations: list[tuple[int, int, str, int]] = []
+    cursor = 0
+    for index, edit in enumerate(response.edits):
+        if edit.type == "replace":
+            position = article.find(edit.old, cursor)
+            if position == -1:
+                position = article.rfind(edit.old, 0, cursor)
+            if position == -1:
+                raise ValueError(
+                    f"Edit {index} (replace): could not find old text "
+                    f"{edit.old!r} forward from position {cursor} or earlier; "
+                    f"new text was {edit.new!r}."
+                )
+            end_position = position + len(edit.old)
+            operations.append((position, end_position, edit.new, index))
+            cursor = end_position
+        elif edit.type == "delete":
+            begin_position = article.find(edit.begin, cursor)
+            if begin_position == -1:
+                begin_position = article.rfind(edit.begin, 0, cursor)
+            if begin_position == -1:
+                raise ValueError(
+                    f"Edit {index} (delete): could not find begin "
+                    f"{edit.begin!r} forward from position {cursor} or earlier; "
+                    f"end text was {edit.end!r}."
+                )
+            if edit.begin == edit.end:
+                end_position = begin_position
+            else:
+                end_position = article.find(
+                    edit.end,
+                    begin_position + len(edit.begin),
+                )
+                if end_position == -1:
+                    end_position = article.rfind(
+                        edit.end,
+                        begin_position + len(edit.begin),
+                        cursor,
+                    )
+                if end_position == -1:
+                    raise ValueError(
+                        f"Edit {index} (delete): found begin at "
+                        f"{begin_position}, but could not find end "
+                        f"{edit.end!r} after it; cursor was {cursor}."
+                    )
+            operations.append(
+                (begin_position, end_position + len(edit.end), "", index)
+            )
+            cursor = end_position + len(edit.end)
+        else:
+            raise ValueError(f"Edit {index}: unsupported edit type {edit.type!r}.")
+
+    output: list[str] = []
+    output_cursor = 0
+    for start, end, replacement, index in sorted(operations):
+        if start < output_cursor:
+            raise ValueError(
+                f"Edit {index}: overlaps an earlier edit range ending at "
+                f"position {output_cursor}; range was {start}:{end}."
+            )
+        output.append(article[output_cursor:start])
+        output.append(replacement)
+        output_cursor = end
+    output.append(article[output_cursor:])
+    return "".join(output)
+
+
+def _reconstruction_error(
+    stage: str,
+    response: GPTResponseTuple,
+    error: ValueError,
+) -> Run[Any]:
+    """Log and lift an edit reconstruction failure into the Run error channel."""
+    raw_json = response.response.model_dump_json(indent=2)
+    gpt_error = GPTResponseError(GPTError.PARSE, raw_json, error)
+    return put_line(
+        f"{stage} reconstruction failed:\n{gpt_error}"
+    ) ^ throw(ErrorPayload(str(gpt_error), gpt_error))
+
+
+def _step1a_to_step1_result(
+    variables: dict[str, str | None],
+    result: Either[GPTFailure, GPTResponseTuple],
+) -> Run[Either[GPTFailure, GPTResponseTuple]]:
+    match result:
+        case Left():
+            return pure(result)
+        case Right(fallback_response):
+            edits = cast(ExcerptEdits, fallback_response.parsed.output)
+            article = cast(str, variables["article_text"])
+            try:
+                excerpt = reconstruct_excerpt(article, edits)
+            except ValueError as error:
+                return _reconstruction_error("Step 1a", fallback_response, error)
+            parsed = GPTResponseParsed(
+                usage=fallback_response.parsed.usage,
+                reasoning=fallback_response.parsed.reasoning,
+                output=HumanizationExtractResponse(incident_excerpt=excerpt),
+            )
+            return pure(Right(GPTResponseTuple(parsed, fallback_response.response)))
+
+
+def _mark_step1_fallback(
+    result: Either[GPTFailure, GPTResponseTuple],
+) -> Run[Either[GPTFailure, Step1Result]]:
+    match result:
+        case Left(error):
+            return pure(Left(error))
+        case Right(response):
+            return pure(Right(Step1Result(response, True)))
+
+
+def _mark_step1_primary(
+    result: Either[GPTFailure, GPTResponseTuple],
+) -> Run[Either[GPTFailure, Step1Result]]:
+    match result:
+        case Left(error):
+            return pure(Left(error))
+        case Right(response):
+            return pure(Right(Step1Result(response, False)))
+
+
+def _check_step1(
+    variables: dict[str, str | None],
+    result: Either[GPTFailure, GPTResponseTuple],
+) -> Run[Either[GPTFailure, Step1Result]]:
+    """Route Step 1 content-filter results through the future fallback seam."""
+    match result:
+        case Left(GPTResponseError(error=GPTError.CONTENT_FILTER)):
+            return _run_step1a_stub(variables) >> _mark_step1_fallback
+        case _:
+            return _mark_step1_primary(result)
+
+
+def _run_step1(variables: dict[str, str | None]) -> Run[Step1Result]:
     return (
         (
             to_gpt_tuple
@@ -1102,8 +1299,9 @@ def _run_step1(variables: dict[str, str | None]) -> Run[GPTResponseTuple]:
                 stream=False,
             )
         )
-        >> rethrow
-        >> (lambda resp: pure(cast(GPTResponseTuple, resp)))
+        >> (lambda result: _check_step1(variables, result))
+        >> rethrow_gpt
+        >> (lambda result: pure(cast(Step1Result, result)))
     )
 
 
@@ -1120,9 +1318,48 @@ def _run_step2(variables: dict[str, str | None]) -> Run[GPTResponseTuple]:
                 stream=False,
             )
         )
-        >> rethrow
+        >> rethrow_gpt
         >> (lambda resp: pure(cast(GPTResponseTuple, resp)))
     )
+
+
+def _run_step2a(variables: dict[str, str | None]) -> Run[GPTResponseTuple]:
+    """Run the edit-based deidentification fallback after Step 1a."""
+    return (
+        (
+            to_gpt_tuple
+            & response_with_gpt_prompt(
+                PromptKey(STEP2A_PROMPT_KEY),
+                variables,
+                ExcerptEdits,
+                STEP2_MODEL_KEY,
+                effort="medium",
+                stream=False,
+            )
+        )
+        >> (
+            lambda result: _log_fallback_failure("Step 2a", result)
+            >> rethrow_gpt
+        )
+        >> (lambda resp: _step2a_to_step2_result(cast(GPTResponseTuple, resp), variables))
+    )
+
+
+def _step2a_to_step2_result(
+    response: GPTResponseTuple,
+    variables: dict[str, str | None],
+) -> Run[GPTResponseTuple]:
+    edits = cast(ExcerptEdits, response.parsed.output)
+    try:
+        excerpt = reconstruct_excerpt(cast(str, variables["incident_excerpt"]), edits)
+    except ValueError as error:
+        return _reconstruction_error("Step 2a", response, error)
+    parsed = GPTResponseParsed(
+        response.parsed.usage,
+        response.parsed.reasoning,
+        HumanizationDeidentifyResponse(deidentified_excerpt=excerpt),
+    )
+    return pure(GPTResponseTuple(parsed, response.response))
 
 
 def _run_step3(variables: dict[str, str | None]) -> Run[GPTResponseTuple]:
@@ -1138,7 +1375,7 @@ def _run_step3(variables: dict[str, str | None]) -> Run[GPTResponseTuple]:
                 stream=False,
             )
         )
-        >> rethrow
+        >> rethrow_gpt
         >> (lambda resp: pure(cast(GPTResponseTuple, resp)))
     )
 
@@ -1451,9 +1688,11 @@ def resolve_candidate(
                 >> (lambda s3: _after_step3(s1, s2, s3, step3_variables))
             )
 
-        def _after_step1(s1: GPTResponseTuple) -> Run[CandidateDecision]:
+        def _after_step1(step1_result: Step1Result) -> Run[CandidateDecision]:
+            s1 = step1_result.response
             step1_output = cast(HumanizationExtractResponse, s1.parsed.output)
             step2_variables = _step2_variables(step1_output.incident_excerpt)
+            step2a_variables = _step2a_variables(step1_output.incident_excerpt)
             return (
                 _print_step_result("Step 1", s1)
                 ^ save_humanization_step_gpt_result(
@@ -1463,7 +1702,11 @@ def resolve_candidate(
                     resp_t=s1,
                     format_type=HumanizationExtractResponse.__name__,
                 )
-                ^ _run_step2(step2_variables)
+                ^ (
+                    _run_step2a(step2a_variables)
+                    if step1_result.used_fallback
+                    else _run_step2(step2_variables)
+                )
                 >> (lambda s2: _after_step2(s1, s2, step2_variables))
             )
 
@@ -2534,6 +2777,9 @@ def _run_pipeline() -> Run[NextStep]:
                 start_run_timer(RUN_TIMER_NAME)
                 ^ put_line(
                     f"Step 1 JSON schema:\n{to_json(HumanizationExtractResponse)}"
+                )
+                ^ put_line(
+                    f"Step 1a JSON schema:\n{to_json(ExcerptEdits)}"
                 )
                 ^ put_line(
                     f"Step 2 JSON schema:\n{to_json(HumanizationDeidentifyResponse)}"

@@ -10,7 +10,7 @@ from appstate import run_timer_name, run_timer_start_perf
 from pymonad import Run, Environment, with_namespace, to_prompts, Namespace, EnvKey, \
     PromptKey, pure, put_line, sql_query, SQL, SQLParams, \
     GPTModel, with_models, response_with_gpt_prompt, to_json,\
-    to_gpt_tuple, rethrow, from_either, sql_exec, \
+    to_gpt_tuple, rethrow_gpt, from_either, sql_exec, \
     GPTResponseTuple, GPTFullResponse, String, input_number, throw, \
     ErrorPayload, Tuple, array_sequence, Unit, unit, \
     bind_first, process_items, ProcessAcc, Array, \
@@ -277,7 +277,7 @@ def extract_single_article(
     def _on_response(gpt_full: GPTFullResponse) -> Run[ExtractClassResult]:
         match gpt_full:
             case Left():
-                return rethrow(gpt_full)
+                return rethrow_gpt(gpt_full)
             case Right(resp_t):
                 extraction = cast(ArticleIncidentExtraction, resp_t.parsed.output)
                 gpt_class = Article.extracted_gpt_class(
@@ -289,7 +289,7 @@ def extract_single_article(
                         article, resp_t, incident_start_year
                     ) >> \
                     save_gpt >> \
-                    rethrow ^ \
+                    rethrow_gpt ^ \
                     pure(Tuple(record_id, class_code))
     return \
         put_line(f"Extracting incident data from article {article}...\n") ^ \
