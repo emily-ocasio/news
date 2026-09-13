@@ -6,6 +6,18 @@
 
 *Last updated: 04/25/2026
 
+args input_csv output_dir analysis_start_year analysis_end_year crosswalk_csv time_indicator_year humanizing_y_max
+if "`input_csv'" == "" local input_csv "homicide_data2_monadic.csv"
+if "`output_dir'" == "" local output_dir "\\apporto.com\dfs\STNFRD\Users\s9130_stnfrd\Documents\DC"
+if "`analysis_start_year'" == "" local analysis_start_year 1977
+if "`analysis_end_year'" == "" local analysis_end_year 1995
+if "`crosswalk_csv'" == "" local crosswalk_csv "category_group_crosswalk.csv"
+if "`time_indicator_year'" == "" local time_indicator_year 1980
+if "`humanizing_y_max'" == "" local humanizing_y_max 1
+local humanizing_y_labels `"0 "0" 0.2 "0.2" 0.4 "0.4" 0.6 "0.6" 0.8 "0.8" 1 "1""'
+if `humanizing_y_max' == 0.4 local humanizing_y_labels `"0 "0" 0.2 "0.2" 0.4 "0.4""'
+if `humanizing_y_max' == 0.25 local humanizing_y_labels `"0 "0" 0.05 "0.05" 0.1 "0.1" 0.15 "0.15" 0.2 "0.2" 0.25 "0.25""'
+
 
 
 
@@ -19,7 +31,7 @@ set more off, permanently
 clear all
 
 *Set directory
-cd "\\apporto.com\dfs\STNFRD\Users\s9130_stnfrd\Documents\DC"
+cd "`output_dir'"
 
 *Get unemployment data (disabled for monadic pipeline run; not used as covariate below)
 * import excel MAUR, cellrange(A11:B119) firstrow
@@ -30,7 +42,7 @@ cd "\\apporto.com\dfs\STNFRD\Users\s9130_stnfrd\Documents\DC"
 * clear all
 
 *Get FBI/BG data
-import delimited homicide_data2_monadic.csv, clear
+import delimited "`input_csv'", clear
 
 *Crosswalk-backed grouping for text categories that vary across source files
 rename weapon weapon_raw
@@ -44,7 +56,7 @@ gen str244 circumstance_key = lower(trim(itrim(circumstance_raw)))
 tempfile weapon_lookup relationship_lookup circumstance_lookup
 
 preserve
-	import delimited category_group_crosswalk.csv, clear varnames(1) stringcols(_all)
+	import delimited "`crosswalk_csv'", clear varnames(1) stringcols(_all)
 	keep if domain == "weapon"
 	gen str244 lookup_key = lower(trim(itrim(raw_value)))
 	destring group_code, replace
@@ -71,7 +83,7 @@ if r(N) > 0 {
 drop weapon_key
 
 preserve
-	import delimited category_group_crosswalk.csv, clear varnames(1) stringcols(_all)
+	import delimited "`crosswalk_csv'", clear varnames(1) stringcols(_all)
 	keep if domain == "relationship"
 	gen str244 lookup_key = lower(trim(itrim(raw_value)))
 	destring group_code, replace
@@ -98,7 +110,7 @@ if r(N) > 0 {
 drop relationship_key
 
 preserve
-	import delimited category_group_crosswalk.csv, clear varnames(1) stringcols(_all)
+	import delimited "`crosswalk_csv'", clear varnames(1) stringcols(_all)
 	keep if domain == "circumstance"
 	gen str244 lookup_key = lower(trim(itrim(raw_value)))
 	destring group_code, replace
@@ -357,7 +369,7 @@ mtitles("\normalsize Dem." "\normalsize Full" "\normalsize Dem." "\normalsize Fu
 addnote("Robust standard errors in parentheses. $^*p<0.1$; $^{**}p<0.05$; $^{***}p<0.01$" ///
  "FE indicates inclusion of fixed effects for the corresponding variable." ///
  "The sample consists of all homicides with a black or white victim under 70 years of age. Sample sizes differ across specifications because, as is well known, perfect predictors can lead to numerical problems in maximum likelihood estimation. As a result, these predictors and their associated observations are automatically dropped in the estimation procedure (as is the default behavior of most statistical packages).") ///
-indicate("\normalsize \quad Weapon (FE) = 2.weapon" "\normalsize \quad Circum. (FE) = 2.circumstance" "\normalsize \quad Relation (FE) = 2.relationship"  "\normalsize \quad County (FE) = 1.cntyfips" "\normalsize \quad Time (FE) = 1980.year", labels("$\times$")) 
+indicate("\normalsize \quad Weapon (FE) = 2.weapon" "\normalsize \quad Circum. (FE) = 2.circumstance" "\normalsize \quad Relation (FE) = 2.relationship"  "\normalsize \quad County (FE) = 1.cntyfips" "\normalsize \quad Time (FE) = `time_indicator_year'.year", labels("$\times$")) 
 
 
 
@@ -381,9 +393,9 @@ marginsplot, ///
 	plot2op(mcolor(black) lcolor(edkblue) 	lwidth(0.4) lpattern(shortdash)  msize(0.6) msymbol(square)) ci2op(lwidth(0.2) lpattern(solid) color(%10)) ///
 	yline(0, lcolor(black) lwidth(0.2) lstyle(--)) ///
 	xlabel(1 "<18" 2 "18-29" 3 "30-49" 4 "50-69", angle(45) labsize(large)) ///
-	ylabel(0 "0" 0.2 "0.2" 0.4 "0.4" 0.6 "0.6" 0.8 "0.8" 1 "1",labsize(large)) /// 
+	ylabel(`humanizing_y_labels',labsize(large)) /// 
 	title("Male victim", size(vlarge)) ///
-	yscale(range(0 1)) ///
+	yscale(range(0 `humanizing_y_max')) ///
 	xtitle("Victim Age", size(vlarge)) ///
 	ytitle("Pr(Humanizing coverage)", size(vlarge)) ///
 	legend(order(3 "White" 4 "Black") size(large) position(2))
@@ -395,9 +407,9 @@ marginsplot, ///
 	plot2op(mcolor(black) lcolor(edkblue) 	lwidth(0.4) lpattern(shortdash)  msize(0.6) msymbol(square)) ci2op(lwidth(0.2) lpattern(solid) color(%10)) ///
 	yline(0, lcolor(black) lwidth(0.2) lstyle(--)) ///
 	xlabel(1 "<18" 2 "18-29" 3 "30-49" 4 "50-69", angle(45) labsize(large)) ///
-	ylabel(0 "0" 0.2 "0.2" 0.4 "0.4" 0.6 "0.6" 0.8 "0.8" 1 "1" ,labsize(large)) ///
+	ylabel(`humanizing_y_labels',labsize(large)) ///
 	title("Female victim", size(vlarge)) ///
-	yscale(range(0 1)) ///
+	yscale(range(0 `humanizing_y_max')) ///
 	legend(order(3 "White" 4 "Black") size(large) position(2)) ///
 	xtitle(" ") ///
 	ytitle(" ")
@@ -411,14 +423,14 @@ local year_name fig_year
 
 *Margins for year plotting
 * Restrict averaging to age bins 1-4; there are no White male cases in vicage_c==0.
-margins vicrace if vicage_c>0, at(year=(1977(1)1995) vicsex=0) asobserved
+margins vicrace if vicage_c>0, at(year=(`analysis_start_year'(1)`analysis_end_year') vicsex=0) asobserved
 marginsplot, ///
 	xdimension(year) ///
 	recastci(rarea) ///
 	plot1op(mcolor(black) lcolor("139 0 0") lwidth(0.4) lpattern(solid) msize(0.6) msymbol(circle)) ci1op(lwidth(0.2) lpattern(solid) color(%10)) ///
 	plot2op(mcolor(black) lcolor(edkblue) 	lwidth(0.4) lpattern(shortdash)  msize(0.6) msymbol(square)) ci2op(lwidth(0.2) lpattern(solid) color(%10)) ///
 	yline(0, lcolor(black) lwidth(0.2) lstyle(--)) ///
-	xlabel(1977(1)1995, angle(45) labsize(large)) ///
+	xlabel(`analysis_start_year'(1)`analysis_end_year', angle(45) labsize(large)) ///
 	ylabel(0 "0" 0.2 "0.2" 0.4 "0.4" 0.6 "0.6" 0.8 "0.8" 1 "1",labsize(large)) ///
 	title("Male victim", size(vlarge)) ///
 	yscale(range(0 1)) ///
@@ -426,14 +438,14 @@ marginsplot, ///
 	ytitle("Pr(Humanizing coverage)", size(vlarge)) ///
 	legend(order(3 "White" 4 "Black") size(large) position(2))
 	graph save "`year_name'_male", replace
-margins vicrace if vicage_c>0, at(year=(1977(1)1995) vicsex=1) asobserved
+margins vicrace if vicage_c>0, at(year=(`analysis_start_year'(1)`analysis_end_year') vicsex=1) asobserved
 marginsplot, ///
 	xdimension(year) ///
 	recastci(rarea) ///
 	plot1op(mcolor(black) lcolor("139 0 0") lwidth(0.4) lpattern(solid) msize(0.6) msymbol(circle)) ci1op(lwidth(0.2) lpattern(solid) color(%10)) ///
 	plot2op(mcolor(black) lcolor(edkblue) 	lwidth(0.4) lpattern(shortdash)  msize(0.6) msymbol(square)) ci2op(lwidth(0.2) lpattern(solid) color(%10)) ///
 	yline(0, lcolor(black) lwidth(0.2) lstyle(--)) ///
-	xlabel(1977(1)1995, angle(45) labsize(large)) ///
+	xlabel(`analysis_start_year'(1)`analysis_end_year', angle(45) labsize(large)) ///
 	ylabel(0 "0" 0.2 "0.2" 0.4 "0.4" 0.6 "0.6" 0.8 "0.8" 1 "1",labsize(large)) ///
 	title("Female victim", size(vlarge)) ///
 	yscale(range(0 1)) ///

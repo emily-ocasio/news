@@ -19,6 +19,7 @@ from calculations import insert_gptresults_sql
 from calculations.calc_core import elapsed_line
 from gpt_filtering import render_as_failure
 from publication_outputs import publication_sql_export
+from publication_profiles import PublicationProfile
 from menuprompts import NextStep
 from pymonad import (
     Array,
@@ -405,7 +406,7 @@ def _ensure_tables() -> Run[Unit]:
     return (
         sql_exec(
             SQL(
-                """
+                f"""
                 CREATE TABLE IF NOT EXISTS humanization_stage_cache (
                   incident_cache_key VARCHAR PRIMARY KEY,
                   incident_date_norm VARCHAR,
@@ -2430,12 +2431,12 @@ def _export_results(run_id: str) -> Run[str]:
     )
 
 
-def _export_analyze_compatible_csv() -> Run[str]:
+def _export_analyze_compatible_csv(profile: PublicationProfile) -> Run[str]:
     filename = "homicide_data2_monadic.csv"
     return (
         publication_sql_export(
             SQL(
-                """
+                f"""
                 WITH shr_scope AS (
                   SELECT
                     s."index",
@@ -2542,6 +2543,10 @@ def _export_analyze_compatible_csv() -> Run[str]:
                   ss.MSA AS "MSA",
                   ss.YearMonth AS "YearMonth",
                   ss.Victim AS "Victim",
+                  '{profile.key}' AS "PublicationKey",
+                  {profile.identity.database_id} AS "PublicationID",
+                  {profile.target_location.stored_city_id} AS "CityID",
+                  'stata_shr_v1' AS "SchemaVersion",
                   COALESCE(ac.assign_count, 0) AS "AssignCount",
                   CASE
                     WHEN COALESCE(ac.assign_count, 0) = 0 THEN NULL
@@ -2597,7 +2602,11 @@ def _maybe_export_analyze_compatible_csv() -> Run[str]:
                     )
                 )
                 if remaining > 0
-                else _export_analyze_compatible_csv()
+                else ask() >> (
+                    lambda env: _export_analyze_compatible_csv(
+                        env["publication_profile"]
+                    )
+                )
             )
         )
     )
