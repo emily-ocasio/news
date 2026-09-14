@@ -421,34 +421,38 @@ graph close
 
 local year_name fig_year
 
+summarize year if e(sample), meanonly
+local graph_start_year = `analysis_start_year'
+local graph_end_year = r(max)
+
 *Margins for year plotting
 * Restrict averaging to age bins 1-4; there are no White male cases in vicage_c==0.
-margins vicrace if vicage_c>0, at(year=(`analysis_start_year'(1)`analysis_end_year') vicsex=0) asobserved
+margins vicrace if vicage_c>0, at(year=(`graph_start_year'(1)`graph_end_year') vicsex=0) asobserved
 marginsplot, ///
 	xdimension(year) ///
 	recastci(rarea) ///
 	plot1op(mcolor(black) lcolor("139 0 0") lwidth(0.4) lpattern(solid) msize(0.6) msymbol(circle)) ci1op(lwidth(0.2) lpattern(solid) color(%10)) ///
 	plot2op(mcolor(black) lcolor(edkblue) 	lwidth(0.4) lpattern(shortdash)  msize(0.6) msymbol(square)) ci2op(lwidth(0.2) lpattern(solid) color(%10)) ///
 	yline(0, lcolor(black) lwidth(0.2) lstyle(--)) ///
-	xlabel(`analysis_start_year'(1)`analysis_end_year', angle(45) labsize(large)) ///
-	ylabel(0 "0" 0.2 "0.2" 0.4 "0.4" 0.6 "0.6" 0.8 "0.8" 1 "1",labsize(large)) ///
+	xlabel(`graph_start_year'(1)`graph_end_year', angle(45) labsize(large)) ///
+	ylabel(`humanizing_y_labels',labsize(large)) ///
 	title("Male victim", size(vlarge)) ///
-	yscale(range(0 1)) ///
+	yscale(range(0 `humanizing_y_max')) ///
 	xtitle("Year", size(vlarge)) ///
 	ytitle("Pr(Humanizing coverage)", size(vlarge)) ///
 	legend(order(3 "White" 4 "Black") size(large) position(2))
 	graph save "`year_name'_male", replace
-margins vicrace if vicage_c>0, at(year=(`analysis_start_year'(1)`analysis_end_year') vicsex=1) asobserved
+margins vicrace if vicage_c>0, at(year=(`graph_start_year'(1)`graph_end_year') vicsex=1) asobserved
 marginsplot, ///
 	xdimension(year) ///
 	recastci(rarea) ///
 	plot1op(mcolor(black) lcolor("139 0 0") lwidth(0.4) lpattern(solid) msize(0.6) msymbol(circle)) ci1op(lwidth(0.2) lpattern(solid) color(%10)) ///
 	plot2op(mcolor(black) lcolor(edkblue) 	lwidth(0.4) lpattern(shortdash)  msize(0.6) msymbol(square)) ci2op(lwidth(0.2) lpattern(solid) color(%10)) ///
 	yline(0, lcolor(black) lwidth(0.2) lstyle(--)) ///
-	xlabel(`analysis_start_year'(1)`analysis_end_year', angle(45) labsize(large)) ///
-	ylabel(0 "0" 0.2 "0.2" 0.4 "0.4" 0.6 "0.6" 0.8 "0.8" 1 "1",labsize(large)) ///
+	xlabel(`graph_start_year'(1)`graph_end_year', angle(45) labsize(large)) ///
+	ylabel(`humanizing_y_labels',labsize(large)) ///
 	title("Female victim", size(vlarge)) ///
-	yscale(range(0 1)) ///
+	yscale(range(0 `humanizing_y_max')) ///
 	legend(order(3 "White" 4 "Black") size(large) position(2)) ///
 	xtitle(" ") ///
 	ytitle(" ")
