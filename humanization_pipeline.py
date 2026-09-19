@@ -406,7 +406,7 @@ def _ensure_tables() -> Run[Unit]:
     return (
         sql_exec(
             SQL(
-                f"""
+                """
                 CREATE TABLE IF NOT EXISTS humanization_stage_cache (
                   incident_cache_key VARCHAR PRIMARY KEY,
                   incident_date_norm VARCHAR,
