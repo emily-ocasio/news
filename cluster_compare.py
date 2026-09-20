@@ -135,27 +135,18 @@ def _build_compare_sql(
             for c in sort_cols
         ]
     )
-    switch_having = (
-        """
-    HAVING COUNT(DISTINCT CASE WHEN l.rec_type = 'entity'
-                               THEN l.{cluster_col} END) = 2
-       AND COUNT(DISTINCT CASE WHEN r.rec_type = 'entity'
-                               THEN r.{cluster_col} END) = 2
+    switch_having = f"""
+    HAVING COUNT(DISTINCT l.{cluster_col}) = 2
+       AND COUNT(DISTINCT r.{cluster_col}) = 2
        AND COUNT(DISTINCT CASE
-             WHEN l.rec_type = 'orphan'
-              AND r.rec_type = 'orphan'
-              AND l.{cluster_col} <> r.{cluster_col}
+             WHEN l.{cluster_col} = r.{cluster_col}
              THEN l.{member_col} END) > 0
-""".format(cluster_col=cluster_col, member_col=member_col)
-        if "rec_type" in left_cols and "rec_type" in right_cols
-        else ""
-    )
-    switch_left_orphan = (
-        "l.rec_type = 'orphan'" if "rec_type" in left_cols else "FALSE"
-    )
-    switch_right_orphan = (
-        "r.rec_type = 'orphan'" if "rec_type" in right_cols else "FALSE"
-    )
+       AND COUNT(DISTINCT CASE
+             WHEN l.{cluster_col} <> r.{cluster_col}
+             THEN l.{member_col} END) > 0
+"""
+    switch_left_orphan = "TRUE"
+    switch_right_orphan = "TRUE"
 
     return SQL(
         f"""--sql
@@ -594,8 +585,8 @@ SELECT
     WHEN lfs.change = 'extended' THEN 4
     WHEN lfs.change = 'reduce/extend' THEN 5
     WHEN lfs.change = 'switch' THEN 6
-    WHEN lfs.change = 'new' THEN 6
-    ELSE 7
+    WHEN lfs.change = 'new' THEN 7
+    ELSE 8
   END AS change_order,
   lfs.family_id AS family_id,
   lfs.family_canonical_surname AS family_canonical_surname,
@@ -641,8 +632,8 @@ SELECT
     WHEN rfs.change = 'extended' THEN 4
     WHEN rfs.change = 'reduce/extend' THEN 5
     WHEN rfs.change = 'switch' THEN 6
-    WHEN rfs.change = 'new' THEN 6
-    ELSE 7
+    WHEN rfs.change = 'new' THEN 7
+    ELSE 8
   END AS change_order,
   rfs.family_id AS family_id,
   rfs.family_canonical_surname AS family_canonical_surname,

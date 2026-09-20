@@ -16,6 +16,7 @@ from geocode_incidents import (
     CREATE_GEOCODED_VIEW_SQL,
     INSERT_ADDR_MAP_SQL,
     INSERT_CACHE_SQL,
+    _arcgis_review_code,
 )
 from incidents_setup import (
     SUMMARY_EMBED_DIM,
@@ -536,6 +537,11 @@ def _insert_geocode_result(env: Environment, addr_key: str, g) -> Run[Unit]:
         if provider == "mar"
         else arcgis_result_score(g.raw_json)
     )
+    review_code = (
+        _arcgis_review_code(addr_key, g.matched_address, result_type)
+        if provider == "stanford_arcgis"
+        else None
+    )
     if g.ok:
         return (
             sql_exec(
@@ -549,6 +555,9 @@ def _insert_geocode_result(env: Environment, addr_key: str, g) -> Run[Unit]:
                         String(json.dumps(g.raw_json)),
                         String(result_type),
                         score_value,
+                        String(review_code or "")
+                        if provider == "stanford_arcgis"
+                        else None,
                     )
                 ),
             )
@@ -566,6 +575,9 @@ def _insert_geocode_result(env: Environment, addr_key: str, g) -> Run[Unit]:
                     String(json.dumps(g.raw_json)),
                     String(result_type),
                     score_value,
+                    String(review_code or "")
+                    if provider == "stanford_arcgis"
+                    else None,
                 )
             ),
         )

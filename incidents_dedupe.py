@@ -3,6 +3,7 @@ Dedupe incident records using Splink.
 """
 
 from itertools import groupby
+from enum import Enum
 
 from blocking import (
     NAMED_VICTIM_BLOCKS,
@@ -15,7 +16,7 @@ from comparison import (
     INCIDENT_COMPARISONS_NYT,
 )
 from publication_profiles import PublicationProfile
-from menuprompts import NextStep
+from menuprompts import MenuChoice, MenuPrompts, NextStep, input_from_menu
 from splink_types import SplinkType
 from cluster_compare import ClusterCompareRequest, compare_cluster_tables
 from publication_outputs import publication_output_filename, publication_sql_export
@@ -38,9 +39,35 @@ from pymonad import (
     unit,
     with_duckdb,
     ask,
+    ErrorPayload,
     file_exists,
     rename_file,
+    throw,
 )
+
+
+DEDUPE_MODE_PROMPTS = (
+    "Full computation [F]",
+    "Output only [O]",
+)
+
+
+class DedupeMode(Enum):
+    """Available execution modes for named-victim deduplication."""
+
+    FULL = MenuChoice("F")
+    OUTPUT_ONLY = MenuChoice("O")
+
+
+def _input_dedupe_mode() -> Run[DedupeMode]:
+    """Prompt for dedupe mode, defaulting to the full computation."""
+    return DedupeMode & input_from_menu(
+        MenuPrompts(DEDUPE_MODE_PROMPTS, allow_return=True)
+    ) >> (
+        lambda choice: pure(DedupeMode.FULL)
+        if str(choice) == "\n"
+        else pure(DedupeMode(choice))
+    )
 
 def _create_victims_named_table() -> Run[Unit]:
     """
@@ -912,18 +939,61 @@ def _export_final_clusters_excel() -> Run[Unit]:
     )
 
 
+def _check_output_only_prerequisites() -> Run[Unit]:
+    """Verify that the stored dedupe results needed for export are present."""
+    required_tables: set[str] = {
+        "victim_clusters",
+        "victim_clusters_counts",
+        "victims_cached_enh",
+        "victim_clusters_member_provenance",
+    }
+    table_list = ", ".join(f"'{table}'" for table in required_tables)
+
+    def _validate(rows) -> Run[Unit]:
+        found_tables: set[str] = {
+            str(row["table_name"]) for row in rows
+        }
+        if found_tables == required_tables:
+            return pure(unit)
+        missing_tables = ", ".join(sorted(required_tables - found_tables))
+        return throw(
+            ErrorPayload(
+                "Output-only [D] requires stored dedupe results. "
+                "Run [D] Full computation first; missing tables: "
+                + missing_tables
+            )
+        )
+
+    return sql_query(
+        SQL(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema = 'main' "
+            f"AND table_name IN ({table_list})"
+        )
+    ) >> _validate
+
+
 def dedupe_incidents_with_splink() -> Run[NextStep]:
     """
     Deduplicate incident records using Splink.
     """
-    return (
-        _create_victims_named_table()
-        >> _dedupe_named_victims
-        ^ _create_cluster_tables()
-        ^ _build_representative_victims()
-        ^ _export_final_clusters_excel()
-        ^ pure(NextStep.CONTINUE)
-    )
+    def _run(mode: DedupeMode) -> Run[NextStep]:
+        if mode == DedupeMode.OUTPUT_ONLY:
+            return (
+                _check_output_only_prerequisites()
+                ^ _export_final_clusters_excel()
+                ^ pure(NextStep.CONTINUE)
+            )
+        return (
+            _create_victims_named_table()
+            >> _dedupe_named_victims
+            ^ _create_cluster_tables()
+            ^ _build_representative_victims()
+            ^ _export_final_clusters_excel()
+            ^ pure(NextStep.CONTINUE)
+        )
+
+    return _input_dedupe_mode() >> _run
 
 
 def _cluster_blocks(rows):
