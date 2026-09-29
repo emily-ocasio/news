@@ -887,15 +887,6 @@ def _match_article_to_shr_victims(profile) -> Run[NextStep]:
                     FROM sqldb.shr
                     WHERE {_shr_scope_sql(profile)}
                     AND YearMonth IS NOT NULL
-                    AND EXISTS (
-                        SELECT 1
-                        FROM shr_linkage_months lm
-                        WHERE lm.month_start = make_date(
-                            CAST(substring(YearMonth, 1, 4) AS BIGINT),
-                            CAST(substring(YearMonth, 6, 2) AS BIGINT),
-                            1
-                        )
-                    )
                 ),
                 shr_ranked AS (
                     SELECT

@@ -4,6 +4,7 @@ Dedupe incident records using Splink.
 
 from itertools import groupby
 from enum import Enum
+import json
 
 from blocking import (
     NAMED_VICTIM_BLOCKS,
@@ -44,10 +45,12 @@ from pymonad import (
     rename_file,
     throw,
 )
+from pymonad.splink_runtime.splink_model_store import _splink_model_paths
 
 
 DEDUPE_MODE_PROMPTS = (
     "Full computation [F]",
+    "Cluster only (reuse trained model) [C]",
     "Output only [O]",
 )
 
@@ -56,6 +59,7 @@ class DedupeMode(Enum):
     """Available execution modes for named-victim deduplication."""
 
     FULL = MenuChoice("F")
+    CLUSTER_ONLY = MenuChoice("C")
     OUTPUT_ONLY = MenuChoice("O")
 
 
@@ -75,6 +79,8 @@ def _create_victims_named_table() -> Run[Unit]:
     This will be used for the initial Splink deduplication step.
     """
     return (
+        put_line("[D] Beginning creation of victims_named table.")
+        ^
         sql_exec(
             SQL(
                 """--sql
@@ -100,7 +106,7 @@ def _dedupe_named_victims(_: Unit) -> Run[Unit]:
     """
     Run initial pass of Splink deduplication on the victims_named table.
     """
-    return ask() >> (
+    return put_line("[D] Beginning Splink training and initial clustering.") ^ ask() >> (
         lambda env: splink_dedupe_job(
             input_table=PredictionInputTableName("victims_named"),
             settings=_settings_for_victim_dedupe(env["publication_profile"]),
@@ -128,11 +134,144 @@ def _dedupe_named_victims(_: Unit) -> Run[Unit]:
     )
 
 
+def _load_cluster_only_settings() -> Run[dict]:
+    """Load the persisted publication-specific trained model settings."""
+    def _load(env: Environment) -> Run[dict]:
+        profile = env["publication_profile"]
+        model_path, meta_path = _splink_model_paths(
+            SplinkType.DEDUP, str(profile.key)
+        )
+        if not meta_path.is_file():
+            return throw(
+                ErrorPayload(
+                    "Cluster-only [D] requires persisted DEDUP model metadata: "
+                    f"{meta_path}"
+                )
+            )
+        try:
+            with model_path.open(encoding="utf-8") as model_file:
+                settings = json.load(model_file)
+        except (OSError, json.JSONDecodeError) as exc:
+            return throw(
+                ErrorPayload(
+                    "Cluster-only [D] requires a valid persisted DEDUP model: "
+                    f"{model_path} ({exc})"
+                )
+            )
+        if not isinstance(settings, dict):
+            return throw(ErrorPayload("Persisted DEDUP model settings are invalid."))
+        # The model JSON serializes blocking rules as dictionaries. Reuse the
+        # application's typed rules while retaining trained probabilities and
+        # comparison settings from the persisted model.
+        settings["blocking_rules_to_generate_predictions"] = (
+            _settings_for_victim_dedupe(profile)["blocking_rules_to_generate_predictions"]
+        )
+        return pure(settings)
+
+    return put_line("[D] Beginning loading of the persisted DEDUP model.") ^ ask() >> _load
+
+
+def _check_cluster_only_prerequisites() -> Run[Unit]:
+    required_tables = {
+        "victims_cached_enh",
+        "victim_cluster_exclusion",
+    }
+    table_list = ", ".join(f"'{table}'" for table in required_tables)
+
+    def _validate(rows) -> Run[Unit]:
+        found = {str(row["table_name"]) for row in rows}
+        missing = sorted(required_tables - found)
+        if missing:
+            return throw(
+                ErrorPayload(
+                    "Cluster-only [D] is missing required tables: "
+                    + ", ".join(missing)
+                )
+            )
+        return pure(unit)
+
+    metadata_query = sql_query(
+        SQL(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema = 'main' "
+            f"AND table_name IN ({table_list})"
+        )
+    ) >> _validate
+
+    def _reattach_sqldb(file_path: str) -> Run[Unit]:
+        escaped = file_path.replace("'", "''")
+        return (
+            sql_exec(SQL("LOAD sqlite_scanner"))
+            ^ sql_exec(SQL(f"ATTACH '{escaped}' AS sqldb (TYPE SQLITE)"))
+        )
+
+    def _with_database_list(rows) -> Run[Unit]:
+        sqldb_file = next(
+            (
+                str(row["file"])
+                for row in rows
+                if str(row["name"]) == "sqldb"
+            ),
+            None,
+        )
+        if not sqldb_file:
+            return metadata_query
+        return (
+            sql_exec(SQL("DETACH sqldb"))
+            ^ metadata_query
+            ^ _reattach_sqldb(sqldb_file)
+        )
+
+    return (
+        put_line("[D] Beginning Cluster-only prerequisite checks.")
+        ^ sql_query(SQL("PRAGMA database_list"))
+        >> _with_database_list
+    )
+
+
+def _cluster_only(_: Unit) -> Run[Unit]:
+    return (
+        _load_cluster_only_settings()
+        >> (
+            lambda settings: ask()
+            >> (
+                lambda _: (
+                    splink_dedupe_job(
+                        input_table=PredictionInputTableName("victims_named"),
+                    settings=settings,
+                    predict_threshold=0.6,
+                    cluster_threshold=0.75,
+                    pairs_out=PairsTableName("victim_pairs"),
+                    clusters_out=ClustersTableName("victim_clusters"),
+                    train_first=False,
+                    deterministic_rules=NAMED_VICTIM_DETERMINISTIC_BLOCKS,
+                    deterministic_recall=0.6,
+                    em_max_runs=1,
+                    visualize=False,
+                    splink_key=SplinkType.DEDUP,
+                    do_not_link_table=DoNotLinkTableName("victim_cluster_exclusion"),
+                    blocked_pairs_out=BlockedPairsTableName("victim_cluster_blocked_edges"),
+                    u_estimation_max_pairs=1_000_000,
+                    inference_only=True,
+                        bridge_screening=True,
+                    ) >> (
+                        lambda result: put_line(
+                            f"[D] Wrote {result.pairs_table} and {result.clusters_table} in DuckDB."
+                        )
+                    ) ^ pure(unit)
+                )
+            )
+        )
+    )
+
+
 def _create_cluster_tables() -> Run[Unit]:
     """
     Create tables for victim clusters and their members.
     """
     return (
+        put_line("[D] Beginning construction of cluster tables and victim entities.")
+        ^
         sql_exec(
             SQL(
                 """--sql
@@ -266,6 +405,8 @@ def _build_representative_victims() -> Run[Unit]:
       - offender: pick mode(offender_fullname_concat) and corresponding forename/surname
     """
     return (
+        put_line("[D] Beginning representative victim generation.")
+        ^
         sql_exec(SQL(
             """--
             -- This unnests summary vectors and averages them per component
@@ -911,6 +1052,8 @@ def _export_final_clusters_excel() -> Run[Unit]:
         )
 
     return (
+        put_line("[D] Beginning production of output workbooks.")
+        ^
         _register_previous_final_clusters_if_exists()
         >> (
             lambda has_prev: (
@@ -981,6 +1124,16 @@ def dedupe_incidents_with_splink() -> Run[NextStep]:
         if mode == DedupeMode.OUTPUT_ONLY:
             return (
                 _check_output_only_prerequisites()
+                ^ _export_final_clusters_excel()
+                ^ pure(NextStep.CONTINUE)
+            )
+        if mode == DedupeMode.CLUSTER_ONLY:
+            return (
+                _check_cluster_only_prerequisites()
+                ^ _create_victims_named_table()
+                >> _cluster_only
+                ^ _create_cluster_tables()
+                ^ _build_representative_victims()
                 ^ _export_final_clusters_excel()
                 ^ pure(NextStep.CONTINUE)
             )

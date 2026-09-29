@@ -50,10 +50,9 @@ After any code changes:
 
 After any code changes:
 
-1. Run Pylint from the `news` environment using the Conda environment Python executable and the required CLI overrides:
+1. Run Pylint from the `news` environment using the Conda environment Python executable. The repository `.pylintrc` sets the preferred 110-character line limit; retain the required extension override:
 
 /Users/wendell/miniforge3/envs/news/bin/python -m pylint
---max-line-length=110
 --extension-pkg-allow-list=fasttext
 .
 

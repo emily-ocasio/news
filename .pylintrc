@@ -1,0 +1,5 @@
+[MAIN]
+py-version=3.13
+
+[BASIC]
+max-line-length=110

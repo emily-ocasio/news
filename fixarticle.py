@@ -56,7 +56,6 @@ from orphan_adjudication_controller import (
     force_article_adjudication_cache_refresh_strategy_x,
 )
 from orphan_adjudication_apply import apply_orphan_adjudications
-from unnamed_match import refresh_orphan_match_inputs_after_article_change
 from publication_profiles import RecordIdBase
 from publication_profiles import Availability
 
@@ -673,7 +672,7 @@ def _apply_action(
                         f"{res.l}"
                     )
                     if isinstance(res, Left)
-                    else refresh_orphan_match_inputs_after_article_change() ^ pure(None)
+                    else pure(None)
                 )
             )
 

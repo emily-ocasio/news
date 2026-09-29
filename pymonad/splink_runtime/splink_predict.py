@@ -1,5 +1,7 @@
 """Splink runtime prediction and exclusion-list helpers."""
-# Splink prediction rule mutation requires internal settings objects; no stable public accessor exists.
+
+# Splink prediction rule mutation requires internal settings objects; no stable
+# public accessor exists.
 # pylint: disable=protected-access
 from __future__ import annotations
 
@@ -8,17 +10,22 @@ from typing import Any, Callable, cast
 from splink import DuckDBAPI, Linker
 from splink.internals.blocking import BlockingRule
 from splink.internals.blocking_rule_creator import BlockingRuleCreator
-from splink.internals.blocking_rule_creator_utils import to_blocking_rule_creator
+from splink.internals.blocking_rule_creator_utils import (
+    to_blocking_rule_creator,
+)
 from splink.internals.blocking_rule_library import And, CustomRule
 
 from ..array import Array
 from ..hashset import HashSet
 from ..maybe import Just
 from ..monad import Unit, unit
-from ..run import ErrorPayload, Run, fold_run, pure, throw
+from ..run import ErrorPayload, Run, fold_run, put_line, pure, throw
 from ..runsql import SQL, sql_exec
 from ..tuple import Tuple
-from .splink_cluster import diagnostic_cluster_blocked_edges_run, resolve_pair_id_cols_from_table_step
+from .splink_cluster import (
+    diagnostic_cluster_blocked_edges_run,
+    resolve_pair_id_cols_from_table_step,
+)
 from .splink_context import (
     _with_splink_context_api_plan,
     _with_splink_context_linker_plan,
@@ -77,7 +84,9 @@ def _build_linker_for_prediction(
     settings = dict(settings)
     if extra_columns_to_retain:
         existing = list(settings.get("additional_columns_to_retain", []))
-        merged = list(dict.fromkeys(existing + list(map(str, extra_columns_to_retain))))
+        merged = list(
+            dict.fromkeys(existing + list(map(str, extra_columns_to_retain)))
+        )
         settings["additional_columns_to_retain"] = merged
     return Linker(
         input_table,
@@ -102,7 +111,9 @@ def _set_diagnostic_plan(ctx: SplinkContext) -> Run[Unit]:
     return context_replace(predict_plan=Just(plan))
 
 
-def _append_clause_to_rules(rules: BlockingRuleLikes, clause: str) -> Array[BlockingRuleLike]:
+def _append_clause_to_rules(
+    rules: BlockingRuleLikes, clause: str
+) -> Array[BlockingRuleLike]:
     updated: list[BlockingRuleLike] = []
     for rule in rules:
         if isinstance(rule, BlockingRuleCreator):
@@ -120,10 +131,18 @@ def _set_final_plan(ctx: SplinkContext) -> Run[Unit]:
             f"OR list_contains(r.exclusion_ids, l.{ctx.unique_id_col}))"
         )
         plan = PredictPlan(
-            prediction_rules=_append_clause_to_rules(ctx.prediction_rules, exclusion_clause),
-            training_rules=_append_clause_to_rules(ctx.training_rules, exclusion_clause),
-            input_table_for_prediction=PredictionInputTableNames(f"{input_table}_exc"),
-            extra_columns_to_retain=Array.pure(RetainColumnName("exclusion_ids")),
+            prediction_rules=_append_clause_to_rules(
+                ctx.prediction_rules, exclusion_clause
+            ),
+            training_rules=_append_clause_to_rules(
+                ctx.training_rules, exclusion_clause
+            ),
+            input_table_for_prediction=PredictionInputTableNames(
+                f"{input_table}_exc"
+            ),
+            extra_columns_to_retain=Array.pure(
+                RetainColumnName("exclusion_ids")
+            ),
         )
     else:
         plan = PredictPlan(
@@ -174,8 +193,12 @@ def _with_temp_blocking_rules_on_linker(
     rules: Array[BlockingRuleLike],
     action: Callable[[], Any],
 ) -> Run[Any]:
-    def _with_preceding_rules(dialected: Array[BlockingRule]) -> Run[Array[BlockingRule]]:
-        def _step(acc: Array[BlockingRule], rule: BlockingRule) -> Run[Array[BlockingRule]]:
+    def _with_preceding_rules(
+        dialected: Array[BlockingRule],
+    ) -> Run[Array[BlockingRule]]:
+        def _step(
+            acc: Array[BlockingRule], rule: BlockingRule
+        ) -> Run[Array[BlockingRule]]:
             rule.add_preceding_rules(list(acc.a))
             return pure(Array.snoc(acc, rule))
 
@@ -185,10 +208,18 @@ def _with_temp_blocking_rules_on_linker(
         settings_obj = linker._settings_obj
         old_rules = settings_obj._blocking_rules_to_generate_predictions
         sql_dialect = cast(str, linker._db_api.sql_dialect.sql_dialect_str)
-        dialected = rules.map(lambda rule: to_blocking_rule_creator(rule).get_blocking_rule(sql_dialect))
+        dialected = rules.map(
+            lambda rule: to_blocking_rule_creator(rule).get_blocking_rule(
+                sql_dialect
+            )
+        )
 
-        def _with_rules(blocking_rules_dialected: Array[BlockingRule]) -> Run[Any]:
-            settings_obj._blocking_rules_to_generate_predictions = list(blocking_rules_dialected)
+        def _with_rules(
+            blocking_rules_dialected: Array[BlockingRule],
+        ) -> Run[Any]:
+            settings_obj._blocking_rules_to_generate_predictions = list(
+                blocking_rules_dialected
+            )
             try:
                 return pure(action())
             finally:
@@ -199,38 +230,52 @@ def _with_temp_blocking_rules_on_linker(
     return _run()
 
 
-def _capture_blocked_edges_run(ctx: SplinkContext, linker: Linker, plan: PredictPlan) -> Run[Unit]:
+def _capture_blocked_edges_run(
+    ctx: SplinkContext, linker: Linker, plan: PredictPlan
+) -> Run[Unit]:
     pairs_out = ctx.tables.get_required(PairsTableName)
     capture_pairs_table = PairsCaptureTableName(f"{pairs_out}_capture")
 
     def _with_pairs_source(pairs_source: PairsSourceTableName) -> Run[Unit]:
-        return sql_exec(SQL(
-            f"CREATE OR REPLACE TABLE {capture_pairs_table} AS SELECT * FROM {pairs_source}"
-        ))
+        return sql_exec(
+            SQL(
+                f"CREATE OR REPLACE TABLE {capture_pairs_table} AS "
+                f"SELECT * FROM {pairs_source}"
+            )
+        )
 
     return (
         _with_temp_blocking_rules_on_linker(
             linker,
             _build_capture_rules(plan.training_rules, plan.prediction_rules),
             lambda: PairsSourceTableName(
-                linker.inference.predict(threshold_match_probability=ctx.predict_threshold).physical_name
+                linker.inference.predict(
+                    threshold_match_probability=ctx.predict_threshold
+                ).physical_name
             ),
         )
         >> _with_pairs_source
-        >> (lambda _: context_replace(cluster_pairs_table=ClusterPairsTableName(str(capture_pairs_table))))
+        >> (
+            lambda _: context_replace(
+                cluster_pairs_table=ClusterPairsTableName(
+                    str(capture_pairs_table)
+                )
+            )
+        )
     )
 
 
 def _capture_blocked_edges(ctx: SplinkContext) -> Run[Unit]:
     if not ctx.capture_blocked_edges:
         return pure(unit)
-    return (
-        with_splink_context(_capture_blocked_edges_validate)
-        ^ _with_splink_context_linker_plan(_capture_blocked_edges_run)
-    )
+    return with_splink_context(
+        _capture_blocked_edges_validate
+    ) ^ _with_splink_context_linker_plan(_capture_blocked_edges_run)
 
 
-def _diagnostic_cluster_blocked_edges_validate_tables(ctx: SplinkContext) -> Run[Unit]:
+def _diagnostic_cluster_blocked_edges_validate_tables(
+    ctx: SplinkContext,
+) -> Run[Unit]:
     return (
         tables_get_required(ctx.tables, PredictionInputTableNames)
         ^ tables_get_required(ctx.tables, PairsCaptureTableName)
@@ -250,10 +295,9 @@ def _diagnostic_cluster_blocked_edges_validate(_: SplinkContext) -> Run[Unit]:
 def _diagnostic_cluster_blocked_edges(ctx: SplinkContext) -> Run[Unit]:
     if not ctx.capture_blocked_edges:
         return pure(unit)
-    return (
-        with_splink_context(_diagnostic_cluster_blocked_edges_validate)
-        ^ with_splink_context(diagnostic_cluster_blocked_edges_run)
-    )
+    return with_splink_context(
+        _diagnostic_cluster_blocked_edges_validate
+    ) ^ with_splink_context(diagnostic_cluster_blocked_edges_run)
 
 
 def _create_exclusion_list_table_step(
@@ -265,7 +309,9 @@ def _create_exclusion_list_table_step(
     bl_id_left_col: BlockedIdLeftColumnName,
     bl_id_right_col: BlockedIdRightColumnName,
 ) -> Run[Unit]:
-    return sql_exec(SQL(f"""
+    return sql_exec(
+        SQL(
+            f"""
         CREATE OR REPLACE TABLE {output_table} AS
         WITH pairs AS (
           SELECT CAST({bl_id_left_col} AS VARCHAR) AS victim_id,
@@ -282,17 +328,25 @@ def _create_exclusion_list_table_step(
         )
         SELECT v.*, COALESCE(a.exclusion_ids, []::VARCHAR[]) AS exclusion_ids
         FROM {input_table} v
-        LEFT JOIN agg a ON CAST(v.{unique_id_column_name} AS VARCHAR) = a.victim_id
-    """))
+        LEFT JOIN agg a
+          ON CAST(v.{unique_id_column_name} AS VARCHAR) = a.victim_id
+    """
+        )
+    )
 
 
 def _prepare_exclusion_list_from_ctx(ctx: SplinkContext) -> Run[Unit]:
     def _with_plan(plan: PredictPlan) -> Run[Unit]:
         def _with_inputs(input_tables: PredictionInputTableNames) -> Run[Unit]:
             input_table = input_tables.left().value_or("")
-            do_not_link_table = cast(DoNotLinkTableName, ctx.tables.get(DoNotLinkTableName))
+            do_not_link_table = cast(
+                DoNotLinkTableName, ctx.tables.get(DoNotLinkTableName)
+            )
             if ctx.capture_blocked_edges:
-                return _create_exclusion_list_table_step(
+                return put_line(
+                    "Beginning preparation of the exclusion-enriched "
+                    "prediction input."
+                ) ^ _create_exclusion_list_table_step(
                     input_table=PredictionInputTableName(input_table),
                     output_table=ExclusionInputTableName(f"{input_table}_exc"),
                     do_not_link_table=do_not_link_table,
@@ -303,15 +357,19 @@ def _prepare_exclusion_list_from_ctx(ctx: SplinkContext) -> Run[Unit]:
             return pure(unit)
 
         _ = plan
-        return tables_get_required(ctx.tables, PredictionInputTableNames) >> _with_inputs
+        return (
+            tables_get_required(ctx.tables, PredictionInputTableNames)
+            >> _with_inputs
+        )
 
-    return maybe_get_required(ctx.predict_plan, label="Predict plan") >> _with_plan
+    return (
+        maybe_get_required(ctx.predict_plan, label="Predict plan") >> _with_plan
+    )
 
 
 def _prepare_exclusion_list(_: SplinkContext) -> Run[Unit]:
-    return (
-        with_splink_context(_validate_predict_plan)
-        ^ with_splink_context(_prepare_exclusion_list_from_ctx)
+    return with_splink_context(_validate_predict_plan) ^ with_splink_context(
+        _prepare_exclusion_list_from_ctx
     )
 
 
@@ -358,19 +416,26 @@ def _prepare_second_pass_reuse(ctx: SplinkContext) -> Run[Unit]:
     )
 
 
-def _build_linker_from_ctx(ctx: SplinkContext, db_api: DuckDBAPI, plan: PredictPlan) -> Run[Unit]:
+def _build_linker_from_ctx(
+    ctx: SplinkContext, db_api: DuckDBAPI, plan: PredictPlan
+) -> Run[Unit]:
+    stage_log = put_line(
+        "Beginning final prediction setup and linker construction."
+    )
     try:
         settings = _prediction_settings_from_ctx(ctx)
     except ValueError as exc:
         return throw(ErrorPayload(str(exc)))
-    return context_replace(
-        linker=Just(_build_linker_for_prediction(
-            settings=settings,
-            db_api=db_api,
-            prediction_rules=plan.prediction_rules,
-            input_table=input_table_value(plan.input_table_for_prediction),
-            extra_columns_to_retain=plan.extra_columns_to_retain,
-        ))
+    return stage_log ^ context_replace(
+        linker=Just(
+            _build_linker_for_prediction(
+                settings=settings,
+                db_api=db_api,
+                prediction_rules=plan.prediction_rules,
+                input_table=input_table_value(plan.input_table_for_prediction),
+                extra_columns_to_retain=plan.extra_columns_to_retain,
+            )
+        )
     )
 
 
@@ -395,7 +460,10 @@ def _validate_inference_only_settings(ctx: SplinkContext) -> Run[Unit]:
             for level in levels:
                 if not isinstance(level, dict):
                     continue
-                if level.get("m_probability") is not None or level.get("u_probability") is not None:
+                if (
+                    level.get("m_probability") is not None
+                    or level.get("u_probability") is not None
+                ):
                     level_probs_ok = True
                     break
             if level_probs_ok:
@@ -406,8 +474,8 @@ def _validate_inference_only_settings(ctx: SplinkContext) -> Run[Unit]:
 
     return throw(
         ErrorPayload(
-            "Inference-only Splink prediction requires saved model JSON settings "
-            "with probability_two_random_records_match and trained comparison "
+            "Inference-only Splink prediction requires saved model JSON "
+            "settings with probability_two_random_records_match and trained "
             "level probabilities."
         )
     )
@@ -418,41 +486,71 @@ def _filter_pairs_table_do_not_link_step(ctx: SplinkContext) -> Run[Unit]:
     do_not_link_table = ctx.tables.get_required(DoNotLinkTableName)
 
     def _with_cols(
-        resolved: Tuple[HashSet, Tuple[PairLeftIdColumnName, PairRightIdColumnName]]
+        resolved: Tuple[
+            HashSet, Tuple[PairLeftIdColumnName, PairRightIdColumnName]
+        ],
     ) -> Run[Unit]:
         id_cols = resolved.snd
         left_id_col = id_cols.fst
         right_id_col = id_cols.snd
-        return sql_exec(SQL(f"""
+        return sql_exec(
+            SQL(
+                f"""
             CREATE OR REPLACE TABLE {pairs_table} AS
             SELECT p.* FROM {pairs_table} p
             WHERE NOT EXISTS (
               SELECT 1 FROM {do_not_link_table} d
               WHERE (
-                CAST(d.{ctx.do_not_link_left_col} AS VARCHAR) = CAST(p.{left_id_col} AS VARCHAR)
-                AND CAST(d.{ctx.do_not_link_right_col} AS VARCHAR) = CAST(p.{right_id_col} AS VARCHAR)
+                CAST(d.{ctx.do_not_link_left_col} AS VARCHAR)
+                    = CAST(p.{left_id_col} AS VARCHAR)
+                AND CAST(d.{ctx.do_not_link_right_col} AS VARCHAR)
+                    = CAST(p.{right_id_col} AS VARCHAR)
               ) OR (
-                CAST(d.{ctx.do_not_link_left_col} AS VARCHAR) = CAST(p.{right_id_col} AS VARCHAR)
-                AND CAST(d.{ctx.do_not_link_right_col} AS VARCHAR) = CAST(p.{left_id_col} AS VARCHAR)
+                CAST(d.{ctx.do_not_link_left_col} AS VARCHAR)
+                    = CAST(p.{right_id_col} AS VARCHAR)
+                AND CAST(d.{ctx.do_not_link_right_col} AS VARCHAR)
+                    = CAST(p.{left_id_col} AS VARCHAR)
               )
             )
-        """))
+        """
+            )
+        )
 
-    return resolve_pair_id_cols_from_table_step(pairs_table, ctx.unique_id_col) >> _with_cols
+    return (
+        resolve_pair_id_cols_from_table_step(pairs_table, ctx.unique_id_col)
+        >> _with_cols
+    )
 
 
-def _predict_pairs_from_ctx(ctx: SplinkContext, linker: Linker, _: PredictPlan) -> Run[Unit]:
+def _predict_pairs_from_ctx(
+    ctx: SplinkContext, linker: Linker, _: PredictPlan
+) -> Run[Unit]:
     def _with_pairs(pairs_out: PairsTableName) -> Run[Unit]:
         do_not_link_table = tables_get_optional(ctx.tables, DoNotLinkTableName)
         link_type = SplinkLinkType.from_settings(ctx.settings)
-        return (
-            sql_exec(SQL(
-                f"CREATE OR REPLACE TABLE {pairs_out} AS "
-                f"SELECT * FROM {PairsSourceTableName(linker.inference.predict(threshold_match_probability=ctx.predict_threshold).physical_name)}"
-            ))
-            ^ (with_splink_context(_filter_pairs_table_do_not_link_step) if do_not_link_table.is_present() else pure(unit))
-            ^ (
-                sql_exec(SQL(f"""
+
+        def _run_prediction(_: Unit) -> Run[Unit]:
+            prediction_table = PairsSourceTableName(
+                linker.inference.predict(
+                    threshold_match_probability=ctx.predict_threshold
+                ).physical_name
+            )
+            return (
+                sql_exec(
+                    SQL(
+                        f"CREATE OR REPLACE TABLE {pairs_out} AS "
+                        f"SELECT * FROM {prediction_table}"
+                    )
+                )
+                ^ (
+                    with_splink_context(_filter_pairs_table_do_not_link_step)
+                    if do_not_link_table.is_present()
+                    else pure(unit)
+                )
+                ^ (
+                    sql_exec(
+                        SQL(
+                            f"""
                     CREATE OR REPLACE TABLE {pairs_out}_top1 AS
                     WITH ranked AS (
                         SELECT *, ROW_NUMBER() OVER (
@@ -466,29 +564,40 @@ def _predict_pairs_from_ctx(ctx: SplinkContext, linker: Linker, _: PredictPlan) 
                     SELECT * EXCLUDE (rn)
                     FROM ranked
                     WHERE rn = 1;
-                """))
-                if link_type == SplinkLinkType.LINK_ONLY
-                else pure(unit)
+                    """
+                        )
+                    )
+                    if link_type == SplinkLinkType.LINK_ONLY
+                    else pure(unit)
+                )
             )
+
+        return put_line("Beginning final pair prediction/scoring.") >> (
+            lambda _: _run_prediction(unit)
         )
 
     return tables_get_required(ctx.tables, PairsTableName) >> _with_pairs
 
 
 def _predict_pairs_step(_: SplinkContext) -> Run[Unit]:
-    return (
-        with_splink_context(_validate_predict_plan)
-        ^ _with_splink_context_linker_plan(_predict_pairs_from_ctx)
-    )
+    return with_splink_context(
+        _validate_predict_plan
+    ) ^ _with_splink_context_linker_plan(_predict_pairs_from_ctx)
 
 
 def splink_predict_pairs_from_ctx(_: SplinkContext):
-    """Run the full prediction pipeline and return the resulting pair metadata."""
+    """Run prediction and return the resulting pair metadata."""
+
     def _with_ctx(ctx: SplinkContext):
         if ctx.inference_only:
             return (
                 with_splink_context(_validate_inference_only_settings)
                 ^ with_splink_context(_set_final_plan)
+                ^ (
+                    with_splink_context(_prepare_exclusion_list)
+                    if ctx.capture_blocked_edges
+                    else pure(unit)
+                )
                 ^ _with_splink_context_api_plan(_build_linker_from_ctx)
                 ^ with_splink_context(_predict_pairs_step)
                 ^ _with_splink_context_linker_plan(predict_result_from_ctx)
@@ -499,7 +608,9 @@ def splink_predict_pairs_from_ctx(_: SplinkContext):
                 ^ _with_splink_context_api_plan(_build_linker_from_ctx)
                 ^ with_splink_context(print_prediction_counts)
                 ^ train_linker_for_prediction()
-                ^ with_splink_context_linker(_capture_trained_settings_from_linker)
+                ^ with_splink_context_linker(
+                    _capture_trained_settings_from_linker
+                )
                 ^ with_splink_context(_capture_blocked_edges)
                 ^ with_splink_context(_diagnostic_cluster_blocked_edges)
                 ^ with_splink_context(_prepare_exclusion_list)
@@ -522,4 +633,6 @@ def splink_predict_pairs_from_ctx(_: SplinkContext):
             ^ _with_splink_context_linker_plan(predict_result_from_ctx)
         )
 
-    return with_splink_context(validate_predict_tables) ^ with_splink_context(_with_ctx)
+    return with_splink_context(validate_predict_tables) ^ with_splink_context(
+        _with_ctx
+    )

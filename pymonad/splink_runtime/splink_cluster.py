@@ -12,7 +12,7 @@ from ..array import Array
 from ..hashset import HashSet
 from ..maybe import Just, nothing
 from ..monad import Unit, unit
-from ..run import ErrorPayload, Run, pure, throw
+from ..run import ErrorPayload, Run, put_line, pure, throw
 from ..runsql import SQL, sql_exec, sql_query, sql_register
 from ..traverse import array_traverse_run
 from ..tuple import Threeple, Tuple
@@ -445,6 +445,12 @@ def _set_cluster_result(ctx: SplinkContext) -> Run[Unit]:
 
 def _adjust_clusters_for_bridge_errors(ctx: SplinkContext) -> Run[Unit]:
     """Recluster the current scored graph after run-scoped bridge screening."""
+    return put_line("Beginning final bridge analysis after clustering.") >> (
+        lambda _: _adjust_clusters_for_bridge_errors_impl(ctx)
+    )
+
+
+def _adjust_clusters_for_bridge_errors_impl(ctx: SplinkContext) -> Run[Unit]:
     match ctx.cluster_result:
         case Just(result):
             pairs_table = ctx.cluster_pairs_table
@@ -792,6 +798,8 @@ def run_unique_matching_and_cluster_from_ctx(ctx: SplinkContext) -> Run[Unit]:
     if link_type == SplinkLinkType.LINK_ONLY:
         return with_splink_context(_run_unique_matching_from_ctx) ^ with_splink_context(_persist_link_only_results)
     return (
+        put_line("Beginning final clustering.")
+        ^
         with_splink_context(_run_unique_matching_from_ctx)
         ^ with_splink_context(_set_cluster_pairs_table_from_pairs)
         ^ with_splink_context(_set_pair_id_cols)

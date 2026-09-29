@@ -2544,8 +2544,8 @@ def _export_analyze_compatible_csv(profile: PublicationProfile) -> Run[str]:
                   ss.YearMonth AS "YearMonth",
                   ss.Victim AS "Victim",
                   '{profile.key}' AS "PublicationKey",
-                  {profile.identity.database_id} AS "PublicationID",
-                  {profile.target_location.stored_city_id} AS "CityID",
+                  {profile.identity.database_id.value} AS "PublicationID",
+                  {profile.target_location.stored_city_id.value} AS "CityID",
                   'stata_shr_v1' AS "SchemaVersion",
                   COALESCE(ac.assign_count, 0) AS "AssignCount",
                   CASE
