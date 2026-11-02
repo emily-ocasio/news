@@ -285,7 +285,7 @@ graph export "fig_histogram.pdf", replace as(pdf)
 
 
 ***** Table: Summary statistics *****
-gen hum_ss = humanized
+gen hum_ss = humanizeall
 label var hum_ss "Pr(Humanized)"
 gen art_ss = assigncount
 label var art_ss "Articles/homicide"
@@ -474,6 +474,18 @@ collect layout (colname#result[_r_b _r_se]) (model)
 collect stars _r_p 0.01 "***" 0.05 "**" 0.1 "*", attach(_r_b)
 collect style cell result[_r_b _r_se], nformat(%9.2f) halign(center)
 collect export tab_margins1.tex, replace tableonly
+
+collect clear
+quietly collect get, tag(model["Male"]): margins r.vicrace if vicage_c>0, at(year=(`graph_start_year'(1)`graph_end_year') vicsex=0) asobserved
+quietly collect get, tag(model["Female"]): margins r.vicrace if vicage_c>0, at(year=(`graph_start_year'(1)`graph_end_year') vicsex=1) asobserved
+collect levelsof model
+collect title "Testing significance of black-white differential in composite humanizing score by year \label{table:test_year}"
+collect style cell result[_r_se], sformat("(%s)")
+collect style header result, level(hide)
+collect layout (_at#colname#result[_r_b _r_se]) (model)
+collect stars _r_p 0.01 "***" 0.05 "**" 0.1 "*", attach(_r_b)
+collect style cell result[_r_b _r_se], nformat(%9.2f) halign(center)
+collect export tab_margins_year.tex, replace tableonly
 
 
 
