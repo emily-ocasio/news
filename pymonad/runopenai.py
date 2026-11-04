@@ -8,12 +8,13 @@ import json
 import math
 import threading
 import time
+from pathlib import Path
 from typing import Any, TypeVar, cast, Literal, Sequence, overload
 
 
 from jsonref import replace_refs
 from openai import OpenAI
-from openai.types.responses import Response, ParsedResponse
+from openai.types.responses import Response, ParsedResponse, ResponseInputParam
 from openai.types.responses.response_prompt_param import Variables
 from pydantic import BaseModel
 
@@ -30,12 +31,14 @@ from .openai import (
     GPTResponseError,
     GPTError,
     GPTFailure,
+    render_prompt_text,
 )
 from .run import ErrorPayload, throw, Run, _unhandled, ask, local, pure, \
     put_line, UserAbort, rethrow
 
 A = TypeVar('A')
 P = TypeVar('P', bound=BaseModel)
+PROMPT_ROOT = Path(__file__).resolve().parent.parent / "prompts" / "gpt"
 
 
 @overload
@@ -202,7 +205,7 @@ def response_with_gpt_prompt(  # pylint: disable=too-many-arguments,too-many-pos
 def _stream_response(
     client: OpenAI,
     model: GPTModel,
-    prompt: GPTPrompt,
+    messages: ResponseInputParam,
     effort: Literal["low", "medium", "high"],
 ) -> Response:
     """
@@ -210,10 +213,7 @@ def _stream_response(
     """
     with client.responses.stream(
         model=model.value,
-        prompt=prompt.to_gpt,
-        input=[
-            {"role": "user", "content": "Analyze the article."}
-        ],
+        input=messages,
         reasoning={
             "effort": effort,
             "summary": "detailed"
@@ -231,6 +231,37 @@ def _stream_response(
                 print("\nCompleted\n")
                 # print(event.response.output)
         return stream.get_final_response()
+
+
+def _local_prompt_messages(prompt: GPTPrompt) -> ResponseInputParam:
+    """Resolve a hosted prompt ID alias and render its local role files."""
+    manifest_path = PROMPT_ROOT / "manifest.json"
+    manifest_value = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if not isinstance(manifest_value, dict) or any(
+        not isinstance(alias, str) or not isinstance(key, str)
+        for alias, key in manifest_value.items()
+    ):
+        raise ValueError(f"Invalid local GPT prompt manifest: {manifest_path}")
+
+    prompt_id = prompt.prompt.id
+    prompt_key = manifest_value.get(prompt_id)
+    if prompt_key is None:
+        raise ValueError(f"No local GPT prompt configured for ID: {prompt_id}")
+
+    prompt_directory = PROMPT_ROOT / prompt_key
+    system_template = (prompt_directory / "system.txt").read_text(encoding="utf-8")
+    user_template = (prompt_directory / "user.txt").read_text(encoding="utf-8")
+    variables = prompt.variables or {}
+    return [
+        {
+            "role": "system",
+            "content": render_prompt_text(system_template, variables),
+        },
+        {
+            "role": "user",
+            "content": render_prompt_text(user_template, variables),
+        },
+    ]
 
 def run_openai(
     client_ctor: Callable[[], Any],
@@ -257,17 +288,18 @@ def run_openai(
                     verbosity,
                     do_stream,
                 ):
+                    messages = _local_prompt_messages(prompt)
                     if text_format:
                         if do_stream:
                             ### - DO NOT USE THIS - ###
                             ## API does not properly parse the object at the end ###
-                            return _stream_response(client, model, prompt, effort)
+                            return _stream_response(client, model, messages, effort)
                         def parse_response() -> (
                             ParsedResponse[BaseModel] | IncompleteGPTResponse | GPTResponseError
                         ):
                             raw_response = client.responses.with_raw_response.parse(
                                 model=model.value,
-                                prompt=prompt.to_gpt,
+                                input=messages,
                                 text_format=text_format,
                                 reasoning={
                                     "effort": effort,
@@ -297,7 +329,7 @@ def run_openai(
                         return _with_elapsed_timer(parse_response)
                     return client.responses.create(
                         model=model,
-                        prompt=prompt.to_gpt,
+                        input=messages,
                         temperature=temperature
                     )
                 case OAEmbedding(input_texts, model, dimensions, normalize):

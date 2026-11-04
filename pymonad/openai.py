@@ -5,6 +5,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from collections.abc import Mapping
+import re
 from typing import TypeVar, Any
 
 from openai.types.responses import ResponsePromptParam, Response, ParsedResponse
@@ -18,6 +20,29 @@ from .string import String
 from .tuple import Tuple
 
 P = TypeVar("P", bound=BaseModel)
+_PROMPT_PLACEHOLDER = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
+
+
+def render_prompt_text(template: str, variables: Mapping[str, Variables]) -> str:
+    """Render literal double-brace variables in a local prompt template."""
+    unmatched = _PROMPT_PLACEHOLDER.sub("", template)
+    if "{{" in unmatched or "}}" in unmatched:
+        raise ValueError("Malformed placeholder in local GPT prompt")
+
+    def replace_placeholder(match: re.Match[str]) -> str:
+        name = match.group(1)
+        value = variables.get(name)
+        if value is None:
+            raise ValueError(f"Missing variable in local GPT prompt: {name}")
+        if not isinstance(value, str):
+            raise ValueError(
+                f"Local GPT prompt variable must be text: {name}"
+            )
+        return value
+
+    return _PROMPT_PLACEHOLDER.sub(replace_placeholder, template)
+
+
 class GPTError(str, Enum):
     """OpenAI GPT model error enumeration"""
     MODEL_NOT_FOUND = "GPT model not found"

@@ -1,0 +1,13 @@
+{
+  "pmpt_68c8cb74d6e48193afd2925b0ae7c1d60247458288f5c631": "classify_only_filter_dc",
+  "pmpt_68c8d0edb59c8193920e0e6428d01e3a0902d4a752062094": "extract_incidents_dc",
+  "pmpt_6a56d62d04a88195bc447d3cefc767a40c49debff14a6943": "classify_only_filter_nyc",
+  "pmpt_6a594f1449f08190b653de53875d1e040524f9eaba100ec4": "extract_incidents_nyc",
+  "pmpt_69a4fe02d28c8195b31b05bdf8ff1cf204db837cf4b4950c": "humanize_extract_incident",
+  "pmpt_6aa4a5304e208197b351d0db234f87980e2cad2bd761992d": "humanize_extract_incident_fallback",
+  "pmpt_6aa4b4f75d40819393938729ee710aa00d96f2d106b82efc": "humanize_deidentify_fallback",
+  "pmpt_69a5dcbfa1ac8196b2ee6928895d3b7c00d990936808e636": "humanize_deidentify",
+  "pmpt_69a5df5927a48196be40f44e292b7c5a03f6f6d7d2829b03": "humanize_classify",
+  "pmpt_69ab817541588196935eb8137e392df80334ac0c71d05cf6": "k_pass1_anchor_prompt",
+  "pmpt_69aca43ee474819681d1bc3980e5d87c05903d6db9bfe4e1": "k_rank_candidate_prompt"
+}
