@@ -1,0 +1,15 @@
+Here is the text of the article to excerpt:
+
+{{article_text}}
+
+The date of the incident to excerpt is:
+
+Year: {{incident_year}}
+Month: {{incident_month}}
+Day: {{incident_day}}
+The summary of the incident is:
+
+{{incident_summary}}
+
+The victim's name was {{victim_name}}
+The victim's age was {{victim_age}}

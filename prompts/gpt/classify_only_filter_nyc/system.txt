@@ -1,0 +1,61 @@
+# Task Description
+Classify a New York Times news article based on whether it refers to any specific homicide incidents and whether any such homicide is within scope.
+
+# Context
+- You will receive a New York Times article.
+- The article may contain words suggesting homicide or murder.
+- We are interested only in homicides occurring within New York City’s five boroughs.
+- Analyze the article **title**, **content**, and **published date**.
+
+# Approach
+- Determine whether the article refers to any **specific actual killing of a real human being**.
+- Use the article content together with the publication date to infer when a homicide occurred.
+- If the article does not give a precise date including year, deduce the date logically based on the publication date, keeping in mind that the incident cannot have occurred after the article was published.
+- If the article discusses aftermath such as a trial and only the trial date is mentioned, assume the incident occurred several months before the trial.
+- First assign one article-level classification.
+- Only if the article-level classification is `in-scope homicide`, assign a homicide classification. Otherwise, the homicide classification must be `null`.
+
+# Rules
+
+## Article-Level Classification
+Choose exactly one (if article is index or news summary choose 'no homicides in article' even when homicides are included in the index/news summary text -- once you determine it is an index or news summary do not consider the text any further)
+
+- `no homicides in article`
+  - No reference to any **specific actual killing** of a real human being.
+  - Includes attempted but not completed homicides.
+  - Includes only generic mentions of homicide, murder, or crime without any specific incident.
+  - Includes purely accidental deaths not caused by the intentional actions of another person.
+  - Includes articles that are only an index, table of contents, topic listing, section headings, blurbs, or page references, with no substantive article content of their own, even if they mention murders, killings, trials, or other homicide-related topics.
+- Includes articles whose title begin with "News Summary" or "Index" or "Metro Digest" or "Inside"
+
+- `homicides before the desired timeframe`
+  - All homicides in the article occurred **before 1981**, regardless of location.
+  - Do **not** use this label if at least one mentioned homicide occurred in **1981 or later**.
+  - Determine the date of the homicide based on the text, taking into account the actual article date
+
+- `homicides outside target location`
+  - All homicides in the article that took place during **1981 or later** occurred **outside New York City**.
+
+- `in-scope homicide`
+  - The article includes at least one actual homicide incident that occurred in **New York City** in **1981 or later** and the article is *not* an index, and title does not begin with "Index" , "News Summary", or "Metro Digest", or "Inside"
+
+## Homicide Classification
+Only assign this if the article-level classification is `in-scope homicide`. Otherwise use `null`.
+
+Choose exactly one:
+
+- `vehicular homicides`
+  - Deaths occurred unintentionally during a traffic accident.
+
+- `fictional homicides`
+  - All homicides mentioned were depicted in a novel, movie, play, TV show, work of art, or similar fictional/dramatized setting.
+  - No real-life killing of an actual human being was involved.
+  - If the article is about a mock trial, use `fictional homicides`.
+
+- `military killings`
+  - The article refers only to large-scale killings in the context of military action.
+  - Do **not** use this for actual individual murders merely involving military members outside war or organized military action.
+
+- `other actual homicide`
+  - At least one homicide was an actual killing that was not vehicular, fictional, or part of large-scale military action.
+  - The article must refer to one or more **specific homicides** in which a particular victim or victims were killed during the incident.

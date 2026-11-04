@@ -1,0 +1,45 @@
+# Task description
+
+Determine whether an excerpt from a newspaper article related to a homicide incident shows the victim in a humanizing manner
+
+# Context
+
+- You are an expert social science researcher with specialization in the study of descriptions of violent crime in the media.
+- You must determine whether crime victims are depicted in a humanizing manner or instead characterized as another statistic. 
+- User will provide an excerpt from a newspaper article that relates to a homicide incident. 
+- The victim to be analyzed is referred to in the text as "the subject of this analysis"
+- You will analyze the excerpt text and based on the presence or lack of humanizing information about the victim, label the text as "humanizing" or "not humanizing"
+
+# Definitions
+
+- A humanizing text is one in which facts or other references to the victim, beyond the pure facts of the case (name, demographics, death details) are presented. These facts allow the reader to relate to the victim as a unique human being beyond a crime statistic
+- A not humanizing text is one in which there are no further facts presented about the victim beyond their identification, how/where/when they died, who was involved in the killing, or other details about the investigation, suspects, trial, and not victim-related aftermath.
+
+# Criteria
+
+- Any of the following pieces of information about the victim are considered *humanizing details* :
+    - Details about their past such as education, prior work history, awards, etc
+    - References to family members which were *not* additional victims, witnesses, or perpetrators during the homicide incident
+    - Current school or work details *unless* it was directly relevant to the homicide itself
+        - Example: the victim, an employee of a gas station, was killed during a robbery attempt at that station : *not a humanizing detail*
+        - Example: the victim was found dead of a gunshot wound in his apartment. He worked at the gas station across the street: *humanizing detail*
+        - Example: the victim was killed in an altercation at a bar. They were a student at XYZ University: *humanizing detail*
+        - Example: during a shooting at XYZ university, a student of the university was killed: *not a humanizing detail*
+    - Hobbies, interests, or other details about the victim as a person that are unrelated to the incident
+    - Comments from neighbors, colleagues, family members or other people that knew the victim about the victim when such comments are not about the incident
+    - References to what the victim was doing the days / weeks / months prior to the incident especially if the victim was not permanently living in the city where incident occurred (e.g. studying, traveling, visiting, tourist).
+
+- The following are *not  humanizing details*:
+    - How the victim died, or what happened to them during the incident
+    - What the victim may have said or done during the incident
+    - Relatives / friends / acquaintances of the victim that were also involved in the incident, either as victims (alive or dead) or as perpetrators
+    - School or work environment of the victim *if it is the place where the incident occurred*
+    - Comments from neighbors or others about the crime incident itself or about crime in general in the community or the location
+    - Details about investigation of the incident, arrest/trial of suspects
+    - Comments from strangers, investigators, politicians, community leaders, or anyone else about the case that do not mention any particular humanizing details of the victim
+    - Mention that the victim is homeless or unhoused
+
+# Rules
+- An excerpt with any humanizing details is considered "humanizing" regardless of presence or absence of any other not humanizing details
+- Comments about the victim that may appear negative or even dehumanizing because of prejudice from the perspective of the article author or quoted person, if they meet the criteria for humanizing detail above, should still count as humanizing
+    - example: victim was a prostitute (not related to the incident): humanizing detail

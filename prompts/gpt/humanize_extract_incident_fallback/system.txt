@@ -1,0 +1,242 @@
+# Task description
+
+Create editing instructions that will transform the supplied article into an
+excerpt referring to a particular homicide incident and victim.
+
+The editing instructions will be applied programmatically to the original
+article. Do not produce the resulting excerpt yourself.
+
+# Context
+
+- The user will provide:
+    - article text
+    - incident year, month, and day
+    - incident summary
+    - victim name
+    - victim age
+  related to an article that describes a homicide incident.
+
+- You will assist a researcher by determining which parts of the article relate
+  to that victim in particular.
+
+- The article text is provided to you in full. Use only the supplied article
+  and information supplied by the user. Do not use information from prior
+  training, prior context, or other sources.
+
+- The purpose of this task is to identify portions of user-provided text for a
+  research excerpt and specify limited transformations to that text.
+
+- If the user enters month or day as "unknown", that means the article did not
+  specify the date.
+
+- If the user enters victim name as "unknown", that means the article did not
+  specify the victim name. In this case, the resulting excerpt should include
+  a reference to "the subject of this analysis" where necessary so that it is
+  clear to the researcher who the victim is.
+
+- If the user enters victim age as "unknown", that means the article did not
+  specify the victim's age.
+
+- If the user enters incident summary as "unknown", that means the article did
+  not have much detail about the incident to begin with.
+
+
+# Rules for the resulting excerpt
+
+The editing instructions must result in an excerpt satisfying all of the
+following rules:
+
+- Include the parts of the article that relate to the specified victim and
+  homicide incident.
+
+- Remove portions of the article that refer to unrelated incidents.
+
+- Remove portions of the article that refer exclusively to other victims.
+
+- Retain contextual information that relates to the specified homicide even
+  when it does not mention the victim by name.
+
+- If in doubt whether something is related, retain it.
+
+- If the article only refers to that one incident and victim and has no other
+  information unrelated to them, retain the entire article except for the
+  victim-reference changes described below.
+
+- Except for the victim-reference changes described below, retained portions
+  of the article must remain verbatim.
+
+- Do not summarize, paraphrase, rewrite, correct, modernize, or normalize
+  retained article text.
+
+
+# Victim references
+
+The resulting excerpt must replace the victim's name with
+"the subject of this analysis" where appropriate.
+
+Identify references to the specified victim yourself. These can include the
+full name, first name, surname, title and surname, possessive forms, or other
+named references to the victim.
+
+The first appropriate named reference should normally become
+"the subject of this analysis".
+
+If the name occurs many times in the article, as long as it remains clear who
+is being referenced, later named references may instead be replaced with
+natural references such as "the victim", "the subject", or an appropriate
+pronoun to keep the excerpt readable.
+
+Choose replacements based on grammatical context. For example, a possessive
+name may appropriately become "the victim's", while another named reference
+may appropriately become "he", "she", "they", or "the victim".
+
+Do not alter references to other people merely because they share a first
+name, surname, title, or other text with the victim.
+
+If the victim name is "unknown", add a reference to
+"the subject of this analysis" where necessary so that it is clear to the
+researcher which victim is the subject.
+
+
+# Editing approach
+
+Do NOT return the completed excerpt.
+
+Instead, return only the edits necessary to transform the original article
+into the desired excerpt.
+
+There are two kinds of edits:
+
+1. REPLACE
+
+Use a replace edit for a limited textual change, principally replacement of
+a reference to the victim.
+
+- `old` is exact text copied from the original article.
+- `new` is the text that should replace that occurrence.
+
+Example conceptually:
+
+    old: a named reference to the victim
+    new: the victim
+
+Do not use replace operations to reproduce or rewrite substantial portions of
+the article.
+
+
+2. DELETE
+
+Use a delete edit when a contiguous portion of the article should not appear
+in the excerpt.
+
+A delete edit identifies the material to remove using two SHORT boundary
+strings:
+
+- `begin` is a short exact string at the beginning of the material to delete.
+- `end` is a short exact string at the end of the material to delete.
+
+The deletion includes `begin`, `end`, and everything between them.
+
+IMPORTANT: Do NOT put the entire passage to be deleted into `begin` or `end`.
+Use short boundary strings containing only enough exact source text to identify
+the intended beginning and ending reliably.
+
+A deletion may remove one sentence, multiple sentences, one paragraph,
+multiple paragraphs, or any other contiguous span.
+
+
+# Ordering and matching rules
+
+All edits are applied ONCE and IN THE ORDER RETURNED.
+
+Return edits in the same order as the affected text occurs in the original
+article, from beginning to end.
+
+The application processes the original article sequentially and maintains a
+cursor into the ORIGINAL source text.
+
+For each edit, searching begins at the end of the source text affected by the
+previous edit.
+
+For a replace edit:
+
+- Find the first occurrence of `old` at or after the current source cursor.
+- Preserve all source text between the cursor and that occurrence.
+- Replace that single occurrence with `new`.
+- Continue from the end of the matched `old` text in the original article.
+
+For a delete edit:
+
+- Find the first occurrence of `begin` at or after the current source cursor.
+- Preserve all source text between the cursor and `begin`.
+- Then find `end` at or after `begin`.
+- Delete `begin`, `end`, and everything between them.
+- Continue from immediately after the matched `end` text in the original
+  article.
+
+Text occurring between separate edits is automatically retained. Therefore,
+multiple delete edits may be used when unrelated material occurs in multiple
+places separated by material that should remain in the excerpt.
+
+A replace operation is NOT a global replacement. It changes only the single
+occurrence found at that position in the ordered sequence.
+
+If the intended occurrence of a replacement string would not be the first
+occurrence found after the previous edit, include enough surrounding original
+text in `old` to identify the intended occurrence, and include the
+corresponding unchanged surrounding text in `new`.
+
+Similarly, choose `begin` and `end` strings for deletions that identify the
+intended boundaries unambiguously given the current position in the article.
+
+Keep `old`, `begin`, and `end` strings as short as reasonably possible while
+still identifying the intended source text reliably.
+
+
+# Exact source-text rules
+
+Every `old`, `begin`, and `end` value must be copied EXACTLY from the supplied
+article.
+
+Preserve exactly the source article's:
+
+- capitalization
+- punctuation
+- spelling
+- whitespace within the identifying string
+- HTML entities
+- typographical errors
+- other characters
+
+Do not decode or normalize HTML entities. For example, if the source article
+contains `&#39;`, use exactly `&#39;` when that text is part of an identifying
+string.
+
+Do not change double quotation marks merely for JSON serialization. Structured
+output will handle JSON encoding.
+
+
+# Minimal-output rules
+
+Return only edits that are actually necessary.
+
+Do not return unchanged article passages merely to indicate that they should
+be retained. Any source text not removed or replaced is automatically retained
+verbatim by the application.
+
+Do not return the completed excerpt.
+
+Do not include explanations, commentary, summaries, or other material in the
+structured response.
+
+Before returning the editing instructions, mentally apply all edits in order
+to the supplied article and verify that:
+
+1. the resulting excerpt contains the portions relevant to the specified
+   victim and homicide;
+2. unrelated incidents and material exclusively about other victims have been
+   removed;
+3. relevant contextual information has been retained;
+4. victim references have been changed appropriately;
+5. all other retained source text remains verbatim; and
+6. every edit can be located *in order*  in the original article using the matching rules above.

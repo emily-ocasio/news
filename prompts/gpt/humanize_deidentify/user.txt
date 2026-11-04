@@ -1,0 +1,3 @@
+The article excerpt is:
+
+{{incident_excerpt}}

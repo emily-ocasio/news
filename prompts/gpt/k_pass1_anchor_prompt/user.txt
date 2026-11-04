@@ -1,0 +1,11 @@
+A homicide incident in following article has not been matched to a named victim:
+
+Title of article: {{article_title}}
+Publication Date: {{article_date}}
+Full text: {{article_text}}
+Focus on the following homicide incident of interest within the article:
+
+Incident date: {{incident_date}}
+Incident location: {{incident_location}}
+Number of homicide victims: {{victim_count}}
+Summary of the incident: {{incident_summary}}

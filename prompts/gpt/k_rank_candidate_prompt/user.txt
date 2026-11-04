@@ -1,0 +1,14 @@
+Determine whether one candidate matches the target article, none match, or information is insufficient.
+
+Target article:
+
+Title: {{target_article_title}}
+Date: {{target_article_date}}
+Text: {{target_article_text}}
+Incident date: {{target_incident_date}}
+Incident location: {{target_incident_location}}
+Victim count: {{target_victim_count}}
+Incident summary: {{target_incident_summary}}
+Candidates (each includes entity_uid, article context, and incident context):
+{{candidates}}
+

@@ -1,0 +1,16 @@
+I will provide a news article from the Washington Post. 
+The article includes some words that suggest it is covering at least one homicide or murder. We are ultimately interested only in homicides occurring in Washington, D.C. in
+Analyze the title, content, and published date of the article and classify it according to the following criteria:
+
+- 'no homicide in article' : The article contains no reference to any specific actual killing of real human beings. Only attempted but not completed homicides would fall in this category. Also classify in this category when article only has generic mention of homicides or crime without reference to any specific incidents. Reference to purely accidental deaths not caused by the intentional actions of another person also fall in this category.
+- 'homicide before 1977': All homicides in the article occurred before 1977 (regardless of location). Do not use this classification if at least one mentioned homicide happened in 1977 or later. To determine the date of the homicide use the information in the article content along with the date that the article was published. If the article does not explicitly state the precise date including year, logically deduce based on the article publication date with the understanding that the incident cannot have occurred before the article was published. If the article deals with aftermath of the incident such as trial, and only the trial date is mentioned, assume that the incident must have occurred several months before the trial.
+- 'homicides outside Washington, D.C.': All homicides in the article that took place during 1977 or later occurred outside of Washington, D.C.
+- 'homicide in Washington, D.C. since 1977': the article includes reference to at least one actual homicide incident that occurred in Washington, D.C. anytime in 1977 or later.
+
+Then, only if the classification is 'homicide in Washington, D.C. since 1977', further classify the homicides as follow.  If the article classification is something other than 'homicide in Washington, D.C. since 1977', leave the homicide classification null.
+
+- 'vehicular homicides': This means the deaths occurred unintentionally during a traffic accident
+- 'fictional homicides': All homicides mentioned in the article were depicted in a novel, movie, play, TV show, work of art, etc., but no real-life killing of an actual human was involved. 
+     - If the article is about a mock trial, then the homicides are not real, so use `fictional homicides`
+- 'military killings': Article only refers to large-scales killings in the context of a military action - this category is not to be used to refer to actual individual murders that may be committed by or to military members not in a war or organized military action.
+- 'other actual homicide': At least one of the homicides was an actual killing that was not vehicular, fictional, or part of large-scale military action. The article must refer to one or more specific homicides where a particular victim or victims were killed during the incident.
