@@ -4,6 +4,7 @@ Pure functions with no side effects
 from __future__ import annotations
 
 import math
+import html
 import re
 from sqlite3 import Row
 from datetime import datetime
@@ -421,7 +422,7 @@ def rich_text(document: Optional[str], publication_code: int) -> str:
     """
     if document is None:
         return ''
-    text = Text(document)
+    text = Text(html.unescape(document))
     text.highlight_regex(absolute_regex, 'red bold')  # type: ignore
     text.highlight_regex(conditional_death_regex, 'red bold')  # type: ignore
     if location_code(publication_code) == 'DC':

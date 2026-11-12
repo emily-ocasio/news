@@ -27,6 +27,7 @@ from orphan_adjudication_controller import adjudicate_orphans_controller
 from orphan_postadj_cluster import cluster_postadj_orphans
 from humanization_pipeline import humanization_shr
 from review_humanization_determinations import review_humanization_determinations
+from manual_validation import manual_validation
 from publication_profiles import (
     Availability,
     PublicationCapabilities,
@@ -36,6 +37,7 @@ from publication_profiles import (
 MAIN_MENU_PROMPTS = mainmenu_prompts + (
     "Apply orphan adjudication [J]",
     "Adjudicate unmatched orphans [K]",
+    "Manual pipeline validation [W]",
 )
 
 
@@ -62,6 +64,7 @@ class MainChoice(Enum):
     POSTADJ_ORPHAN_CLUSTER = MenuChoice("O")
     ADJUDICATION_APPLY = MenuChoice("J")
     ADJUDICATION_CONTROLLER = MenuChoice("K")
+    VALIDATE_PIPELINE = MenuChoice("W")
     LINK = MenuChoice("L")
     SPECIAL = MenuChoice("P")
     SPECIAL_ADD = MenuChoice("Y")
@@ -123,6 +126,8 @@ def _dispatch_available(choice: MainChoice) -> Run[NextStep]:
             action = apply_orphan_adjudications()
         case MainChoice.ADJUDICATION_CONTROLLER:
             action = adjudicate_orphans_controller()
+        case MainChoice.VALIDATE_PIPELINE:
+            action = manual_validation()
         case MainChoice.LINK:
             action = match_article_to_shr_victims()
         case MainChoice.SPECIAL:
@@ -152,6 +157,8 @@ def _availability_for_choice(
     """Read the capability availability required by a menu operation."""
     match choice:
         case MainChoice.AUTO:
+            availability = capabilities.first_filter
+        case MainChoice.VALIDATE_PIPELINE:
             availability = capabilities.first_filter
         case MainChoice.GPT:
             availability = capabilities.gpt_classification

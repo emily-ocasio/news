@@ -50,6 +50,40 @@ CREATE INDEX ArticleType on articletypes(RecordId);
 CREATE INDEX Status ON articles(Status);
 CREATE INDEX Dataset ON articles(Dataset, PubDate);
 CREATE INDEX DataStatus ON ARTICLES (Dataset, Status, PubDate);
+CREATE INDEX articles_publication_autoclass_pubdate
+    ON articles (Publication, AutoClass, PubDate);
+
+-- Manual validation cohorts for pipeline stages. Completion is derived from
+-- cohort membership: every sampled article must have a non-NULL ManualResult.
+CREATE TABLE manual_validation_cohorts (
+    CohortId INTEGER PRIMARY KEY,
+    Publication INTEGER NOT NULL,
+    PipelineStep TEXT NOT NULL,
+    CohortType TEXT NOT NULL DEFAULT 'first_filter_no_homicide',
+    RequestedSize INTEGER NOT NULL CHECK (RequestedSize > 0),
+    CreatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX manual_validation_cohorts_publication_step
+    ON manual_validation_cohorts (Publication, PipelineStep, CreatedAt, CohortId);
+
+CREATE TABLE manual_validation_articles (
+    CohortId INTEGER NOT NULL,
+    RecordId INTEGER NOT NULL,
+    SampleOrder INTEGER NOT NULL CHECK (SampleOrder > 0),
+    PublicationYear INTEGER NOT NULL,
+    -- Completeness cohorts store the captured incident JSON in this field.
+    OriginalAutoClass TEXT NOT NULL,
+    ManualResult TEXT,
+    PRIMARY KEY (CohortId, RecordId),
+    UNIQUE (CohortId, SampleOrder),
+    FOREIGN KEY (CohortId) REFERENCES manual_validation_cohorts(CohortId),
+    FOREIGN KEY (RecordId) REFERENCES articles(RecordId)
+);
+CREATE INDEX manual_validation_articles_pending
+    ON manual_validation_articles (CohortId, ManualResult, SampleOrder);
+CREATE INDEX manual_validation_articles_record
+    ON manual_validation_articles (RecordId);
+
 CREATE TABLE IF NOT EXISTS "shr" (
 "index" INTEGER,
   "ID" TEXT,
